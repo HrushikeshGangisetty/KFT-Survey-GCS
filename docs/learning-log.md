@@ -196,3 +196,67 @@ LinkConfig --connect--> runLink: loop { open -> session -> fail -> backoff }
 - Serial (jSerialComm on desktop, usb-serial-for-android) is its own pass. Android USB needs a Context and permission flow.
 - MAVLink signing isn't used (ArduPilot allows unsigned by default). Revisit before field use.
 - Next: **Pass 4, the Connections screen** (MVVM worked example: UiState, ViewModel, profiles repository, Koin, navigation).
+
+---
+
+## Pass 4 — W1-4: Connections screen (MVVM worked example) (2026-09-24)
+
+### What changed
+- **`feature/connections/ConnectionsRepository.kt`**: `ConnectionProfile`, the `ConnectionsRepository` interface, and `DefaultConnectionsRepository`. It holds in-memory profiles (two SITL defaults) and delegates the link to `ConnectionManager`.
+- **`ConnectionsUiState.kt`**: the screen's one immutable state and the pure functions that build it (`buildUiState`, `toStatusUi`, `describe`, `toConfigOrError`).
+- **`ConnectionsViewModel.kt`**: `state: StateFlow<ConnectionsUiState>`, `onXxx` event functions, and one-shot `effects` ("Vehicle found", "Vehicle heartbeat lost").
+- **`ConnectionsScreen.kt`**: `ConnectionsRoute` (Koin, state collection, snackbar) and the stateless `ConnectionsScreen`. It uses two columns on wide screens and one on phones.
+- **`di/ConnectionsModule.kt`**: repository singleton and `viewModelOf(::ConnectionsViewModel)`.
+- **`app/shared`**:
+  - `di/AppModule.kt`: the app `CoroutineScope`, `Dispatchers.IO`, and the list of all modules.
+  - `App.kt`: `KoinApplication`, a navigation rail and `NavHost`.
+  - `build.gradle.kts`: navigation, lifecycle and `core:mavlink`.
+- **Tests**: `ConnectionsViewModelTest` (7).
+
+### How it works
+```
+ConnectionsScreen ──onConnect(id)──▶ ConnectionsViewModel ──connect(id)──▶ ConnectionsRepository ──▶ ConnectionManager
+       ▲                                   │ combine(profiles, linkState, form)                              │
+       └──── StateFlow<ConnectionsUiState> ◀┘ ◀──────────────── StateFlow<LinkState> ◀────────────────────────┘
+       └──── effects (snackbar) ◀── Channel ◀── "vehicle appeared/disappeared" watcher
+```
+1. The route gets the ViewModel from Koin and collects `state` with `collectAsStateWithLifecycle`, which stops collecting when the window is hidden.
+2. `state` is `combine(profiles, linkState, form)` passed through the pure `buildUiState`, so every link change redraws the status card and the "Active" profile.
+3. The form text lives in the ViewModel, because it belongs to this screen only. Profiles and the link live in the repository and `ConnectionManager`, because they must outlive the screen: the link stays up when you go to the Fly view.
+
+### Engineering learnings
+- **One `UiState`, built by a pure function.** `buildUiState` has no coroutines, so the "what does the screen show" logic is tested with plain function calls. *Why over computing in the composable:* composables can't be unit-tested cheaply, but functions can.
+- **`stateIn(WhileSubscribed(5_000))`.** The upstream stops 5 s after the last collector leaves, so a rotation or quick tab switch doesn't restart it, but a closed screen stops work. *Why not `Eagerly`:* it would keep combining flows for a screen nobody sees.
+- **Effects as a `Channel`, not state.** "Show a snackbar once" isn't something to redraw after rotation. If it were state, the message would reappear on every recomposition or need manual clearing. `receiveAsFlow()` delivers each effect to exactly one collector.
+- **Repository interface on purpose.** The ViewModel test uses `FakeConnectionsRepository` and sets `linkState` by hand. No sockets, no Koin, no time.
+- **`Dispatchers.setMain` in tests.** `viewModelScope` runs on Main, which doesn't exist in unit tests, so the test points it at a `StandardTestDispatcher`. StateFlow conflation is real: the effect test runs the dispatcher between steps, exactly as spaced-out real events would be.
+- **Navigation lives in `app:shared`.** Features expose a `XRoute()` composable and nothing else, so `feature:connections` can't import `feature:fly` (CLAUDE.md §2). String routes are enough for now, and type-safe routes would add the serialization plugin for no gain yet.
+- **`KoinApplication(configuration = koinConfiguration { … })`** is the non-deprecated Koin 4.2 entry point.
+
+**Ponytail review:** no cuts. The two-column layout is spec P0 (large screen + phone fallback), and in-memory profiles are marked `ponytail:` until the storage pass.
+
+### What to look at
+1. `feature/connections/src/commonMain/kotlin/com/kft/gcs/feature/connections/ConnectionsViewModel.kt:36`: the whole state pipeline in one expression.
+2. `feature/connections/src/commonMain/kotlin/com/kft/gcs/feature/connections/ConnectionsUiState.kt:45`: `buildUiState`, domain in and screen out.
+3. `feature/connections/src/commonMain/kotlin/com/kft/gcs/feature/connections/ConnectionsScreen.kt:44`: the Route/Screen split.
+
+### Tests
+- `ConnectionsViewModelTest` (7, JVM + Android host):
+  - link idle → connecting → vehicle found, with headline, detail and tone;
+  - clicks forwarded to the repository;
+  - saving a valid form (a kind change fills its default port; a blank name falls back to the summary);
+  - an invalid port shows an error and saves nothing;
+  - found/lost effects fire once each, and arming alone doesn't re-fire;
+  - the reconnect warning text;
+  - host validation.
+- **SITL, done on the dev laptop** with Mission Planner's bundled ArduCopter SITL: `ArduCopter.exe --model quad --home -35.363261,149.165230,584,353 --defaults <MP>\sitl\default_params\copter.parm -I0` (TCP 5760), then `gradlew.bat :app:desktop:run`.
+  - Connect on "SITL (TCP 5760)" → "ArduCopter · system 1 · disarmed", 0.0 % loss.
+  - Killing SITL → "Reconnecting to TCP 127.0.0.1:5760 (attempt 4) / Connection refused".
+  - Restarting SITL → reconnected by itself.
+  - Disconnect → "Not connected".
+- **Android emulator, for you:** UDP listen inside the emulator needs a forward from the host: `adb emu redir add udp:14550:14550`. TCP to SITL on the host uses host `10.0.2.2`, port 5760.
+
+### Open questions / next
+- `ponytail:` profiles aren't persisted yet. This needs a small storage pass: JSON files in the platform app-data folder, `expect`/`actual` for the path.
+- The rail uses letter icons. Material icons need a dependency, and that choice can wait for the UI polish pass.
+- Next: **Pass 5, vehicle on the map**: telemetry model in `core:vehicle` (position, attitude, GPS, battery, mode), the first `MapView` in `ui:map` following ADR-001, and a Fly screen. That's the week-1 exit check.
