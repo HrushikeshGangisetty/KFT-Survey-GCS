@@ -61,6 +61,11 @@ jserialcomm = { module = "com.fazecast:jSerialComm", version.ref = "jserialcomm"
 usb-serial-android = { module = "com.github.mik3y:usb-serial-for-android", version.ref = "usb-serial-android" }
 
 maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.ref = "maplibre-compose" }
+# Native render runtimes: exactly one per platform, runtimeOnly. 0.17.0 is still the latest release on 2026-09-24,
+# and Windows only ships Vulkan (the OpenGL/ANGLE and D3D12 runtimes from PR #1439 are not released yet).
+maplibre-compose-runtime-opengl-android = { module = "org.maplibre.compose:maplibre-compose-runtime-opengl-android", version.ref = "maplibre-compose" }
+maplibre-compose-runtime-vulkan-windows-x64 = { module = "org.maplibre.compose:maplibre-compose-runtime-vulkan-windows-x64", version.ref = "maplibre-compose" }
+compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose-multiplatform" }
 
 # Plugin artifacts used by build-logic (convention plugins compile against these)
 gradle-plugin-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }

@@ -43,3 +43,7 @@ include(":feature:settings")
 include(":app:shared")   // KMP: App() root composable, DI graph, navigation
 include(":app:android")  // Android application shell
 include(":app:desktop")  // Desktop JVM shell
+
+// ---- spikes: throwaway experiments, deleted once their ADR is written ----
+include(":spikes:map-spike")          // KMP: shared spike UI + desktop entry point (docs/decisions/ADR-001)
+include(":spikes:map-spike-android")  // Android application shell for the spike (AGP 9: apps can't be KMP modules)
