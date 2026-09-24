@@ -1,5 +1,6 @@
 // Desktop (JVM) application shell. Runs on JDK 25 (required by maplibre-compose's native desktop renderer).
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -8,13 +9,15 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+// JVM 25 bytecode: the maplibre-compose desktop runtime is published as "JVM 25 or newer" only, and Gradle refuses
+// to put it on a JVM 21 app's classpath. The desktop app runs on JDK 25 anyway (CLAUDE.md §6).
 kotlin {
-    compilerOptions { jvmTarget.set(JvmTarget.JVM_21) }
+    compilerOptions { jvmTarget.set(JvmTarget.JVM_25) }
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
 }
 
 dependencies {
@@ -40,4 +43,13 @@ compose.desktop {
             }
         }
     }
+}
+
+// Satellite basemap: the Esri key comes from local.properties (esri.apiKey=) or ESRI_API_KEY and is handed to
+// `run` as an environment variable only. It is never baked into the packaged app or committed (ADR-001 F7).
+val esriKey: String? = rootProject.file("local.properties").takeIf { it.exists() }
+    ?.let { f -> Properties().apply { f.inputStream().use { load(it) } }.getProperty("esri.apiKey") }
+    ?: providers.environmentVariable("ESRI_API_KEY").orNull
+tasks.withType<JavaExec>().configureEach {
+    if (!esriKey.isNullOrBlank()) environment("ESRI_API_KEY", esriKey)
 }

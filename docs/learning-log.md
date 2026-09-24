@@ -260,3 +260,84 @@ ConnectionsScreen ──onConnect(id)──▶ ConnectionsViewModel ──connec
 - `ponytail:` profiles aren't persisted yet. This needs a small storage pass: JSON files in the platform app-data folder, `expect`/`actual` for the path.
 - The rail uses letter icons. Material icons need a dependency, and that choice can wait for the UI polish pass.
 - Next: **Pass 5, vehicle on the map**: telemetry model in `core:vehicle` (position, attitude, GPS, battery, mode), the first `MapView` in `ui:map` following ADR-001, and a Fly screen. That's the week-1 exit check.
+
+---
+
+## Pass 5 — W1-5: Vehicle on the map (telemetry, `MapView`, Fly view) (2026-09-24)
+
+### What changed
+- **`core/vehicle`**:
+  - `VehicleState.kt`: `VehicleState` in plain units, plus a pure `reduce(message)` for GLOBAL_POSITION_INT, VFR_HUD, ATTITUDE, GPS_RAW_INT, SYS_STATUS and STATUSTEXT, and `flightModeName`.
+  - `VehicleRepository.kt`: folds the autopilot's frames into one `StateFlow<VehicleState>` and requests telemetry streams whenever a vehicle appears.
+  - `di/VehicleModule.kt`, and Koin in `build.gradle.kts`.
+- **`ui/map`**:
+  - `MapModel.kt`: `TileSourceConfig` + `TileSources` (OpenFreeMap Street, Esri World Imagery), `MapOverlay` (Vehicle, Track), `CameraRequest`, and `expect fun esriApiKey()`.
+  - `MapView.kt`: the one map composable. It follows ADR-001: one permanent base style, raster basemaps on top, Esri token added at request time, and a heading arrow drawn as a `SymbolLayer`.
+  - `jvmMain`: `DesktopMapHost.kt` (GPU host for a window) and the env-based Esri key. `androidMain`: no key yet.
+  - `build.gradle.kts`: maplibre-compose as `implementation` (not `api`), plus the per-platform runtimes.
+- **`feature/fly`**: `FlyUiState.kt` (pure HUD formatting and track spacing), `FlyViewModel.kt`, `FlyScreen.kt` (Route + stateless Screen) and `di/FlyModule.kt`.
+- **`app/shared`**:
+  - Fly is now the start destination.
+  - `vehicleModule` and `flyModule` are registered.
+  - Safe-drawing insets are applied (ADR-001 F3).
+  - `jvmMain/DesktopApp.kt` wraps `App()` in the desktop map host.
+- **`app/desktop`**:
+  - JVM 25 bytecode: the MapLibre Windows runtime is published as "JVM 25+".
+  - `run` gets `ESRI_API_KEY` from `local.properties`.
+  - `Main.kt` calls `DesktopApp()`.
+- **`app/android`**: debug builds get `applicationIdSuffix = ".dev"` (see Open questions).
+- **`.gitignore`**: `*.tlog.raw` (MAVProxy's raw log).
+
+### How it works
+```
+ConnectionManager.frames ──┐
+ConnectionManager.state ───┼─▶ VehicleRepository (one collector) ──reduce──▶ StateFlow<VehicleState>
+   (vehicle appears) ──────┘        └─ REQUEST_DATA_STREAM(ALL, 4 Hz) ─▶ MavTxGateway
+                                                                              │
+FlyScreen ◀── StateFlow<FlyUiState> ◀── FlyViewModel: combine(VehicleState, local{basemap, track, camera})
+   └─ MapView(basemap, overlays = [Track, Vehicle], cameraRequest)  ──▶ maplibre-compose layers
+```
+1. When a heartbeat appears, the repository sends one REQUEST_DATA_STREAM through the gateway. ArduPilot then streams position, attitude, GPS, battery and messages at 4 Hz, and the same happens again after every reconnect.
+2. Only frames from the autopilot's own system/component id are reduced, so a gimbal's ATTITUDE can't overwrite the aircraft's.
+3. The Fly ViewModel keeps the track (1 m spacing, 2 000 points max) and auto-centres once on the first position. After that the camera is yours; "Centre" sends a new `CameraRequest`.
+4. `MapView` turns `MapOverlay`s into GeoJSON sources and layers. Features never see a MapLibre type.
+
+### Engineering learnings
+- **Reducer + repository split.** `reduce` is a pure function (message in, state out), so every unit conversion has a hand-calculated test. The repository only does plumbing. *Why:* the maths is where the bugs hide (mm vs m, cdeg, radians, sentinels), and it's cheapest to test without coroutines.
+- **"Unknown" is not zero.** MAVLink uses sentinels (0,0 position, `hdg = 65535`, `-1 %` battery). They become `null` and show as "–". A "0 %" battery on a real tablet would be a false alarm, and an unknown heading keeps the last known one.
+- **Dependencies as flows + a typed send function.** `VehicleRepository` takes `frames`, `link` and `suspend (RequestDataStream) -> TxResult`, not the `ConnectionManager`. *Why:* the manager can't be faked outside `core:mavlink` (its test constructor is internal), and the lambda type allows exactly one message, still routed through the gateway in the app.
+- **`implementation` vs `api` for the map engine.** `ui:map` hides maplibre-compose, so a feature importing it doesn't compile. That's the compiler enforcing "no map-library imports outside `ui:map`".
+- **`@UiComposable` on `MapView`.** The Compose compiler infers which "applier" a composable targets from what it calls. The MapLibre layer calls inside made it guess wrong and warn at every call site, so the annotation states the intent.
+- **Gradle JVM-version attributes.** A library published as "JVM 25+" is refused by a module compiling for 21. KMP modules don't send that attribute, which is why the spike never hit it.
+- **Pure helpers for the UI too.** `hudItems` and `appendTrack` are plain functions, so "359.6° shows as 0°" and "a 0.56 m move is ignored" are one-line tests.
+
+**Ponytail review:** no cuts. Marked `ponytail:` in code: the Windows-only desktop runtime, no Esri key on Android, and the fixed 20 % battery warning.
+
+### Safety
+- The only new transmission is REQUEST_DATA_STREAM. It was already **Always allowed** in the Pass 3 allowlist (read-only stream request) and goes through `MavTxGateway`. The allowlist is unchanged.
+
+### What to look at
+1. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/VehicleRepository.kt:41`: link and frames in one collector, and the stream request.
+2. `ui/map/src/commonMain/kotlin/com/kft/gcs/ui/map/MapView.kt:51`: the abstraction boundary and the ADR-001 rules in code.
+3. `feature/fly/src/commonMain/kotlin/com/kft/gcs/feature/fly/FlyViewModel.kt:40`: how screen-only state (track, camera) combines with vehicle state.
+
+### Tests
+- `VehicleStateTest` (6): SITL home ×1e7 → degrees; mm → m; cdeg → deg; sentinels → null; π/6 rad = 30°; RTK fixed vs STATIC; 12 600 mV = 12.6 V; STATUSTEXT severity; mode names (Copter 5 = Loiter, 2 = Alt Hold, Plane 10 = Auto).
+- `VehicleRepositoryTest` (4): one stream request per vehicle appearance (and again after a heartbeat gap); mode/armed/connected from the heartbeat; a gimbal's frames ignored; disconnect clears the state.
+- `GeoJsonTest` (1): GeoJSON is `[lon, lat]`.
+- `FlyViewModelTest` (5): first position centres once, later moves don't, "Centre" issues a new request; track grows and clears; basemap selection; HUD formatting (dashes, units, 359.6° → 0°, battery warning below 20 %); track spacing (0.56 m ignored, 111 m added, cap drops the oldest).
+- `./gradlew check` passes; `:app:android:assembleDebug` builds.
+- **SITL end-to-end, done on the dev laptop.** Mission Planner's ArduCopter SITL, with MAVProxy on tcp:5760 forwarding `--out udp:127.0.0.1:14550`, and the app on the "SITL (UDP 14550)" profile:
+  - The vehicle arrow appears at CMAC and the camera auto-centres.
+  - The HUD shows Stabilize / Disarmed / 0.0 m / 356° / RTK fixed · 10 sats / 12.6 V · 100 %, plus status texts.
+  - A second MAVProxy on tcp:5762 sent GUIDED, arm, takeoff 40, then CIRCLE. The HUD showed Circle / ARMED / 27.5 m / 3.4 m/s; the arrow rotated with the heading and the orange track followed.
+  - Satellite (Esri) rendered under the overlays with its attribution.
+  - (SITL then reported "Hit ground". Copter's CIRCLE takes altitude from the RC throttle, which SITL holds low. That's SITL behaviour, and the app showed it correctly.)
+  - MAVProxy tip: on Windows it needs a real console window, and `--cmd` runs before the link is up, so give it the commands after it connects.
+- **Android emulator (Medium_Tablet, Android 15):** the Fly view renders on OpenGL, the UI clears the status bar, and only Street is offered (no key on Android).
+
+### Open questions / next
+- **Android application id.** Your existing KFT GCS v1.3.4 already uses `com.kft.gcs`, so a same-id build can't install next to it. Debug is now `com.kft.gcs.dev`. The release id is your call: keep `com.kft.gcs` and replace the old app, or pick a new id.
+- `ponytail:` Esri on Android waits for the key-distribution decision (GS-1). The desktop runtime is Windows x64 only. The battery warning is a fixed 20 %.
+- The vehicle arrow's heading is a `const` rebuilt at 4 Hz. That's fine at this rate; a data-driven `iconRotate` would be the upgrade if we draw many vehicles.
+- **Next: Pass 6, the command protocol.** COMMAND_LONG with ACK/retry/timeout as a tested state machine, then the Fly actions: arm/disarm, takeoff, mode change, RTL, land. After that comes mission upload/download (week 2–3 exit: arm → takeoff → mission → RTL in SITL).

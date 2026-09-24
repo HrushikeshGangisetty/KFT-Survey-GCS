@@ -1,6 +1,9 @@
 package com.kft.gcs.app
 
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +22,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.kft.gcs.app.di.allModules
 import com.kft.gcs.feature.connections.ConnectionsRoute
+import com.kft.gcs.feature.fly.FlyRoute
 import org.koin.compose.KoinApplication
 import org.koin.dsl.koinConfiguration
 
@@ -32,9 +36,11 @@ fun App() {
         MaterialTheme(colorScheme = KftColors.dark) {
             Surface(Modifier.fillMaxSize()) {
                 val nav = rememberNavController()
-                Row {
+                // safeDrawing: Android 15 draws edge-to-edge, so without this the UI sits under the status bar (ADR-001 F3).
+                Row(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     AppRail(nav)
-                    NavHost(nav, startDestination = Destination.CONNECTIONS.route) {
+                    NavHost(nav, startDestination = START.route) {
+                        composable(Destination.FLY.route) { FlyRoute() }
                         composable(Destination.CONNECTIONS.route) { ConnectionsRoute() }
                     }
                 }
@@ -45,8 +51,12 @@ fun App() {
 
 /** Top-level destinations. A navigation rail suits tablets and desktop, the P0 screens (spec §2.5). */
 internal enum class Destination(val route: String, val label: String) {
+    FLY("fly", "Fly"),
     CONNECTIONS("connections", "Links"),
 }
+
+/** The Fly view first, like every GCS: the map is what you want to see when the app opens. */
+private val START = Destination.FLY
 
 @Composable
 private fun AppRail(nav: NavHostController) {
@@ -59,7 +69,7 @@ private fun AppRail(nav: NavHostController) {
                     nav.navigate(destination.route) {
                         // Tabs, not a stack: re-selecting a tab returns to it instead of piling up copies.
                         launchSingleTop = true
-                        popUpTo(Destination.CONNECTIONS.route) { saveState = true }
+                        popUpTo(START.route) { saveState = true }
                         restoreState = true
                     }
                 },

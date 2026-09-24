@@ -9,11 +9,15 @@ kotlin {
             implementation(project(":feature:plan"))
             implementation(project(":feature:settings"))
             implementation(project(":core:mavlink")) // for mavlinkModule and the IoDispatcher qualifier
+            implementation(project(":core:vehicle"))
             implementation(libs.jb.navigation.compose)
             implementation(libs.jb.lifecycle.viewmodel.compose)
             implementation(project.dependencies.platform(libs.koin.bom))
             implementation(libs.koin.core)
             implementation(libs.koin.compose)
+        }
+        jvmMain.dependencies {
+            implementation(project(":ui:map")) // DesktopApp gives the map its window's GPU context
         }
     }
 }

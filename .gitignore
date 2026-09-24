@@ -27,6 +27,7 @@ secrets.properties
 
 # SITL / logs
 *.tlog
+*.tlog.raw
 /logs/
 eeprom.bin
 mav.parm

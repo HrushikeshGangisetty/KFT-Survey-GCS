@@ -6,6 +6,8 @@ kotlin {
         commonMain.dependencies {
             api(project(":core:mavlink"))
             api(project(":core:geo"))
+            implementation(project.dependencies.platform(libs.koin.bom))
+            implementation(libs.koin.core)
         }
     }
 }
