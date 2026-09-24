@@ -15,6 +15,7 @@ kotlinx-serialization = "1.11.0"
 kotlinx-datetime = "0.8.0"
 turbine = "1.2.1"
 mavlink-kotlin = "1.2.15"
+okio = "3.17.0"                       # same version mavlink-kotlin 1.2.15 depends on; we use it for transport byte streams
 jserialcomm = "2.11.4"
 usb-serial-android = "3.11.0"          # JitPack: com.github.mik3y:usb-serial-for-android
 maplibre-compose = "0.17.0"            # desktop needs Java 25 at runtime; see docs/implementation/00
@@ -56,6 +57,7 @@ mavlink-definitions = { module = "com.divpundir.mavlink:definitions", version.re
 mavlink-serialization = { module = "com.divpundir.mavlink:serialization", version.ref = "mavlink-kotlin" }
 mavlink-connection-core = { module = "com.divpundir.mavlink:connection-core", version.ref = "mavlink-kotlin" }
 mavlink-adapter-coroutines = { module = "com.divpundir.mavlink:adapter-coroutines", version.ref = "mavlink-kotlin" }
+okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 
 jserialcomm = { module = "com.fazecast:jSerialComm", version.ref = "jserialcomm" }
 usb-serial-android = { module = "com.github.mik3y:usb-serial-for-android", version.ref = "usb-serial-android" }

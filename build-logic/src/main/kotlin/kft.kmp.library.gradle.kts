@@ -28,6 +28,10 @@ kotlin {
     }
 
     sourceSets {
+        // Virtual-time helpers (runCurrent, advanceTimeBy) are still marked experimental; every test uses them.
+        matching { it.name.endsWith("Test") }.configureEach {
+            languageSettings.optIn("kotlinx.coroutines.ExperimentalCoroutinesApi")
+        }
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.lib("kotlinx-coroutines-test"))

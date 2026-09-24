@@ -118,3 +118,81 @@ pointer (px) ──toDp──▶ hitVertex(handles in dp) ──hit?──▶ co
 - Suggestion for a later pass: move `androidResources { enable = true }` into the `kft.kmp.compose` convention plugin (F2).
 - Dev environment: Gradle on this laptop needs `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:\Users\Hrushikesh` (ADR-001, dev-environment note).
 - Next task: the Connections screen (MVVM worked example), then section 04 `MapView` on top of the ADR-001 findings.
+
+---
+
+## Pass 3 — W1-3: `core:mavlink` (transports, TX gateway, connection manager) (2026-09-24)
+
+### What changed
+- **`core/mavlink/build.gradle.kts`**: a shared `jvmCommon` source set (Android + desktop) for socket code, plus okio and Koin.
+- **`MavTransport.kt`**: the `internal` byte-pipe interface, and `TransportMavConnection`, which puts mavlink-kotlin's framing on top of it.
+- **`jvmCommonMain/SocketTransports.kt`**: `UdpTransport` (listen and client) and `TcpTransport`, written once for both platforms.
+- **`TxPolicy.kt`**: the allowlist as pure functions. It sorts each message into a row of the pod-contract §3 table, then checks that row's rule against `PodStatus`.
+- **`MavTxGateway.kt`**: the only `send`. It classifies, checks, and then writes or rejects, and publishes every rejection.
+- **`LinkConfig.kt`**: UDP listen, UDP client and TCP, as plain data that can be saved in a profile.
+- **`LinkStats.kt`**: message rate and loss % from MAVLink sequence gaps.
+- **`ConnectionManager.kt`**: connect/disconnect, auto-reconnect (1, 2, 4, 5 s), 1 Hz GCS heartbeat, vehicle detection, 3 s heartbeat timeout, and a `frames` flow for `core:vehicle`.
+- **`di/MavlinkModule.kt`**: Koin bindings and the `IoDispatcher` qualifier.
+- **`kft.kmp.library` convention plugin**: test source sets opt in to the virtual-time coroutine APIs.
+- **`gradle/libs.versions.toml`**: `okio` 3.17.0, the same version mavlink-kotlin already pulls in. No version bumps.
+- **Tests**: `MavTxGatewayTest`, `LinkStatsCounterTest`, `ConnectionManagerTest`, `FakeMavConnection` (commonTest), and `SocketTransportsTest` (jvmTest).
+
+### How it works
+```
+                     ConnectionManager (app scope)
+LinkConfig --connect--> runLink: loop { open -> session -> fail -> backoff }
+                              |
+                 createTransport(config)  [internal]
+                              v
+ socket <-bytes-> MavTransport -> TransportMavConnection (framing, CRC) -> CoroutinesMavConnection
+                                                                              |            ^
+                                                           mavFrame (reader)  |            | sendUnsignedV2
+                                                                              v            |
+                  frames: SharedFlow <-- session collector (stats, heartbeat)      MavTxGateway.send(msg)
+                  state: StateFlow<LinkState>                                       | classify -> check(pod)
+                                                                                    +- Rejected -> rejections
+```
+1. `connect(config)` launches `runLink` in the app scope. Each pass opens a connection, runs a session, and on failure shows "Connecting (attempt n)" and waits 1, 2, 4, then 5 s.
+2. A session hands the connection to the gateway, then runs two coroutines: the GCS heartbeat sender, and a single collector that handles both incoming frames and the 1 s tick (stats, vehicle timeout).
+3. When the stream fails or `disconnect()` cancels, the `finally` block detaches the gateway and closes the connection. Closing is what unblocks the reader thread stuck in a socket read.
+
+### Engineering learnings
+- **The compiler enforces the TX rule.** `MavTransport` and `MavTxGateway.attach` are `internal`, so code outside `core:mavlink` can't reach anything that writes. *Why over a code review rule:* a rule can be forgotten, but an `internal` modifier can't be bypassed without editing this module.
+- **Default-deny allowlist.** Messages that aren't listed are rejected. *Why:* mavlink-kotlin knows hundreds of messages. With deny-by-default, a new one needs a deliberate line and a test, never an accident.
+- **Mode numbers depend on the firmware.** GUIDED is 4 on Copter and 15 on Plane, so the policy needs the vehicle kind from the heartbeat. Before the first heartbeat, mode changes are refused rather than guessed.
+- **RC override counts as "never".** AI-enable and target-lock are RC channels. A GCS `RC_CHANNELS_OVERRIDE` could raise them, which would be engagement over the GCS (pod invariant 4).
+- **One collector for shared state.** Frames and ticks are merged into one flow, so `stats`/`vehicle` are only touched by one coroutine at a time. *Why over a Mutex:* nothing to lock or forget, and the order of events is explicit.
+- **Closing unblocks blocking I/O.** Cancelling a coroutine doesn't interrupt a thread blocked in `socket.receive()`, but closing the socket does. That's why the `finally` closes before `coroutineScope` waits for its children.
+- **Custom KMP hierarchy (`jvmCommon`).** java.net is the same on Android and desktop, so a shared intermediate source set avoids copying socket code. `applyDefaultHierarchyTemplate { group("jvmCommon") { … } }` keeps the default template, so no hierarchy warning.
+- **The test seam is the library's own interface.** Tests fake `CoroutinesMavConnection`, which mavlink-kotlin already defines, so the state machine runs on virtual time without sockets. The real sockets get their own small JVM loopback test.
+
+**Ponytail review:** no cuts. `UdpClient` is P0 in the spec (UDP client and listen), and `rejections` is required by the "rejected and logged" rule.
+
+### Safety
+- New `MavTxGateway` with the full pod-contract §3 table from day one:
+  - **Always:** heartbeat, param reads, mission download, stream requests.
+  - **Operator:** arm, takeoff, mission start, speed, pause, param set, other modes.
+  - **Mission change:** blocked while the pod is LOCKED, TERMINAL or ENGAGE.
+  - **Safe direction:** RTL, LOITER, LAND, BRAKE on Copter; RTL, LOITER, QLAND, QRTL on Plane; plus `NAV_RETURN_TO_LAUNCH` and `NAV_LAND`. Always allowed.
+  - **Enter GUIDED:** blocked while pod AI-enable is high.
+  - **Never:** `SET_POSITION_TARGET_*`, `SET_ATTITUDE_TARGET`, `DO_REPOSITION`, `RC_CHANNELS_OVERRIDE`, `MANUAL_CONTROL`, `DO_SET_SERVO`, `DO_SET_RELAY`.
+  - **Everything else:** rejected as unlisted.
+- Each row has a test in `MavTxGatewayTest`. The pod status is fixed at `NoPod` in DI until the pod link exists.
+
+### What to look at
+1. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/TxPolicy.kt:58`: the allowlist, one row per line.
+2. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/MavTxGateway.kt:58`: `send`, which classifies, checks, then writes.
+3. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/ConnectionManager.kt:115`: the reconnect loop and why closing happens in `finally`.
+
+### Tests
+- `MavTxGatewayTest` (9): each §3 row, Copter vs Plane GUIDED numbers, unknown vehicle refused, rejections published and not written, pod state read at send time.
+- `LinkStatsCounterTest` (3): hand-calculated loss across the 255 -> 0 wrap (2 lost of 6 = 33.3 %), senders tracked separately, per-second rate window.
+- `ConnectionManagerTest` (6, virtual time): connected + 1 Hz GCS heartbeat + vehicle detection; vehicle dropped after the 3 s timeout; reconnect after failure with 1 s then 2 s backoff; disconnect closes and stops retrying; backoff 1, 2, 4, 5, 5 s; MAV_TYPE -> Copter/Plane (QuadPlane = Plane).
+- `SocketTransportsTest` (2, JVM, real localhost sockets): UDP listen replies to the sender's address; TCP carries frames both ways.
+- `./gradlew check` passes.
+- **Manual SITL check:** comes with the Connections screen in Pass 4.
+
+### Open questions / next
+- Serial (jSerialComm on desktop, usb-serial-for-android) is its own pass. Android USB needs a Context and permission flow.
+- MAVLink signing isn't used (ArduPilot allows unsigned by default). Revisit before field use.
+- Next: **Pass 4, the Connections screen** (MVVM worked example: UiState, ViewModel, profiles repository, Koin, navigation).
