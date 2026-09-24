@@ -1,0 +1,10 @@
+# Normalise line endings so Windows, WSL2 and CI see identical files.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.jar binary
+*.png binary
+*.jpg binary
+*.mbtiles binary
+*.pmtiles binary
+*.tlog binary

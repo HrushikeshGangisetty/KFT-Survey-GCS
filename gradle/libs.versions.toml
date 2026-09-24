@@ -1,0 +1,78 @@
+# Single source of truth for versions. Checked against Maven Central / Google Maven on 2026-09-24.
+# Rule: bump versions only in a dedicated pass, never as a side effect of feature work.
+
+[versions]
+kotlin = "2.4.20"
+agp = "9.4.1"
+compose-multiplatform = "1.12.1"
+compose-material3 = "1.9.0"            # JetBrains Material3 has its own version line
+androidx-activity = "1.13.0"
+jb-lifecycle = "2.11.0"                # KMP ViewModel + lifecycle (org.jetbrains.androidx.lifecycle)
+jb-navigation = "2.9.2"                # KMP navigation-compose (decided in the Connections pass)
+koin = "4.2.2"
+kotlinx-coroutines = "1.11.0"
+kotlinx-serialization = "1.11.0"
+kotlinx-datetime = "0.8.0"
+turbine = "1.2.1"
+mavlink-kotlin = "1.2.15"
+jserialcomm = "2.11.4"
+usb-serial-android = "3.11.0"          # JitPack: com.github.mik3y:usb-serial-for-android
+maplibre-compose = "0.17.0"            # desktop needs Java 25 at runtime; see docs/implementation/00
+
+android-compileSdk = "37"         # Compose 1.12 (androidx) requires compileSdk 37
+android-targetSdk = "36"
+android-minSdk = "26"
+
+[libraries]
+# Compose Multiplatform (explicit coordinates; the old `compose.*` accessors are deprecated)
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-multiplatform" }
+compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose-multiplatform" }
+compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose-multiplatform" }
+compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-multiplatform" }
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-material3" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+
+jb-lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "jb-lifecycle" }
+jb-lifecycle-runtime-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "jb-lifecycle" }
+jb-navigation-compose = { module = "org.jetbrains.androidx.navigation:navigation-compose", version.ref = "jb-navigation" }
+
+koin-bom = { module = "io.insert-koin:koin-bom", version.ref = "koin" }
+koin-core = { module = "io.insert-koin:koin-core" }
+koin-compose = { module = "io.insert-koin:koin-compose" }
+koin-compose-viewmodel = { module = "io.insert-koin:koin-compose-viewmodel" }
+koin-android = { module = "io.insert-koin:koin-android" }
+koin-test = { module = "io.insert-koin:koin-test" }
+
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
+turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
+
+mavlink-api = { module = "com.divpundir.mavlink:api", version.ref = "mavlink-kotlin" }
+mavlink-definitions = { module = "com.divpundir.mavlink:definitions", version.ref = "mavlink-kotlin" }
+mavlink-serialization = { module = "com.divpundir.mavlink:serialization", version.ref = "mavlink-kotlin" }
+mavlink-connection-core = { module = "com.divpundir.mavlink:connection-core", version.ref = "mavlink-kotlin" }
+mavlink-adapter-coroutines = { module = "com.divpundir.mavlink:adapter-coroutines", version.ref = "mavlink-kotlin" }
+
+jserialcomm = { module = "com.fazecast:jSerialComm", version.ref = "jserialcomm" }
+usb-serial-android = { module = "com.github.mik3y:usb-serial-for-android", version.ref = "usb-serial-android" }
+
+maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.ref = "maplibre-compose" }
+
+# Plugin artifacts used by build-logic (convention plugins compile against these)
+gradle-plugin-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+gradle-plugin-compose-compiler = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
+gradle-plugin-compose = { module = "org.jetbrains.compose:compose-gradle-plugin", version.ref = "compose-multiplatform" }
+gradle-plugin-android = { module = "com.android.tools.build:gradle", version.ref = "agp" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
