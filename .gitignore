@@ -32,3 +32,6 @@ eeprom.bin
 mav.parm
 # SITL terrain cache at the repo root only (unanchored "terrain/" would hide core/terrain)
 /terrain/
+
+# Graphify knowledge graph: derived locally and rebuilt by git hooks
+graphify-out/

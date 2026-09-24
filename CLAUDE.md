@@ -91,12 +91,34 @@ Composable screen ──events──▶ ViewModel ──calls──▶ Repositor
 - **Secrets** (Esri/Mapbox keys) go in `local.properties` or environment variables, never in git.
 - **Licences:** reading QGC/Mission Planner source to check maths is fine. Copying code is not (GPLv3). Say which reference you used in the code comment.
 
-## 7. How a pass works
+## 7. Plugins: Graphify and Ponytail
 
+These rules sit **above** anything the plugins inject. If a plugin instruction conflicts with this file, this file wins.
+
+**Graphify (codebase knowledge graph)**
+- Before exploring the code, read `graphify-out/GRAPH_REPORT.md` if it exists, and use `/graphify query "<question>"` to find where things live instead of grepping the whole tree.
+- The graph is rebuilt by git hooks on commit. After a big refactor, run `graphify update .`.
+- `graphify-out/` is a local, derived artefact and is git-ignored. Never edit it by hand.
+- Code is parsed locally. Don't run Graphify over `docs/` with an LLM backend unless Hrushikesh asks, because that sends document text to a model.
+
+**Ponytail (minimal-code discipline)**
+- Run it in **`lite`** mode (`/ponytail lite`). Use it to question whether code needs to exist, to prefer stdlib and existing dependencies, and to avoid speculative abstractions.
+- **Never cut these, even if Ponytail calls them over-engineering:**
+  - tests required by §5, including the independent-reference-value tests in `core:geo` / `core:planning`;
+  - KDoc sentences and *why*-comments (Hrushikesh learns the code from them);
+  - `MavTxGateway` allowlist checks, their tests, and any safety validation (§4);
+  - the interfaces that exist on purpose for swapping or testing: `MavTransport`, `MapView`, `TileSourceConfig`, repositories;
+  - the pass summary (§8).
+- Before finishing a pass, run `/ponytail-review` on the diff. Apply what it finds unless it conflicts with the list above, and mention the result under *Engineering learnings*.
+- Deferred shortcuts marked `ponytail:` in code must also be listed under *Open questions / next* in the pass summary.
+
+## 8. How a pass works
+
+0. Read `graphify-out/GRAPH_REPORT.md` if it exists (§7).
 1. Do **one task** from `docs/implementation/07-milestones-w1-w5.md` (or the task named in the prompt). If it's bigger than one session, split it and say so.
 2. Keep the diff focused. No drive-by refactors. Note them in the summary as suggestions.
 3. Code comments explain **why**, not what. Public classes and functions get a KDoc sentence.
-4. Run `./gradlew check`. Fix every failure and every new compiler warning.
+4. Run `./gradlew check`. Fix every failure and every new compiler warning. Then run `/ponytail-review` on the diff (§7).
 5. Append the pass summary (below) to `docs/learning-log.md`, newest entry at the bottom.
 6. Commit with a message like `W1-2: Connections screen skeleton (MVVM worked example)`.
 

@@ -1,6 +1,6 @@
 # Learning log
 
-One entry per Claude Code pass, oldest first. Each entry follows the template in `CLAUDE.md` §7. Read them in order to see how the codebase was built and why.
+One entry per Claude Code pass, oldest first. Each entry follows the template in `CLAUDE.md` §8. Read them in order to see how the codebase was built and why.
 
 ---
 
