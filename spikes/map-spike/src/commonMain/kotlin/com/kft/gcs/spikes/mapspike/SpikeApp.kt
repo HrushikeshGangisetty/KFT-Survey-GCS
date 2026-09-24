@@ -63,24 +63,26 @@ expect fun usedHeapMb(): Long
 // ArduPilot SITL's default home (CMAC, Canberra), so the spike lines up with SITL later.
 private val HOME = Position(longitude = 149.165230, latitude = -35.363261)
 private const val LIBERTY_STYLE = "https://tiles.openfreemap.org/styles/liberty"
-// ponytail: style name `arcgis/imagery` not yet confirmed (needs a key to probe). Mapbox alternate not wired.
-private const val ESRI_HOST = "https://static-map-tiles-api.arcgis.com/"
-private const val ESRI_TILES =
-    ESRI_HOST + "arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/imagery/static/tile/{z}/{y}/{x}"
+// Esri's Static Basemap Tiles service has no imagery style (only imagery/labels), so satellite comes from the
+// keyed World_Imagery tile service. It accepts the key only as `?token=`, not as a header (checked 2026-09-24).
+// ponytail: Mapbox alternate not wired (no key).
+private const val ESRI_HOST = "https://ibasemaps-api.arcgis.com/"
+private const val ESRI_TILES = ESRI_HOST + "arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 private const val ESRI_ATTRIBUTION = "Powered by Esri | Esri, Maxar, Earthstar Geographics"
 private val HANDLE_HIT_RADIUS = 24.dp // finger-sized; a mouse is more precise but gains nothing from less
 
 enum class Basemap { Street, Satellite, Offline }
 
 /**
- * Sends the Esri token as a request header instead of a `?token=` URL parameter, so it never shows
- * up in tile URLs, logs or the tile cache key. Must run once, before the first map is created.
+ * Adds the Esri token to Esri tile requests at fetch time. The style and source keep a key-free URL; only the
+ * outgoing request carries it. A header would be nicer, but World_Imagery rejects the header form. Run once,
+ * before the first map is created.
  */
 fun configureEsriAuth(key: String) {
     DefaultMapRuntime.configure(
         MapRuntimeOptions(
-            requestInterceptor = MapRequestInterceptor(headers = { request ->
-                if (request.url.startsWith(ESRI_HOST)) mapOf("X-Esri-Authorization" to "Bearer $key") else emptyMap()
+            requestInterceptor = MapRequestInterceptor(rewriteUrl = { request ->
+                if (request.url.startsWith(ESRI_HOST)) "${request.url}?token=$key" else null
             }),
         ),
     )
@@ -128,7 +130,7 @@ fun SpikeApp(satelliteEnabled: Boolean) {
                         source = rememberRasterTileSource(
                             tiles = listOf(ESRI_TILES),
                             options = TileSetOptions(maxZoom = 19, attributionHtml = ESRI_ATTRIBUTION),
-                            tileSize = 512, // Esri static tiles are 512 px; 256 would request 4x the tiles
+                            tileSize = 256, // World_Imagery MapServer tiles are 256 px JPEG
                         ),
                     )
                     Basemap.Offline -> offlineUrl?.let { url ->
