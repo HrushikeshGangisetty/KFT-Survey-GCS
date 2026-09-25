@@ -1,5 +1,6 @@
 package com.kft.gcs.core.mavlink
 
+import com.divpundir.mavlink.definitions.common.MissionSetCurrent
 import com.divpundir.mavlink.definitions.minimal.Heartbeat
 import com.divpundir.mavlink.definitions.minimal.MavType
 import kotlin.test.Test
@@ -48,6 +49,25 @@ class ConnectionManagerTest {
         val heartbeats = link.sent.filterIsInstance<Heartbeat>()
         assertEquals(3, heartbeats.size)
         assertEquals(MavType.GCS.value, heartbeats.first().type.value)
+    }
+
+    /** The gateway's armed flag is the one from the vehicle's heartbeat, not a copy that could go stale. */
+    @Test
+    fun gatewayUsesTheHeartbeatArmedFlag() = runTest {
+        val link = FakeMavConnection()
+        val manager = manager(link)
+        manager.connect(udp)
+        runCurrent()
+        val setCurrent = MissionSetCurrent(seq = 3u)
+        assertIs<TxResult.Rejected>(manager.gateway.send(setCurrent), "no vehicle heard yet: fail closed")
+
+        link.receive(copterHeartbeat(armed = false), seq = 0)
+        runCurrent()
+        assertEquals(TxResult.Sent, manager.gateway.send(setCurrent))
+
+        link.receive(copterHeartbeat(armed = true), seq = 1)
+        runCurrent()
+        assertIs<TxResult.Rejected>(manager.gateway.send(setCurrent))
     }
 
     @Test

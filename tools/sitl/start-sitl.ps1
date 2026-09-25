@@ -1,11 +1,12 @@
-﻿<#
+<#
 .SYNOPSIS
   Starts ArduPilot SITL (Copter or Plane) on Windows plus MAVProxy as the pilot's RC, for GCS checks.
 
 .DESCRIPTION
   Uses Mission Planner's Windows SITL builds in Documents\Mission Planner\sitl. The Copter binary ships with
   Mission Planner; for Plane, run Plane SITL once from Mission Planner (Simulation tab), which downloads
-  ArduPlane.exe, or copy it there yourself.
+  ArduPlane.exe, or download ArduPlane.elf from https://firmware.ardupilot.org/Tools/MissionPlanner/sitl/
+  and save it there as ArduPlane.exe (plane.parm: ardupilot Tools/autotest/models/plane.parm).
 
   Ports (SITL instance 0):
     5760  SERIAL0  MAVProxy holds it. The Windows SITL build exits when this client disconnects, so keep MAVProxy open.
@@ -38,8 +39,13 @@ if (-not $Defaults) { $Defaults = Join-Path $SitlDir "default_params\$Vehicle.pa
 if (-not (Test-Path $Defaults)) { throw "Default parameters not found: $Defaults (pass -Defaults <path to $Vehicle.parm>)" }
 $model = if ($Vehicle -eq "plane") { "plane" } else { "quad" }
 
+# SITL keeps its parameters in eeprom.bin in the working folder. One folder per vehicle, so Plane never boots with
+# Copter's saved parameters (or the other way round). The Cygwin DLLs are found next to the exe.
+$work = Join-Path $SitlDir $Vehicle
+New-Item -ItemType Directory -Force $work | Out-Null
+
 Write-Host "Starting $Vehicle SITL at $HomeLocation ..."
-Start-Process -FilePath $exe -WorkingDirectory $SitlDir -WindowStyle Minimized `
+Start-Process -FilePath $exe -WorkingDirectory $work -WindowStyle Minimized `
     -ArgumentList "--model", $model, "--home", $HomeLocation, "--defaults", "`"$Defaults`"", "-I0"
 Start-Sleep -Seconds 3
 

@@ -35,12 +35,16 @@ interface MavSender {
 
 /**
  * The only code that writes MAVLink to a vehicle (CLAUDE.md §4). Every message is classified against the
- * allowlist in [TxPolicy] and checked against the current [podStatus] before it reaches the link.
+ * allowlist in [TxPolicy] and checked against the current [podStatus] and [vehicleArmed] before it reaches the link.
  *
  * Nothing outside `core:mavlink` can get the underlying connection: the gateway holds it privately, and only
  * [ConnectionManager] (same module) can attach or detach it.
  */
-class MavTxGateway internal constructor(private val podStatus: StateFlow<PodStatus>) : MavSender {
+class MavTxGateway internal constructor(
+    private val podStatus: StateFlow<PodStatus>,
+    /** The armed flag from the vehicle's latest heartbeat, or null when no vehicle is heard. Read at send time. */
+    private val vehicleArmed: () -> Boolean? = { null },
+) : MavSender {
     // Volatile: callers send from any thread (UI, protocol coroutines) while ConnectionManager swaps the link.
     // A send that races a detach just gets NotConnected or an IOException, which callers already handle.
     @Volatile
@@ -62,7 +66,7 @@ class MavTxGateway internal constructor(private val podStatus: StateFlow<PodStat
     /** Checks [message] against the allowlist and, if allowed, sends it as an unsigned MAVLink v2 frame from the GCS ids. */
     override suspend fun <T : MavMessage<T>> send(message: T): TxResult {
         val classification = TxPolicy.classify(message)
-        TxPolicy.check(classification.category, podStatus.value)?.let { reason ->
+        TxPolicy.check(classification.category, podStatus.value, vehicleArmed())?.let { reason ->
             return TxResult.Rejected(classification.label, reason).also { _rejections.tryEmit(it) }
         }
         val connection = link ?: return TxResult.NotConnected

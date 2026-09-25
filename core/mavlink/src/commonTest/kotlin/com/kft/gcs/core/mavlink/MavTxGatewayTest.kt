@@ -13,6 +13,7 @@ import com.divpundir.mavlink.definitions.common.MissionClearAll
 import com.divpundir.mavlink.definitions.common.MissionCount
 import com.divpundir.mavlink.definitions.common.MissionItemInt
 import com.divpundir.mavlink.definitions.common.MissionRequestList
+import com.divpundir.mavlink.definitions.common.MissionSetCurrent
 import com.divpundir.mavlink.definitions.common.ParamRequestList
 import com.divpundir.mavlink.definitions.common.ParamSet
 import com.divpundir.mavlink.definitions.common.RcChannelsOverride
@@ -43,8 +44,8 @@ class MavTxGatewayTest {
     private fun setMode(mode: UInt) = SetMode(customMode = mode)
 
     /** Runs the policy exactly as the gateway does. Null = allowed. */
-    private fun verdict(message: MavMessage<*>, pod: PodStatus = PodStatus.NoPod): String? =
-        TxPolicy.check(TxPolicy.classify(message).category, pod)
+    private fun verdict(message: MavMessage<*>, pod: PodStatus = PodStatus.NoPod, armed: Boolean? = false): String? =
+        TxPolicy.check(TxPolicy.classify(message).category, pod, armed)
 
     @Test
     fun alwaysAllowedEvenWithPodLockedAndAiEnableHigh() {
@@ -65,6 +66,34 @@ class MavTxGatewayTest {
         for (state in listOf(PodLockState.LOCKED, PodLockState.TERMINAL, PodLockState.ENGAGE)) {
             upload.forEach { assertTrue(verdict(it, PodStatus(state))!!.contains("$state"), "$it must be blocked in $state") }
         }
+    }
+
+    /**
+     * MISSION_SET_CURRENT picks where AUTO starts (resume-from-point). On the ground that's planning; in the air
+     * it would jump a flying aircraft to another item, so it's a flight action (S9). Unknown armed state fails closed.
+     */
+    @Test
+    fun missionSetCurrentOnlyWhileDisarmed() {
+        val setCurrent = MissionSetCurrent(seq = 4u)
+        assertNull(verdict(setCurrent, armed = false), "allowed on the ground")
+        assertTrue(verdict(setCurrent, armed = true)!!.contains("disarmed"), "rejected while armed")
+        assertTrue(verdict(setCurrent, armed = null)!!.contains("disarmed"), "rejected with no vehicle heard")
+        // It's still a mission change, so a locked pod blocks it even on the ground.
+        assertTrue(verdict(setCurrent, PodStatus(PodLockState.LOCKED), armed = false)!!.contains("LOCKED"))
+        // The armed rule is only for MISSION_SET_CURRENT: uploads stay allowed while armed (the Plan screen asks first).
+        assertNull(verdict(MissionCount(count = 3u), armed = true))
+    }
+
+    @Test
+    fun gatewayReadsArmedStateAtSendTime() = runTest {
+        var armed: Boolean? = false
+        val link = FakeMavConnection()
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { armed }
+        gateway.attach(link)
+        assertEquals(TxResult.Sent, gateway.send(MissionSetCurrent(seq = 2u)))
+        armed = true
+        assertIs<TxResult.Rejected>(gateway.send(MissionSetCurrent(seq = 2u)))
+        assertEquals(1, link.sent.size, "the armed-time request must not reach the link")
     }
 
     /** S9: the pilot arms, takes off, changes mode, returns and lands on the RC. The GCS never does, in any pod state. */

@@ -2,7 +2,10 @@
 // and MavTxGateway: the ONLY class allowed to write bytes to a transport.
 import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
 
-plugins { id("kft.kmp.library") }
+plugins {
+    id("kft.kmp.library")
+    alias(libs.plugins.kotlin.serialization) // LinkConfig is saved to disk as part of a connection profile
+}
 
 kotlin {
     // Socket transports use java.net, which exists on both Android and desktop. A shared "jvmCommon"
@@ -25,6 +28,7 @@ kotlin {
             implementation(libs.mavlink.connection.core)
             implementation(libs.mavlink.adapter.coroutines)
             implementation(libs.okio)
+            implementation(libs.kotlinx.serialization.json)
             api(libs.kotlinx.coroutines.core)
             implementation(project.dependencies.platform(libs.koin.bom))
             implementation(libs.koin.core)

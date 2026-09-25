@@ -1,7 +1,21 @@
 // Shared app root: App() composable, theme, navigation host and the Koin DI graph. Used by both app shells.
+import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
+
 plugins { id("kft.kmp.compose") }
 
 kotlin {
+    // java.io exists on Android and desktop alike, so file storage is written once in "jvmCommon" (as core:mavlink
+    // does for sockets) instead of being copied into androidMain and jvmMain.
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
+    applyDefaultHierarchyTemplate {
+        common {
+            group("jvmCommon") {
+                withJvm()
+                withCompilations { it.target.platformType == KotlinPlatformType.androidJvm }
+            }
+        }
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(project(":feature:connections"))

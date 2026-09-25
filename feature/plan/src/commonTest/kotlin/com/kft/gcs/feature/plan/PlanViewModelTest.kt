@@ -64,6 +64,23 @@ class PlanViewModelTest {
         assertEquals(listOf(home.position, a, b), s.overlays.filterIsInstance<MapOverlay.Route>().single().points)
     }
 
+    /** Upload/clear while armed asks first and names the mode; it never blocks (the buttons stay enabled). */
+    @Test
+    fun armedVehicleMakesUploadAndClearAskFirst() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.onMapClick(a)
+        runCurrent()
+        assertNull(vm.state.value.uploadWarning, "disarmed: upload goes straight through")
+        assertEquals("This deletes the mission on the vehicle and empties the editor.", vm.state.value.clearWarning)
+
+        vehicle.value = vehicle.value.copy(armed = true, flightMode = "Auto")
+        runCurrent()
+        val s = vm.state.value
+        assertEquals("Vehicle is ARMED in AUTO: uploading replaces the mission it is flying.", s.uploadWarning)
+        assertEquals("Vehicle is ARMED in AUTO: clearing deletes the mission it is flying.", s.clearWarning)
+        assertTrue(s.canUpload && s.canClear, "a warning, not a block")
+    }
+
     @Test
     fun draggingAMarkerMovesThatWaypoint() = runTest(dispatcher) {
         val vm = viewModel()

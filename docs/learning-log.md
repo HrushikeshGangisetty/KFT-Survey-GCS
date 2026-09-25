@@ -860,3 +860,102 @@ GCS: Plan → Upload (home = seq 0) ─▶ pilot: GUIDED → arm → takeoff 20 
 - MAVProxy's UDP output didn't reach the emulator through `adb emu redir` (not investigated; TCP 5762 worked).
 - KFT firmware GCS authentication (Pass 6) is still the blocker for a real KFT FC.
 - **Next (waiting for your go-ahead):** weeks 4–5, the survey grid.
+
+---
+
+## Pass 11 — Clean-up and Plane: spec sync, MISSION_SET_CURRENT, armed confirmation, saved profiles, Plane exit check (2026-09-25)
+
+### What changed
+- **`docs/spec/01_survey_gcs_feature_spec.md`**:
+  - GS-7 is closed (app id `com.kft.survey`, debug `com.kft.survey.dev`; `com.kft.gcs` stays with the existing GCS).
+  - The pod-contract §3 note is now **GS-8**.
+  - S9 gains two sentences: MISSION_SET_CURRENT only while disarmed, and upload/clear while armed ask first.
+- **`CLAUDE.md` §4, `TxPolicy.kt`**: the GS-7 references now point to GS-8.
+- **`core/mavlink`**:
+  - `TxPolicy.kt`: a new `MISSION_CHANGE_DISARMED` category for MISSION_SET_CURRENT. `check()` takes the armed flag.
+  - `MavTxGateway.kt`: reads `vehicleArmed()` at send time, next to the pod state.
+  - `ConnectionManager.kt`: gives the gateway the armed flag from the vehicle's heartbeat.
+  - `LinkConfig.kt`: `@Serializable`, with a stable `@SerialName` per link kind.
+  - `build.gradle.kts`: the serialization plugin and kotlinx-serialization-json (both already in the catalog).
+- **`feature/plan`**: `PlanUiState.uploadWarning` / `clearWarning`, and an "Upload while armed?" dialog in `PlanScreen`. Clear's existing dialog now uses the armed text too.
+- **`feature/connections`**:
+  - `ConnectionsRepository.kt`: a `ProfileStore` interface, save on every change, load at start, and pure `encodeProfiles` / `decodeProfiles`.
+  - `di/ConnectionsModule.kt`: passes the store to the repository.
+- **`app/shared`**:
+  - `FileProfileStore.kt` (new, `jvmCommonMain`, shared by desktop and Android): an atomic file write.
+  - `DesktopApp.kt`: `%APPDATA%\KFT-GCS\connection-profiles.json`. `AndroidApp.kt`: `filesDir/connection-profiles.json`.
+  - `build.gradle.kts`: a `jvmCommon` source set (the same pattern `core:mavlink` uses for sockets).
+- **`tools/sitl`**:
+  - `start-sitl.ps1`: one working folder per vehicle, so Plane never loads Copter's `eeprom.bin` parameters.
+  - `sitl_pilot.py`: Plane uses ArduPlane's TAKEOFF mode.
+
+### How it works
+```
+vehicle HEARTBEAT ──▶ ConnectionManager ──▶ LinkState.Connected(vehicle.armed)
+                                                   │ read at send time
+MISSION_SET_CURRENT ──▶ MavTxGateway ──▶ TxPolicy.check(MISSION_CHANGE_DISARMED, pod, armed)
+                                           pod LOCKED/TERMINAL/ENGAGE → rejected
+                                           armed == false             → sent
+                                           armed == true or unknown   → rejected "only while disarmed (S9)"
+
+Plan: Upload ──state.uploadWarning == null──▶ upload
+            └─ "Vehicle is ARMED in AUTO: …" ──▶ dialog ──Upload──▶ upload   (warning, never a block)
+
+start: ProfileStore.read() ─decodeProfiles─▶ profiles   (no file or broken file → the two SITL defaults)
+add/delete ──▶ _profiles ──encodeProfiles──▶ ProfileStore.write() ──▶ write .tmp, then atomic rename
+```
+
+### Engineering learnings
+- **Fail closed on unknown state.** With no vehicle heard, `armed` is null, and the gateway treats it as armed. "Allowed only while disarmed" has to mean "known to be disarmed". Otherwise the moment before the first heartbeat would be the one gap in the rule.
+- **Read state at send time, don't copy it.** The gateway gets a `() -> Boolean?` rather than a stored flag, the same way it already reads `podStatus.value`. There's one source of truth (the heartbeat in `LinkState`), so the gateway can't act on a stale copy. `gatewayUsesTheHeartbeatArmedFlag` checks the real wiring.
+- **Warnings in the UI state, not the composable.** The dialog text is built in the pure `buildPlanUiState`, so the exact sentence is unit-tested. The screen only decides *when* to show it. The dialog keeps the text from the moment you clicked, so a disarm while the dialog is open can't leave a stale flag behind.
+- **A file format is an API.** `@SerialName("udp-listen")` etc. are the on-disk names, and `fileFormatIsStable` fails if one changes. `encodeDefaults = true` was **found in the desktop run**: the first saved file left out `"port": 14550` because it equals the class default. If we ever changed that default, every saved profile would silently point somewhere else. Now every field is written.
+- **Atomic save.** The store writes a `.tmp` next to the file and renames it over the old one (`ATOMIC_MOVE`). A crash mid-write leaves the old file or the new one, never half of one. A broken file (hand-edited, from a future version) falls back to the defaults instead of crashing at startup.
+- **Why `LinkConfig` is `@Serializable` rather than a DTO copy:** its KDoc already said "plain data, so the Connections screen can save it as a profile". A mirror class would be four more types kept in step by hand. The `init` checks run on load, so a file with port 0 is rejected, not half-loaded.
+- **ArduPilot facts (S10)**, master 2026-09:
+  - MISSION_SET_CURRENT (common.xml #41) is deprecated in favour of `MAV_CMD_DO_SET_MISSION_CURRENT`, but ArduPilot still handles it (`GCS_Common.cpp` `handle_mission_set_current` → `AP_Mission::set_current_cmd`). In AUTO the vehicle jumps to that item immediately.
+  - The command form (`MAV_CMD_DO_SET_MISSION_CURRENT`) stays **unlisted**, so it's rejected. Add it with the same rule when resume-from-point needs it.
+- **Windows SITL:** SITL stores its parameters in `eeprom.bin` in the *working folder*. Running Plane from Copter's folder would boot ArduPlane with Copter's saved parameters. So each vehicle now gets its own folder. Copter starts with fresh defaults the first time after this change.
+- **Build environment note:** in this session `gradlew` failed with "Unable to establish loopback connection". The JDK's internal pipe uses a Unix-domain socket in `%TEMP%`, and the 8.3 path `C:\Users\HRUSHI~1\…` broke it. Setting `TEMP`/`TMP` to a plain path fixed it. Your own terminal isn't affected unless it shows the same error.
+
+**Ponytail review:** one cut. `desktopDataDir()` had one caller, so it's inlined into the Koin module (−3 lines). Kept: `ProfileStore` (the repository's test seam, §7), the `SavedProfile` DTO (keeps the file format separate from the UI type), and the `jvmCommon` source set (the alternative is copying the atomic-write code twice).
+
+### Safety
+- **Allowlist change:** MISSION_SET_CURRENT moves from `MISSION_CHANGE` to `MISSION_CHANGE_DISARMED`.
+  - Allowed only when the latest heartbeat says disarmed.
+  - Rejected while armed or with no vehicle heard, and still blocked by a pod LOCKED/TERMINAL/ENGAGE.
+  - Tests: `MavTxGatewayTest.missionSetCurrentOnlyWhileDisarmed`, `gatewayReadsArmedStateAtSendTime`, and `ConnectionManagerTest.gatewayUsesTheHeartbeatArmedFlag`.
+- **Mission upload and clear while armed are still allowed** (your call: no block). The GCS asks first and names the mode, and the gateway doesn't care about armed for them. `missionSetCurrentOnlyWhileDisarmed` also asserts MISSION_COUNT stays allowed while armed, so nobody "fixes" this by accident.
+- Nothing new is transmitted. The app still never calls MISSION_SET_CURRENT; the rule is ready for resume-from-point.
+
+### What to look at
+1. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/TxPolicy.kt:120`: `check()` with the armed rule, and `:94` for why.
+2. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanUiState.kt:59`: the warning text.
+3. `feature/connections/src/commonMain/kotlin/com/kft/gcs/feature/connections/ConnectionsRepository.kt:56`: load at start, and `:76` save on change.
+
+### Tests
+- `MavTxGatewayTest` (+2): disarmed → allowed; armed → rejected; unknown → rejected; a LOCKED pod blocks it even when disarmed; MISSION_COUNT is unaffected by armed. The gateway reads the flag at send time.
+- `ConnectionManagerTest` (+1): no heartbeat → rejected, disarmed heartbeat → sent, armed heartbeat → rejected, through the real manager.
+- `PlanViewModelTest` (+1): the exact strings "Vehicle is ARMED in AUTO: uploading replaces the mission it is flying." and the clear variant. The buttons stay enabled.
+- `ProfileFileTest` (5, common):
+  - A round trip of all four link kinds (with quotes/backslashes in names).
+  - A pinned JSON sample (the file format).
+  - Defaults are written out.
+  - An empty list stays empty (deleted defaults stay deleted).
+  - Empty, truncated, unknown-kind and port-0 files → null.
+- `ProfilePersistenceTest` (2, desktop JVM, a real file): add + delete, then a new repository ("restart") sees exactly the saved list. A corrupt file → defaults.
+- **Profiles, confirmed in the real app:** before this pass they were **in memory only** (a `ponytail:` note from Pass 4), so they did not survive a restart. After the fix: added "SITL GCS port (TCP 5762)", closed the app, ran `gradlew :app:desktop:run` again, and it was still in Links. Deleting it rewrote the file with explicit ports.
+- **Week 2–3 exit check, Plane (ArduPlane 4.8.0-dev SITL, desktop):**
+  - Setup: `ArduPlane.elf` (master) from firmware.ardupilot.org/Tools/MissionPlanner/sitl, saved as `ArduPlane.exe`, and `plane.parm` from ardupilot `Tools/autotest/models`. Then `start-sitl.ps1 -Vehicle plane`.
+  - Links → SITL (UDP 14550) → "ArduPlane · system 1 · disarmed", about 119 msg/s.
+  - Plan → 4 clicks, roughly 400–500 m apart → rows "1–4 Waypoint 100.0 m", **no Takeoff row** → Upload (disarmed: no dialog) → "Uploaded 4 items. Switch to AUTO on the RC to fly it."
+  - Pilot (`sitl_pilot.py` on 5763, sysid 254): ARMED → TAKEOFF mode → climbed past 20 m → AUTO.
+  - Fly: "ArduPilot 4.8.0-dev", Auto / ARMED / 60 → 100 m / 22.6 m/s, "Mission 1 / 4" → "2 / 4" → … → **"Done"**. The current marker turned magenta. The orange track followed the blue route with the wide Plane turns. ArduPlane's "Mission complete, changing mode to RTL", then it loitered over home.
+  - **In flight:** Plan → Upload showed "Upload while armed? Vehicle is ARMED in AUTO: uploading replaces the mission it is flying." Cancel → nothing sent, and the mission carried on. Clear → "Vehicle is ARMED in AUTO: clearing deletes the mission it is flying." Keep.
+- `./gradlew check` and `:app:android:assembleDebug` pass. No warnings.
+
+### Open questions / next
+- `MAV_CMD_DO_SET_MISSION_CURRENT` (the command form) is still unlisted. Classify it like MISSION_SET_CURRENT when resume-from-point is built.
+- The Android profile store isn't checked on a device yet (same code as desktop, different folder). It's in the tablet checklist: add a profile, force-stop the app, reopen.
+- The Copter SITL starts from fresh parameters once (new per-vehicle folder).
+- **Next: Pass 12, KFT HMAC login.**

@@ -46,9 +46,9 @@ data class PodStatus(val lock: PodLockState = PodLockState.NONE, val aiEnableHig
  *
  * [PILOT_ONLY] replaces the contract's "operator commands", "safe-direction modes" and "enter GUIDED" rows for
  * anything that makes the aircraft move or change mode. Under S9 the GCS sends none of them, in any pod state, so
- * the GUIDED and safe-direction rules are covered by a stricter one (see open item GS-7 in the spec).
+ * the GUIDED and safe-direction rules are covered by a stricter one (see open item GS-8 in the spec).
  */
-internal enum class TxCategory { ALWAYS, OPERATOR, MISSION_CHANGE, PILOT_ONLY, NEVER, UNLISTED }
+internal enum class TxCategory { ALWAYS, OPERATOR, MISSION_CHANGE, MISSION_CHANGE_DISARMED, PILOT_ONLY, NEVER, UNLISTED }
 
 /** A message's category plus a human-readable name for logs and rejection reasons. */
 internal data class TxClassification(val category: TxCategory, val label: String)
@@ -86,8 +86,12 @@ internal object TxPolicy {
         is MissionCount -> missionChange("MISSION_COUNT")
         is MissionItemInt -> missionChange("MISSION_ITEM_INT")
         is MissionClearAll -> missionChange("MISSION_CLEAR_ALL")
-        is MissionSetCurrent -> missionChange("MISSION_SET_CURRENT")
         is MissionWritePartialList -> missionChange("MISSION_WRITE_PARTIAL_LIST")
+        // MISSION_SET_CURRENT (common.xml #41, deprecated there for MAV_CMD_DO_SET_MISSION_CURRENT, which stays
+        // unlisted) is still handled by ArduPilot (GCS_Common.cpp handle_mission_set_current -> AP_Mission::
+        // set_current_cmd). In AUTO that makes a flying aircraft jump to another item at once, which is a flight
+        // action (S9). On the ground it only picks where AUTO will start, which resume-from-point needs.
+        is MissionSetCurrent -> TxClassification(TxCategory.MISSION_CHANGE_DISARMED, "MISSION_SET_CURRENT")
 
         // Mission items can hold TAKEOFF, LAND or RTL: those are a plan the pilot starts by switching to AUTO on
         // the RC, not an immediate action, so they are MISSION_CHANGE above whatever command they carry (S9).
@@ -107,17 +111,26 @@ internal object TxPolicy {
         else -> TxClassification(TxCategory.UNLISTED, message.instanceCompanion.id.let { "message id $it" })
     }
 
-    /** Null means allowed. Otherwise the reason the message is refused. */
-    fun check(category: TxCategory, pod: PodStatus): String? = when (category) {
+    /**
+     * Null means allowed. Otherwise the reason the message is refused.
+     *
+     * @param armed the vehicle's armed flag from its latest heartbeat, or null when no vehicle is heard. Unknown
+     *   counts as armed for [TxCategory.MISSION_CHANGE_DISARMED]: fail closed.
+     */
+    fun check(category: TxCategory, pod: PodStatus, armed: Boolean?): String? = when (category) {
         TxCategory.ALWAYS, TxCategory.OPERATOR -> null
-        TxCategory.MISSION_CHANGE ->
-            if (pod.lock in MISSION_LOCKOUT) "mission changes are blocked while the pod reports ${pod.lock}" else null
+        TxCategory.MISSION_CHANGE -> missionLockout(pod)
+        TxCategory.MISSION_CHANGE_DISARMED -> missionLockout(pod)
+            ?: if (armed != false) "only allowed while the vehicle is disarmed (spec S9)" else null
         TxCategory.PILOT_ONLY -> "flight actions belong to the pilot on the RC, never the GCS (spec S9)"
         TxCategory.NEVER -> "never sent from the GCS (pod contract §3)"
         TxCategory.UNLISTED -> "not on the TX allowlist"
     }
 
     private val MISSION_LOCKOUT = setOf(PodLockState.LOCKED, PodLockState.TERMINAL, PodLockState.ENGAGE)
+
+    private fun missionLockout(pod: PodStatus) =
+        if (pod.lock in MISSION_LOCKOUT) "mission changes are blocked while the pod reports ${pod.lock}" else null
 
     private fun classifyCommand(command: UInt): TxClassification = when (command) {
         MavCmd.SET_MESSAGE_INTERVAL.value -> always("MAV_CMD_SET_MESSAGE_INTERVAL")

@@ -83,7 +83,8 @@ class ConnectionManager internal constructor(
     private val _frames = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val frames: SharedFlow<MavFrame<out MavMessage<*>>> = _frames.asSharedFlow()
 
-    val gateway = MavTxGateway(podStatus)
+    // The gateway asks for the armed flag at send time, from the same heartbeat the UI shows.
+    val gateway = MavTxGateway(podStatus) { (_state.value as? LinkState.Connected)?.vehicle?.armed }
 
     private var linkJob: Job? = null
 

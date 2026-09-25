@@ -80,6 +80,8 @@ fun PlanScreen(
     onCancelTransfer: () -> Unit,
 ) {
     var confirmClear by remember { mutableStateOf(false) }
+    // The warning as it was when Upload was clicked; null = no dialog.
+    var confirmUpload by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize()) {
         // A Surface, not a plain background: M3 Surface blocks pointer events, so a click on the panel can't fall
         // through to the map underneath and add a waypoint there.
@@ -92,7 +94,7 @@ fun PlanScreen(
                 Text("Mission", style = MaterialTheme.typography.titleMedium, color = Color.White)
                 Text(state.hint, style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.7f))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = onUpload, enabled = state.canUpload) { Text("Upload") }
+                    FilledTonalButton(onClick = { state.uploadWarning?.let { confirmUpload = it } ?: onUpload() }, enabled = state.canUpload) { Text("Upload") }
                     OutlinedButton(onClick = onRead, enabled = state.canRead) { Text("Read") }
                     OutlinedButton(onClick = { confirmClear = true }, enabled = state.canClear) { Text("Clear") }
                 }
@@ -139,9 +141,18 @@ fun PlanScreen(
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("Clear the mission?") },
-            text = { Text("This deletes the mission on the vehicle and empties the editor.") },
+            text = { Text(state.clearWarning) },
             confirmButton = { TextButton(onClick = { confirmClear = false; onClear() }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Keep") } },
+        )
+    }
+    confirmUpload?.let { warning ->
+        AlertDialog(
+            onDismissRequest = { confirmUpload = null },
+            title = { Text("Upload while armed?") },
+            text = { Text(warning) },
+            confirmButton = { TextButton(onClick = { confirmUpload = null; onUpload() }) { Text("Upload") } },
+            dismissButton = { TextButton(onClick = { confirmUpload = null }) { Text("Cancel") } },
         )
     }
 }

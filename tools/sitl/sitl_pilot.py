@@ -3,6 +3,9 @@
 Sends what MAVProxy sends for `mode guided`, `arm throttle`, `takeoff <alt>` and `mode auto`, so the check can run
 unattended. By hand, type the same four commands into the MAVProxy console instead.
 
+Plane uses ArduPlane's own TAKEOFF mode instead (MAVProxy: `arm throttle`, `mode takeoff`, then `mode auto`): it
+climbs out along the runway heading to TKOFF_ALT and works on every ArduPlane version, unlike GUIDED takeoff.
+
     py -3.9 tools/sitl/sitl_pilot.py tcp:127.0.0.1:5763 --alt 20
 
 Needs pymavlink (it comes with `pip install MAVProxy`). Connect to a SITL port the GCS isn't using: SERIAL2 (5763).
@@ -30,12 +33,14 @@ def main():
     args = parser.parse_args()
 
     master = mavutil.mavlink_connection(args.link, source_system=254)  # 254: not the GCS's 255
-    master.wait_heartbeat()
+    heartbeat = master.wait_heartbeat()
     print(f"vehicle {master.target_system}, {master.flightmode}")
 
-    master.set_mode("GUIDED")                        # MAVProxy: mode guided
-    wait_mode(master, "GUIDED")
-    print("GUIDED")
+    plane = heartbeat.type == mavutil.mavlink.MAV_TYPE_FIXED_WING
+    if not plane:
+        master.set_mode("GUIDED")                    # MAVProxy: mode guided
+        wait_mode(master, "GUIDED")
+        print("GUIDED")
 
     # MAVProxy: arm throttle. SITL may refuse until its EKF and GPS are happy, so retry for a while.
     for _ in range(30):
@@ -48,9 +53,12 @@ def main():
         raise SystemExit("arming refused (see STATUSTEXT in the GCS)")
     print("ARMED")
 
-    # MAVProxy: takeoff <alt> -> COMMAND_LONG NAV_TAKEOFF, param7 = altitude.
-    master.mav.command_long_send(master.target_system, master.target_component,
-                                 mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, args.alt)
+    if plane:
+        master.set_mode("TAKEOFF")                   # MAVProxy: mode takeoff
+    else:
+        # MAVProxy: takeoff <alt> -> COMMAND_LONG NAV_TAKEOFF, param7 = altitude.
+        master.mav.command_long_send(master.target_system, master.target_component,
+                                     mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, args.alt)
     end = time.time() + 60
     while time.time() < end:
         pos = master.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=1)

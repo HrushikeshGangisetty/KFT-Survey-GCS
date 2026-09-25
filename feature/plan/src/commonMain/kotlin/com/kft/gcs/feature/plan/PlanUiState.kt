@@ -20,6 +20,13 @@ data class PlanUiState(
     val canUpload: Boolean,
     val canRead: Boolean,
     val canClear: Boolean,
+    /**
+     * Non-null while the vehicle is armed: the screen asks for confirmation before uploading, with this text. Not a
+     * block: the operator may have a good reason (fixing a mission before the pilot switches to AUTO).
+     */
+    val uploadWarning: String?,
+    /** Clear always asks first. While armed the text says what it does to the mission being flown. */
+    val clearWarning: String,
     /** One line telling the operator what to do next. */
     val hint: String,
 )
@@ -48,6 +55,8 @@ internal fun buildPlanUiState(
     // While the mission runs, the item the vehicle is flying to is highlighted, on the Fly view too.
     val flying = vehicle.mission?.takeIf { !it.complete }?.current
     val home = vehicle.home?.position
+    // "AUTO", not "Auto": the warning names the mode the way the pilot's OSD and MAVProxy show it.
+    val armedIn = if (vehicle.connected && vehicle.armed) "Vehicle is ARMED in ${vehicle.flightMode?.uppercase() ?: "an unknown mode"}" else null
     val markers = items.mapIndexedNotNull { i, item ->
         val at = item.position ?: return@mapIndexedNotNull null
         val style = when {
@@ -68,6 +77,9 @@ internal fun buildPlanUiState(
         canUpload = !busy && vehicle.connected && items.isNotEmpty(),
         canRead = !busy && vehicle.connected,
         canClear = !busy && vehicle.connected,
+        uploadWarning = armedIn?.let { "$it: uploading replaces the mission it is flying." },
+        clearWarning = armedIn?.let { "$it: clearing deletes the mission it is flying." }
+            ?: "This deletes the mission on the vehicle and empties the editor.",
         hint = when {
             !vehicle.connected -> "No vehicle: plan now, connect on Links to upload."
             items.isEmpty() -> "Click the map to add waypoints."
