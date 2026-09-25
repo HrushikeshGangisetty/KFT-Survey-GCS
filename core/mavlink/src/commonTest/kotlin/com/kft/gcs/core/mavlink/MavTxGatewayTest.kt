@@ -54,6 +54,20 @@ class MavTxGatewayTest {
             .forEach { assertNull(verdict(it, worstCase), "$it should always be allowed") }
     }
 
+    /** S12: the KFT login must work in every pod and armed state, or a KFT flight controller ignores the GCS. */
+    @Test
+    fun kftLoginCommandsAreAlwaysAllowed() {
+        val worstCase = PodStatus(PodLockState.ENGAGE, aiEnableHigh = true)
+        for (cmd in listOf(MavCmd.USER_1, MavCmd.USER_2)) {
+            assertEquals(TxCategory.ALWAYS, TxPolicy.classify(command(cmd)).category, "$cmd")
+            assertNull(verdict(command(cmd), worstCase, armed = true), "$cmd as COMMAND_LONG")
+        }
+        assertEquals(31010u, MavCmd.USER_1.value, "numbers from common.xml, as ardupilotKFT uses them")
+        assertEquals(31011u, MavCmd.USER_2.value)
+        // Their neighbours stay unlisted: allowing USER_1/2 isn't "allow all user commands".
+        assertTrue(verdict(command(MavCmd.USER_3))!!.contains("allowlist"))
+    }
+
     @Test
     fun paramSetAllowedWithoutPod() {
         assertNull(verdict(ParamSet()))

@@ -7,6 +7,7 @@ import com.kft.gcs.core.mavlink.LinkStats
 import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.vehicle.KftLoginStatus
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -27,6 +28,7 @@ import kotlinx.coroutines.test.setMain
 private class FakeConnectionsRepository : ConnectionsRepository {
     override val profiles = MutableStateFlow(listOf(ConnectionProfile("p0", "SITL", LinkConfig.UdpListen(14550))))
     override val linkState = MutableStateFlow<LinkState>(LinkState.Disconnected)
+    override val login = MutableStateFlow<KftLoginStatus?>(null)
     val connected = mutableListOf<String>()
     var disconnects = 0
 
@@ -49,6 +51,30 @@ class ConnectionsViewModelTest {
     // viewModelScope runs on Dispatchers.Main, which doesn't exist in a unit test; point it at the test dispatcher.
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterTest fun tearDown() = Dispatchers.resetMain()
+
+    /** S12: the Links card says where the KFT login is, and flags the states the operator must fix. */
+    @Test
+    fun linkCardShowsTheKftLogin() = runTest(dispatcher) {
+        val vm = ConnectionsViewModel(repository)
+        vm.state.test {
+            repository.linkState.value = LinkState.Connected(udp, copter, LinkStats())
+            repository.login.value = KftLoginStatus.LOGGING_IN
+            runCurrent()
+            assertEquals("KFT login: in progress…", expectMostRecentItem().link.login)
+            repository.login.value = KftLoginStatus.NO_KEY
+            runCurrent()
+            val noKey = expectMostRecentItem().link
+            assertEquals("KFT login: no key configured", noKey.login)
+            assertTrue(noKey.loginWarning)
+            repository.login.value = KftLoginStatus.AUTHENTICATED
+            runCurrent()
+            assertFalse(expectMostRecentItem().link.loginWarning)
+            // No vehicle heard: no login line (it would describe a vehicle that isn't there).
+            repository.linkState.value = LinkState.Connected(udp, null, LinkStats())
+            runCurrent()
+            assertEquals(null, expectMostRecentItem().link.login)
+        }
+    }
 
     @Test
     fun stateFollowsTheLinkFromIdleToVehicleFound() = runTest(dispatcher) {

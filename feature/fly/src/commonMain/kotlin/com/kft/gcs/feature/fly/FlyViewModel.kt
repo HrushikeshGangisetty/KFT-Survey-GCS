@@ -73,6 +73,7 @@ class FlyViewModel(
     private fun build(v: VehicleState, l: Local) = FlyUiState(
         connected = v.connected,
         firmware = v.firmwareVersion?.let { "ArduPilot $it" },
+        login = v.login?.let { LoginUi(it.label, it.warning) },
         hud = hudItems(v),
         message = v.lastMessage?.let { MessageUi(it.text, it.severity) },
         overlays = listOfNotNull(

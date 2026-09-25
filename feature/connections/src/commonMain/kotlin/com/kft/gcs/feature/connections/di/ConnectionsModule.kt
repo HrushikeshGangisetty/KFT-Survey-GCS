@@ -1,5 +1,6 @@
 package com.kft.gcs.feature.connections.di
 
+import com.kft.gcs.core.vehicle.VehicleRepository
 import com.kft.gcs.feature.connections.ConnectionsRepository
 import com.kft.gcs.feature.connections.ConnectionsViewModel
 import com.kft.gcs.feature.connections.DefaultConnectionsRepository
@@ -11,6 +12,6 @@ import org.koin.dsl.module
  * provides the [com.kft.gcs.feature.connections.ProfileStore] (where the profile file lives is platform-specific).
  */
 val connectionsModule = module {
-    single<ConnectionsRepository> { DefaultConnectionsRepository(get(), get(), get()) }
+    single<ConnectionsRepository> { DefaultConnectionsRepository(get(), get(), get(), get<VehicleRepository>().state) }
     viewModelOf(::ConnectionsViewModel)
 }

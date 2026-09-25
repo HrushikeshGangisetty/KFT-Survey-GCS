@@ -6,6 +6,7 @@ import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.vehicle.KftLoginStatus
 import kotlin.math.roundToInt
 
 /** Everything the Connections screen draws. Built only by [buildUiState], so the screen never computes anything. */
@@ -20,8 +21,17 @@ data class ConnectionsUiState(
     val serialPorts: List<SerialPortInfo>,
 )
 
-/** The status card at the top. [tone] picks the colour; the screen decides which colour each tone is. */
-data class LinkStatusUi(val headline: String, val detail: String?, val tone: Tone)
+/**
+ * The status card at the top. [tone] picks the colour; the screen decides which colour each tone is.
+ * [login] is the KFT login line (spec S12) while a vehicle is heard; [loginWarning] = the operator must act.
+ */
+data class LinkStatusUi(
+    val headline: String,
+    val detail: String?,
+    val tone: Tone,
+    val login: String? = null,
+    val loginWarning: Boolean = false,
+)
 
 enum class Tone { IDLE, BUSY, OK, WARNING }
 
@@ -50,14 +60,23 @@ data class ProfileForm(
 }
 
 /** Pure: repository data in, screen state out. Tested directly, no ViewModel needed. */
-fun buildUiState(profiles: List<ConnectionProfile>, link: LinkState, form: ProfileForm, serialPorts: List<SerialPortInfo>): ConnectionsUiState {
+fun buildUiState(
+    profiles: List<ConnectionProfile>,
+    link: LinkState,
+    form: ProfileForm,
+    serialPorts: List<SerialPortInfo>,
+    login: KftLoginStatus?,
+): ConnectionsUiState {
     val activeConfig = when (link) {
         LinkState.Disconnected -> null
         is LinkState.Connecting -> link.config
         is LinkState.Connected -> link.config
     }
     return ConnectionsUiState(
-        link = link.toStatusUi(),
+        link = link.toStatusUi().let { ui ->
+            val vehicleHeard = (link as? LinkState.Connected)?.vehicle != null
+            if (vehicleHeard && login != null) ui.copy(login = login.label, loginWarning = login.warning) else ui
+        },
         profiles = profiles.map { ProfileRow(it.id, it.name, it.config.summary, isActive = it.config == activeConfig) },
         form = form,
         canDisconnect = activeConfig != null,

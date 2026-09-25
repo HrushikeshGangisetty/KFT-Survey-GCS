@@ -19,7 +19,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
@@ -34,12 +36,13 @@ class VehicleRepositoryTest {
     private val requests get() = fc.sentOf<RequestDataStream>()
 
     private fun TestScope.repository() =
-        VehicleRepository(backgroundScope, fc.frames, link, fc).also { runCurrent() }
+        // No KFT key: these tests are about the connect-time requests, which then go out at once (KftLoginTest covers the login).
+        VehicleRepository(backgroundScope, fc.frames, link, fc, loginKey = null, testScheduler.timeSource).also { runCurrent() }
 
     private fun frame(message: MavMessage<*>, componentId: UByte = 1u) = fc.emit(message, componentId = componentId)
 
     @Test
-    fun requestsStreamsOncePerVehicleAppearance() = runTest {
+    fun requestsStreamsOncePerSessionAndAfterALongGap() = runTest {
         repository()
         link.value = LinkState.Connected(udp, copter, LinkStats())
         runCurrent()
@@ -49,9 +52,18 @@ class VehicleRepositoryTest {
         assertEquals(MavDataStream.ALL.value, requests.single().reqStreamId.value)
         assertEquals(copter.systemId, requests.single().targetSystem)
 
-        // Heartbeat lost, then back (for example the autopilot rebooted): ask again.
+        // Heartbeat lost for 3 s, then back: a short dropout, the vehicle still has our stream rates. Don't ask again.
         link.value = LinkState.Connected(udp, null, LinkStats())
         runCurrent()
+        advanceTimeBy(3.seconds)
+        link.value = LinkState.Connected(udp, copter, LinkStats())
+        runCurrent()
+        assertEquals(1, requests.size)
+
+        // Lost for longer than RELOGIN_GAP (for example the autopilot rebooted): ask again.
+        link.value = LinkState.Connected(udp, null, LinkStats())
+        runCurrent()
+        advanceTimeBy(7.seconds)
         link.value = LinkState.Connected(udp, copter, LinkStats())
         runCurrent()
         assertEquals(2, requests.size)

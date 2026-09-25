@@ -2,6 +2,7 @@ package com.kft.gcs.core.mavlink
 
 import com.divpundir.mavlink.adapters.coroutines.CoroutinesMavConnection
 import com.divpundir.mavlink.api.MavMessage
+import com.divpundir.mavlink.definitions.common.CommandLong
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -71,7 +72,10 @@ class MavTxGateway internal constructor(
         }
         val connection = link ?: return TxResult.NotConnected
         return try {
-            connection.sendUnsignedV2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, message)
+            // COMMAND_LONG goes out bit-exact: the library's own encoder would rewrite NaN bit patterns.
+            // ponytail: only COMMAND_LONG; other float messages still use the library encoder. Extend if one ever carries bit patterns.
+            if (message is CommandLong) connection.sendUnsignedV2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, BitExactCommandLong(message))
+            else connection.sendUnsignedV2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, message)
             TxResult.Sent
         } catch (e: IOException) {
             TxResult.Failed(e)

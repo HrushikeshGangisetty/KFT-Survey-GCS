@@ -45,7 +45,7 @@ class FlyViewModelTest {
 
     /** A real VehicleRepository, driven by scripted link state and frames instead of a socket. */
     private fun TestScope.viewModel(): FlyViewModel {
-        val repo = VehicleRepository(backgroundScope, frames, link, SilentSender)
+        val repo = VehicleRepository(backgroundScope, frames, link, SilentSender, loginKey = null, testScheduler.timeSource)
         return FlyViewModel(repo, listOf(TileSources.Street, TileSources.Satellite)).also {
             link.value = LinkState.Connected(LinkConfig.UdpListen(), copter, LinkStats())
             runCurrent()
@@ -53,6 +53,16 @@ class FlyViewModelTest {
     }
 
     private fun position(p: LatLon) = check(frames.tryEmit(Frame(GlobalPositionInt(lat = p.latE7, lon = p.lonE7, hdg = 9000u))))
+
+    /** S12: the HUD shows the KFT login. This repository has no key, which is a warning the operator must fix. */
+    @Test
+    fun hudShowsTheKftLogin() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.state.test {
+            runCurrent()
+            assertEquals(LoginUi("KFT login: no key configured", warning = true), expectMostRecentItem().login)
+        }
+    }
 
     @Test
     fun firstPositionCentresTheCameraOnceThenLeavesItAlone() = runTest(dispatcher) {

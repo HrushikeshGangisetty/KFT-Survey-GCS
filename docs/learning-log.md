@@ -959,3 +959,163 @@ add/delete ──▶ _profiles ──encodeProfiles──▶ ProfileStore.write(
 - The Android profile store isn't checked on a device yet (same code as desktop, different folder). It's in the tablet checklist: add a profile, force-stop the app, reopen.
 - The Copter SITL starts from fresh parameters once (new per-vehicle folder).
 - **Next: Pass 12, KFT HMAC login.**
+
+---
+
+## Pass 12 — KFT HMAC login (2026-09-25)
+
+### What changed
+- **`docs/spec/01_survey_gcs_feature_spec.md`**: **S12** (KFT login: same fleet key and APP_ID as the Android GCS, key from `local.properties` `KFT_APP_SECRET`, never in git) and **GS-9** (the key is extractable, and one fleet key unlocks all drones; plus three firmware findings).
+- **`docs/decisions/ADR-003-kft-login.md`** (new): the design and why. There is no ADR-002 in this repo; the number is the one you asked for.
+- **`core/mavlink`**:
+  - `BitExactCommandLong.kt` (new): COMMAND_LONG serialized with raw float bits (the NaN bug, below).
+  - `MavTxGateway.kt`: sends every COMMAND_LONG through it.
+  - `TxPolicy.kt`: MAV_CMD_USER_1/USER_2 (31010/31011) are `ALWAYS`.
+- **`core/vehicle`**:
+  - `build.gradle.kts`:
+    - A `generateKftAppSecret` task writes `build/generated/kftAppSecret/…/KftAppSecret.kt` from `KFT_APP_SECRET` (local.properties, else the environment).
+    - A `jvmCommon` source set.
+  - `HmacSha256.kt` + `jvmCommonMain/HmacSha256.jvmCommon.kt` (new): `expect`/`actual` over `javax.crypto.Mac`.
+  - `KftLogin.kt` (new):
+    - `KftLoginStatus` (with the UI label), the `Kft` constants, and `parseKftKey`.
+    - `kftResponseParams` (the float packing) and `parseChallengeHalf`.
+    - `KftLogin.attempt()` (one handshake).
+  - `VehicleRepository.kt`:
+    - The connect-time sequence: login first, then the Pass 6 requests.
+    - Re-login after a 6 s heartbeat gap, a 2 s debounce, bounded FAILED retries, and a fresh login on every new link.
+    - The constructor takes `loginKey` and `timeSource`.
+  - `CommandProtocol.kt`: per-call `attempts` / `ackTimeout` (the login must never resend USER_1).
+  - `VehicleState.kt`: `login`. KFTCH texts stay out of the pilot's message strip.
+  - `MissionRepository.kt`: mission transfers wait for the login.
+  - `di/VehicleModule.kt`: `parseKftKey(KFT_APP_SECRET_HEX)`.
+- **`feature/fly`**: `LoginUi`, and a login line in the HUD under the firmware version.
+- **`feature/connections`**: `ConnectionsRepository.login`, and a login line on the Links card (warning colour for NO_KEY / DENIED / FAILED).
+- **Tests**:
+  - New: `BitExactCommandLongTest`, `KftCryptoTest`, `KftLoginTest` and `KftAndroidReferenceTest`.
+  - Updated: the gateway, VehicleRepository, MissionRepository, Fly and Connections tests, and `SitlCheck`.
+
+### How it works
+```
+build time:  local.properties KFT_APP_SECRET (or env) ─▶ generateKftAppSecret ─▶ build/generated/…/KftAppSecret.kt
+             not 64 hex / missing ─▶ ""                                            (git-ignored, never committed)
+start:       parseKftKey(KFT_APP_SECRET_HEX) ─▶ 32 bytes, or null (= NO_KEY)
+
+first vehicle heartbeat on a link (or a heartbeat after a gap > 6 s; at most one start per 2 s)
+  └─ session ─▶ login?  no key ─▶ NO_KEY ────────────────────────────────────────────────┐
+                        key    ─▶ KftLogin.attempt():                                     │
+       listen for STATUSTEXT from the FC (UNDISPATCHED: subscribed before sending)        │
+       USER_1(param1=1), one attempt, 3 s ─▶ ACCEPTED ─▶ wait ≤ 8 s for KFTCH1 + KFTCH2   │
+                                          ├ DENIED ─▶ DENIED  (no retry)                   │
+                                          └ UNSUPPORTED / other / no ACK ─▶ LEGACY_FIRMWARE│
+       HMAC-SHA256(key, 32-byte challenge)[0..24) ─▶ 6 × Float.fromBits(LE int)            │
+       USER_2(1, f1..f6) as COMMAND_LONG ─▶ gateway ─▶ BitExactCommandLong ─▶ wire          │
+         ACCEPTED ─▶ AUTHENTICATED · DENIED ─▶ DENIED · else ─▶ FAILED (retry 2/4/8 s, then stop)
+  allowsTraffic (AUTHENTICATED, LEGACY_FIRMWARE, NO_KEY) ─▶ REQUEST_DATA_STREAM, REQUEST_MESSAGE ×2, SET_MESSAGE_INTERVAL
+  VehicleState.login ─▶ Fly HUD line, Links card line, MissionRepository gate
+```
+
+### Engineering learnings
+- **The NaN bug was real.** mavlink-kotlin 1.2.15's `encodeFloat` calls `Float.floatToIntBits` (seen with `javap`), which turns *every* NaN into `0x7FC00000`. A random 4-byte chunk is a NaN pattern about 1 time in 256, so about 2.3% of logins (6 floats) would have been DENIED for no visible reason.
+  - I can't patch the library, so `BitExactCommandLong` implements `MavMessage` with COMMAND_LONG's id, CRC extra and byte layout, and writes `toRawBits()`.
+  - The gateway swaps it in for *every* COMMAND_LONG, so the fix sits where all callers already pass through, not in the login code.
+  - `libraryEncoderCanonicalisesNaN` pins the library behaviour. When a library update fixes it, that test fails and tells us to delete the workaround.
+- **`Float.fromBits`, not arithmetic.** The float is only a container for 4 bytes. `fromBits`/`toRawBits` don't look at the value, so the bits go in and come out unchanged.
+  - *Caveat:* the JVM spec allows `intBitsToFloat` to quiet signalling NaNs on some old CPUs (x87). x86-64 and ARM64 keep them, and the tests pass on this x86-64 JVM.
+  - The golden vector recorded on the Android tablet will be the real-device proof.
+- **javax.crypto over KotlinCrypto (ADR-003).** Both targets are JVMs, so the platform provider is already there and audited, and it adds no dependency to a security path. The `expect fun hmacSha256` is the one place an iOS `actual` would go if that target ever arrives.
+- **Guaranteed subscription instead of `delay(100)`.** `launch(start = UNDISPATCHED)` runs the collector up to its first suspension, which is *inside* `SharedFlow.collect` after it has registered. So the listener exists before USER_1 is sent, on any dispatcher and at any speed. A delay only makes that likely.
+- **StateFlows instead of polling.** `combine(half1, half2).filterNotNull().first()` resumes exactly when the second half lands, with no 100 ms loop. The flows are created fresh per attempt, so a half from an old challenge can't be mixed in.
+- **Never resend USER_1.** Each USER_1 makes the firmware draw a new challenge (`generate_challenge()`). A retry after a lost ACK could leave KFTCH1 from challenge A and KFTCH2 from challenge B. So the command protocol gained `attempts = 1` per call, and retries happen at the session level with a fresh listener.
+- **Two writers, atomic updates.** The login status is written from the session coroutine while the collector writes telemetry. All `VehicleState` writes are now `_state.update { }` (a compare-and-set loop), so neither can overwrite the other's change. A cancelled session checks `ensureActive()` before writing, so it can't overwrite the state after a disconnect.
+- **Firmware facts (S10)**, from `ardupilotKFT` `Copter-4.6.3-kftv7`:
+  - `handle_message` drops everything but HEARTBEAT and COMMAND_LONG/INT USER_1/USER_2 before login.
+  - USER_1 with an unknown app id answers DENIED. Otherwise it sends `KFTCH1:`/`KFTCH2:` as STATUSTEXT (queued, so they can arrive after the ACK) and answers ACCEPTED.
+  - USER_2 is intercepted in `handle_command_long` *before* ArduPilot converts COMMAND_LONG to COMMAND_INT (that would turn param5/6 into integers). USER_2 via COMMAND_INT is DENIED. The six params are `memcpy`d to 24 bytes and compared in constant time.
+  - A challenge is valid for 10 s. The login is dropped after **10 s** without *any* heartbeat (your breakdown said 5 s; the source says `KFT_HEARTBEAT_TIMEOUT_MS 10000`). The 6 s re-login is early, not late.
+  - Stock ArduPilot answers UNSUPPORTED to USER_1. Confirmed in SITL below.
+- **The old app's 500 ms wait after AUTHENTICATED is gone.** `verify_hmac` sets `authenticated = true` before the ACK is sent, so the next message is already accepted. The 50 ms wait before USER_2 is gone too (guaranteed subscription).
+
+**Ponytail review:** one fix. `parseChallengeHalf` compared the hex length with `CHALLENGE_BYTES`, which was right only because 16 bytes happen to be 32 hex characters. It now says what it means. Kept:
+- `BitExactCommandLong`: the correctness fix, with a test that tells us when it can go.
+- The per-call protocol parameters: the login needs them.
+- The status enum's `warning` flag: both screens use it.
+- All tests (§7).
+- Rejected alternative: KotlinCrypto would have been a new dependency for no gain on two JVM targets.
+
+### Safety
+- **Allowlist change:** `MAV_CMD_USER_1` (31010) and `MAV_CMD_USER_2` (31011) are `ALWAYS`, in every pod and armed state. They move nothing, and a KFT FC ignores the GCS until they succeed. USER_3 and the rest stay unlisted. Test: `MavTxGatewayTest.kftLoginCommandsAreAlwaysAllowed`.
+- **Encoding change:** every COMMAND_LONG now leaves bit-exact (`BitExactCommandLong`). For non-NaN values the bytes are identical to before (`sameBytesAsTheLibraryForOrdinaryValues`). The only difference is that NaN parameters keep their payload.
+- **Order of transmissions:** on a new vehicle the GCS now sends only the login until it resolves. The Pass 6 requests (REQUEST_DATA_STREAM, REQUEST_MESSAGE, SET_MESSAGE_INTERVAL) follow AUTHENTICATED / LEGACY_FIRMWARE / NO_KEY. After DENIED or FAILED nothing more is sent, and mission transfers are refused with the login status as the reason.
+- **Key handling:**
+  - Never logged, never in a `toString`. `KftLogin` keeps it private, and the status enum carries labels only.
+  - Never committed: the generated file is under `build/`, and `git grep` over the staged tree found no key bytes.
+  - The test key I used for the UI check was random, never the fleet key, and was removed again by a rebuild without it.
+  - I did **not** add your key to `local.properties`. There's no `KFT_APP_SECRET` there yet, so the app shows "KFT login: no key configured" until you add it.
+- **Firmware findings (GS-9), yours to take to the firmware side:**
+  - `ardupilotKFT/libraries/GCS_MAVLink/KFT_GCSAuth.h` contains both app keys in plain text, committed to that repo. I read past them and copied them nowhere.
+  - The login is global: once any GCS authenticates, every link to that FC is unlocked (MAVProxy on another port included).
+  - `note_heartbeat()` counts heartbeats from any sender, so any heartbeat source keeps the unlock alive.
+
+### What to look at
+1. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/KftLogin.kt:116`: `attempt()`, the handshake, and `:73` for the float packing.
+2. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/VehicleRepository.kt:118`: when a session starts (gap, debounce), and `:144` for the bounded retries.
+3. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/BitExactCommandLong.kt:26` and `MavTxGateway.kt:76`: the NaN fix.
+
+### Tests
+- `KftCryptoTest` (4, common):
+  - RFC 4231 cases 1–7, also checked with Python's `hmac` while writing them.
+  - The key must be 64 hex characters (31/33 bytes and non-hex are rejected; whitespace is trimmed).
+  - Challenge halves in the firmware's exact format.
+  - The packing, byte by byte against the MAC.
+- `KftAndroidReferenceTest` (desktop JVM):
+  - 2000 seeded random (key, challenge) pairs, ours against javax + `ByteBuffer.order(LITTLE_ENDIAN).getFloat()` (the Android way), compared as raw bits. The test asserts it actually met NaN patterns (it expects about 47).
+  - **`goldenVectorFromTheAndroidApp`: @Ignore placeholder.** Fill in the challenge hex and the six floats' raw bits from one real Android login. The pair is safe to commit, and the test takes the key from your `KFT_APP_SECRET`.
+- `BitExactCommandLongTest` (3, common):
+  - The library canonicalises NaN (pinned).
+  - Our bytes equal the library's for ordinary values, v1 and v2 truncation.
+  - **The test you asked for:** a COMMAND_LONG with 0x7FA12345 / 0x7FC00001 / 0xFFFFFFFF / +inf / 1.0 / denormal goes through the gateway and a real mavlink-kotlin frame encoder. The frame bytes hold exactly those patterns, and decoding gives them back.
+- `KftLoginTest` (11, common, fake ardupilotKFT, virtual time):
+  - Accepted: USER_1, then USER_2, then streams, in that order, with APP_ID 1.
+  - Wrong key → DENIED, one attempt, nothing else sent.
+  - Unknown app id → DENIED.
+  - **Missing KFTCH2** → FAILED at exactly 8 s, then 4 attempts in total and nothing more after 10 minutes.
+  - UNSUPPORTED → LEGACY_FIRMWARE with streams requested, and USER_1 is never resent.
+  - No ACK → LEGACY at exactly 3 s.
+  - No key → NO_KEY with no USER_1, and streams still requested.
+  - **Heartbeat gap:** 5 s → no re-login; 7 s → re-login and streams again.
+  - A vehicle reappearing after 9 s → exactly one re-login.
+  - A new link → a new login.
+  - A forged KFTCH1 from another component is ignored, and KFTCH never reaches the message strip.
+- Also: `MavTxGatewayTest.kftLoginCommandsAreAlwaysAllowed`, `MissionRepositoryTest.missionTransfersWaitForTheKftLogin`, `VehicleRepositoryTest` (a 3 s dropout doesn't re-request, a 7 s one does), `FlyViewModelTest.hudShowsTheKftLogin`, and `ConnectionsViewModelTest.linkCardShowsTheKftLogin`.
+- **Build without a key (CI):** `./gradlew check` and `:app:android:assembleDebug` pass, and the generated constant is `""`.
+  - With `KFT_APP_SECRET=<random 64 hex>` the constant holds it.
+  - With `KFT_APP_SECRET=not-hex` it's `""`.
+  - `git check-ignore` confirms the generated file is ignored.
+- **Stock SITL, the LEGACY path (ArduCopter 4.8.0-dev):**
+  - `KFT_SITL=127.0.0.1:5762 gradlew :core:vehicle:jvmTest --tests '*SitlCheck*'` → "SITL: ArduPilot 4.8.0-dev, home … 584.09, KFT login: not needed (firmware without KFT login)".
+  - Then the full mission upload (1/6…6/6), read-back comparison and clear passed. That's two of two tests, with the login attempted using a dummy key.
+- **Desktop UI, same SITL, with a random test key compiled in:**
+  - Links card: "ArduCopter · system 1 · disarmed / 113 msg/s · 0.0% loss / KFT login: not needed (firmware without KFT login)".
+  - Fly HUD: "ArduPilot 4.8.0-dev", then "KFT login: not needed (firmware without KFT login)", and telemetry flowing (the Pass 6 requests went out after the login).
+
+### Your checklist: first real login
+1. Add `KFT_APP_SECRET=<the Android GCS's 64 hex characters>` to `local.properties`. It's git-ignored, and the name matches the Android project.
+2. `gradlew.bat :app:desktop:run`, then connect to a KFT flight controller over USB/serial. Expect Links → "KFT login: in progress…" → "KFT login: OK", then telemetry, and ArduPilot's own "KFT: KFT_GCS_Android authenticated" in the message strip.
+3. Plan → Upload should work. Before this pass, a KFT FC dropped it.
+4. Pull the cable for more than 6 s, then plug it back in. Expect "in progress…" → "OK" again.
+5. Record the golden vector (see the test's KDoc) from the Android app, and send it to me.
+
+### Is SITL built from your KFTV7 fork practical for a real end-to-end check?
+**Possible, but not cheap. A bench flight controller over USB is the faster real check.** Reasons, from the fork:
+- **The POST reads flash at a hardware address.** `KFT_GCSAuth::verify_firmware_post()` hashes memory at `KFT_APP_BASE`, and there's no SITL guard in `KFT_GCSAuth.cpp`. It runs on a successful login (`send_post_status()`) and in the Copter arming checks (`AP_Arming.cpp:50`). In SITL that address isn't a flash image, so expect a crash or a permanent "POST: FAILED" at the moment of login.
+  - The fork needs a small SITL-only change (`#if CONFIG_HAL_BOARD == HAL_BOARD_SITL`: skip POST, report "SITL"). That's a firmware change your certification note says needs care ("DO NOT modify without recertification"). A SITL-only `#if` doesn't change the flight binary, but that's your call.
+- **The toolchain:** ArduPilot SITL builds on Linux (waf). This machine has an "Ubuntu" app entry, but the WSL service isn't installed (`Wsl/ERROR_SERVICE_DOES_NOT_EXIST`), so it's WSL2 setup + `Tools/environment_install/install-prereqs-ubuntu.sh` + `./waf configure --board sitl && ./waf copter`. That's about an hour, once.
+- **What it would buy:** the handshake code (`GCS_Common.cpp`, the `KFT_GCSAuth.cpp` HMAC) is portable C++ and would run unchanged in SITL. A KFTV7 SITL would be a repeatable CI-able end-to-end test of exactly this pass.
+- **Suggestion:** do step 2 above on a bench FC first; it needs nothing new. Set up the KFTV7 SITL later, if you want the login in automated tests.
+
+### Open questions / next
+- The golden vector (placeholder test, waiting on you).
+- The Android device's float path (ARM64) is covered only by the golden vector check on the tablet.
+- `ponytail:` other float-carrying messages (for example PARAM_SET of a NaN) still go through the library encoder. Only COMMAND_LONG needed raw bits. Extend `BitExact…` if another message ever carries bit patterns.
+- GS-9 and the firmware findings above.
+- **Next: Pass 13, the survey maths.**

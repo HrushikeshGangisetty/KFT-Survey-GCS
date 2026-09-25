@@ -5,7 +5,12 @@ import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.SerialPorts
+import com.kft.gcs.core.vehicle.KftLoginStatus
+import com.kft.gcs.core.vehicle.VehicleState
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -22,6 +27,9 @@ data class ConnectionProfile(val id: String, val name: String, val config: LinkC
 interface ConnectionsRepository {
     val profiles: StateFlow<List<ConnectionProfile>>
     val linkState: StateFlow<LinkState>
+
+    /** The KFT login for the vehicle on the link (spec S12), null while none is heard. */
+    val login: Flow<KftLoginStatus?>
     fun addProfile(name: String, config: LinkConfig)
     fun deleteProfile(id: String)
     fun connect(profileId: String)
@@ -42,12 +50,13 @@ interface ProfileStore {
 
 /**
  * Profiles saved through [store] and reloaded at startup, link delegated to the app-wide [ConnectionManager],
- * ports listed by [SerialPorts].
+ * ports listed by [SerialPorts], login status read from the vehicle state.
  */
 class DefaultConnectionsRepository(
     private val manager: ConnectionManager,
     private val ports: SerialPorts,
     private val store: ProfileStore,
+    vehicle: StateFlow<VehicleState>,
 ) : ConnectionsRepository {
 
     // Ids only tell rows apart while the app runs, so they're handed out fresh on every start and never saved.
@@ -57,6 +66,7 @@ class DefaultConnectionsRepository(
     )
     override val profiles: StateFlow<List<ConnectionProfile>> = _profiles.asStateFlow()
     override val linkState: StateFlow<LinkState> = manager.state
+    override val login: Flow<KftLoginStatus?> = vehicle.map { it.login }.distinctUntilChanged()
 
     override fun addProfile(name: String, config: LinkConfig) = save { it + profile(name, config) }
 

@@ -36,6 +36,19 @@ class MissionRepositoryTest {
         assertTrue(fc.sent.isEmpty(), "without home there is no valid seq 0, so nothing is sent (S11)")
     }
 
+    /** S12: mission traffic waits for the KFT login; a KFT flight controller would drop it anyway. */
+    @Test
+    fun missionTransfersWaitForTheKftLogin() = runTest {
+        link.value = LinkState.Connected(LinkConfig.UdpListen(), VehicleInfo(7u, 1u, VehicleKind.COPTER, false, 0u), LinkStats())
+        val home = Home(LatLon(-35.363261, 149.165230), 584.0)
+        for (status in listOf(KftLoginStatus.LOGGING_IN, KftLoginStatus.DENIED, KftLoginStatus.FAILED)) {
+            vehicle.value = VehicleState(home = home, login = status)
+            assertContains(repo.upload(listOf(waypoint)).exceptionOrNull()!!.message!!, "wait for the login")
+            assertTrue(repo.clear().isFailure)
+        }
+        assertTrue(fc.sent.isEmpty(), "nothing is sent before the login allows it")
+    }
+
     @Test
     fun uploadIsAddressedToTheLinkedVehicleWithHomeFirst() = runTest {
         link.value = LinkState.Connected(LinkConfig.UdpListen(), VehicleInfo(7u, 1u, VehicleKind.COPTER, false, 0u), LinkStats())

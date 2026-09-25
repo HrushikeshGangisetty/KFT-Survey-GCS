@@ -129,6 +129,13 @@ private fun LinkStatusCard(link: LinkStatusUi, canDisconnect: Boolean, onDisconn
             Column(Modifier.weight(1f)) {
                 Text(link.headline, style = MaterialTheme.typography.titleMedium, color = accent)
                 link.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                link.login?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (link.loginWarning) MaterialTheme.colorScheme.secondary else Color.Unspecified,
+                    )
+                }
             }
             if (canDisconnect) OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
         }

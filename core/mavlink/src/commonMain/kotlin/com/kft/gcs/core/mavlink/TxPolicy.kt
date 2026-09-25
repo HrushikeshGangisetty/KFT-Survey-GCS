@@ -136,6 +136,12 @@ internal object TxPolicy {
         MavCmd.SET_MESSAGE_INTERVAL.value -> always("MAV_CMD_SET_MESSAGE_INTERVAL")
         MavCmd.REQUEST_MESSAGE.value -> always("MAV_CMD_REQUEST_MESSAGE")
         MavCmd.REQUEST_AUTOPILOT_CAPABILITIES.value -> always("MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES")
+        // KFT login (spec S12). common.xml defines USER_1/USER_2 (31010/31011) as free for private use; ardupilotKFT
+        // uses them as the HMAC challenge request and response, and before login drops every message except
+        // HEARTBEAT and these two (GCS_Common.cpp handle_message). ALWAYS: they move nothing, and the GCS must be
+        // able to log in whatever the pod reports. Stock ArduPilot answers UNSUPPORTED.
+        MavCmd.USER_1.value -> always("MAV_CMD_USER_1 (KFT login challenge request)")
+        MavCmd.USER_2.value -> always("MAV_CMD_USER_2 (KFT login response)")
 
         // S9: everything that arms, moves the aircraft or changes its mode is the pilot's. DO_SET_MODE is here
         // whatever mode it names (GUIDED, RTL, LAND…). MISSION_START switches ArduPilot to AUTO, and

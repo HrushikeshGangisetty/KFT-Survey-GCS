@@ -51,6 +51,13 @@ fun FlyScreen(
                 Text("No vehicle", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall)
             }
             state.firmware?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f)) }
+            state.login?.let {
+                Text(
+                    it.text,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (it.warning) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.7f),
+                )
+            }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 state.hud.forEach { item ->
                     Column {

@@ -8,6 +8,7 @@ import kotlin.test.Test
 import com.kft.gcs.core.geo.LatLon
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,7 +34,10 @@ class SitlCheck {
         val (host, port) = target?.split(":") ?: return println("KFT_SITL not set: SITL check skipped")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), SerialPorts())
-        val vehicles = VehicleRepository(scope, manager.frames, manager.state, manager.gateway)
+        // Always attempt the KFT login: with no key configured, a dummy one. Stock SITL answers UNSUPPORTED whatever the
+        // key (LEGACY_FIRMWARE); a KFT SITL would say DENIED to the dummy, which is the honest answer.
+        val key = parseKftKey(KFT_APP_SECRET_HEX) ?: ByteArray(Kft.KEY_BYTES)
+        val vehicles = VehicleRepository(scope, manager.frames, manager.state, manager.gateway, key)
         val missions = DefaultMissionRepository(manager.frames, manager.state, vehicles.state, manager.gateway)
         try {
             runBlocking {
@@ -48,11 +52,13 @@ class SitlCheck {
         }
     }
 
+    /** Pass 12: the login runs first, and on stock ArduPilot it ends LEGACY_FIRMWARE, after which the Pass 6 requests work. */
     @Test
     fun startupRequestsBringVersionAndHome() = withSitl { _, vehicles, _ ->
         val state = vehicles.state.value
-        println("SITL: ArduPilot ${state.firmwareVersion}, home ${state.home}")
+        println("SITL: ArduPilot ${state.firmwareVersion}, home ${state.home}, ${state.login?.label}")
         assertNotNull(state.home)
+        assertTrue(state.login == KftLoginStatus.LEGACY_FIRMWARE || state.login == KftLoginStatus.AUTHENTICATED, "${state.login}")
     }
 
     /** Pass 7 acceptance: upload, read back, compare; then clear and read back again. */

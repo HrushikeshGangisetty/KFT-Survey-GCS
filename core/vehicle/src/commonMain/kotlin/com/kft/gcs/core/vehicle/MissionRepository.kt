@@ -51,7 +51,16 @@ class DefaultMissionRepository(
         return protocol.clear(target)
     }
 
-    private fun target() = (link.value as? LinkState.Connected)?.vehicle?.let { MissionProtocol.Target(it.systemId, it.componentId) }
+    /**
+     * The vehicle to talk to, or null. Mission traffic waits for the KFT login (spec S12): a KFT flight controller
+     * drops it until the login succeeds, so starting early would only end in "no answer".
+     */
+    private fun target() = (link.value as? LinkState.Connected)?.vehicle
+        ?.takeIf { vehicle.value.login?.allowsTraffic != false }
+        ?.let { MissionProtocol.Target(it.systemId, it.componentId) }
 
-    private fun <T> noVehicle() = Result.failure<T>(MissionTransferException("No vehicle connected."))
+    private fun <T> noVehicle(): Result<T> {
+        val login = vehicle.value.login?.takeIf { !it.allowsTraffic && link.value is LinkState.Connected }
+        return Result.failure(MissionTransferException(login?.let { "${it.label}. Mission transfers wait for the login." } ?: "No vehicle connected."))
+    }
 }

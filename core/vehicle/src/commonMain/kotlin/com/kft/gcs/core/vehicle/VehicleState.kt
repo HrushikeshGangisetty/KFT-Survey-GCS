@@ -52,6 +52,8 @@ data class VehicleState(
     val firmwareVersion: String? = null,
     /** Where the vehicle is in its mission. Null until the first MISSION_CURRENT. */
     val mission: MissionProgress? = null,
+    /** The KFT login (spec S12) for this link. Null until a vehicle is heard. */
+    val login: KftLoginStatus? = null,
 )
 
 /**
@@ -96,7 +98,10 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
         batteryVolts = if (message.voltageBattery == UINT16_UNKNOWN) null else message.voltageBattery.toInt() / 1000.0, // mV -> V
         batteryPercent = message.batteryRemaining.toInt().takeIf { it >= 0 },  // -1 = not estimated
     )
-    is Statustext -> copy(lastMessage = StatusMessage(message.text.trimEnd('\u0000'), severityOf(message.severity.value)))
+    // KFTCH1:/KFTCH2: are the KFT login challenge (KftLogin reads them); they're protocol, not a message for the pilot.
+    is Statustext -> message.text.trimEnd('\u0000').let { text ->
+        if (text.startsWith("KFTCH")) this else copy(lastMessage = StatusMessage(text, severityOf(message.severity.value)))
+    }
     // HOME_POSITION (common.xml). ArduPilot sends it only once home is set, on request, and on every change (for
     // Copter, arming moves home to where it armed), plus at the interval VehicleRepository asks for.
     is HomePosition -> copy(home = Home(LatLon.fromE7(message.latitude, message.longitude), message.altitude / 1000.0)) // mm -> m

@@ -18,6 +18,8 @@ data class FlyUiState(
     val connected: Boolean,
     /** e.g. "ArduPilot 4.6.3", once AUTOPILOT_VERSION has arrived. */
     val firmware: String?,
+    /** "KFT login: OK" etc. (spec S12), null while no vehicle is heard. [login] warning = the operator must act. */
+    val login: LoginUi?,
     /** The HUD strip: "Mode Loiter", "Alt 12.3 m", … Always the same items in the same order, so nothing jumps. */
     val hud: List<HudItem>,
     val message: MessageUi?,
@@ -32,6 +34,8 @@ data class FlyUiState(
 data class HudItem(val label: String, val value: String, val warning: Boolean = false)
 
 data class MessageUi(val text: String, val severity: Severity)
+
+data class LoginUi(val text: String, val warning: Boolean)
 
 /** The strings for the HUD strip. A dash means "not reported", never a fake zero. */
 fun hudItems(v: VehicleState): List<HudItem> = listOf(

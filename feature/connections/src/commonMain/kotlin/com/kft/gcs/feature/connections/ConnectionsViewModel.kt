@@ -36,12 +36,12 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
     private val serialPorts = MutableStateFlow(repository.serialPorts())
 
     val state: StateFlow<ConnectionsUiState> =
-        combine(repository.profiles, repository.linkState, form, serialPorts, ::buildUiState)
+        combine(repository.profiles, repository.linkState, form, serialPorts, repository.login, ::buildUiState)
             // WhileSubscribed(5 s): keep going through a rotation or a quick tab switch, stop if the screen is gone.
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5_000),
-                buildUiState(emptyList(), LinkState.Disconnected, ProfileForm(), serialPorts.value),
+                buildUiState(emptyList(), LinkState.Disconnected, ProfileForm(), serialPorts.value, login = null),
             )
 
     private val _effects = Channel<ConnectionsEffect>(Channel.BUFFERED)

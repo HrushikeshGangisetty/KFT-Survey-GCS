@@ -9,6 +9,7 @@ import com.divpundir.mavlink.definitions.common.MavResult
 import com.kft.gcs.core.mavlink.MavSender
 import com.kft.gcs.core.mavlink.MavTxGateway
 import com.kft.gcs.core.mavlink.TxResult
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.channels.Channel
@@ -61,20 +62,25 @@ internal class CommandProtocol(
     /**
      * Sends [command] and waits for its result. Retries carry an incremented `confirmation` field, which is how
      * MAVLink tells the vehicle "this is a resend of the same command", not a new one.
+     *
+     * [attempts] = 1 for commands that must not be repeated: the KFT login's challenge request makes the firmware
+     * draw a new challenge every time, so a resend would race two challenges.
      */
-    suspend fun send(command: CommandLong): CommandResult =
-        exchange(command.command.value, command.targetSystem, command.targetComponent) { attempt ->
+    suspend fun send(command: CommandLong, attempts: Int = ATTEMPTS, ackTimeout: Duration = ACK_TIMEOUT): CommandResult =
+        exchange(command.command.value, command.targetSystem, command.targetComponent, attempts, ackTimeout) { attempt ->
             command.copy(confirmation = attempt.toUByte())
         }
 
     /** Sends [command] and waits for its result. COMMAND_INT has no `confirmation` field, so resends are identical. */
     suspend fun send(command: CommandInt): CommandResult =
-        exchange(command.command.value, command.targetSystem, command.targetComponent) { command }
+        exchange(command.command.value, command.targetSystem, command.targetComponent, ATTEMPTS, ACK_TIMEOUT) { command }
 
     private suspend fun <T : MavMessage<T>> exchange(
         commandId: UInt,
         targetSystem: UByte,
         targetComponent: UByte,
+        attempts: Int,
+        ackTimeout: Duration,
         build: (attempt: Int) -> T,
     ): CommandResult = mutex.withLock {
         coroutineScope {
@@ -92,19 +98,24 @@ internal class CommandProtocol(
                 }
             }
             try {
-                awaitResult(acks, build)
+                awaitResult(acks, attempts, ackTimeout, build)
             } finally {
                 listener.cancel()
             }
         }
     }
 
-    private suspend fun <T : MavMessage<T>> awaitResult(acks: ReceiveChannel<CommandAck>, build: (Int) -> T): CommandResult {
-        for (attempt in 0 until ATTEMPTS) {
+    private suspend fun <T : MavMessage<T>> awaitResult(
+        acks: ReceiveChannel<CommandAck>,
+        attempts: Int,
+        ackTimeout: Duration,
+        build: (Int) -> T,
+    ): CommandResult {
+        for (attempt in 0 until attempts) {
             val tx = sender.send(build(attempt))
             if (tx != TxResult.Sent) return CommandResult.NotSent(tx)
             // A late ACK to an earlier attempt also counts: it's the same command.
-            var ack = withTimeoutOrNull(ACK_TIMEOUT) { acks.receive() } ?: continue
+            var ack = withTimeoutOrNull(ackTimeout) { acks.receive() } ?: continue
             // IN_PROGRESS means the vehicle has the command and is working on it. Resending could restart it, so
             // stop retrying and wait (longer) for the ACK that carries the final result.
             while (ack.result.value == MavResult.IN_PROGRESS.value) {
