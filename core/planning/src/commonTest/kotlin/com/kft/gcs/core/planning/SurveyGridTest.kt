@@ -17,6 +17,7 @@ class SurveyGridTest {
 
     private fun m(x: Double, y: Double) = LatLon(y / metresPerDegree, x / metresPerDegree)
     private fun LatLon.xy() = Pair(longitude * metresPerDegree, latitude * metresPerDegree)
+    private fun Double.round3() = kotlin.math.round(this * 1000) / 1000
     private fun assertAt(x: Double, y: Double, p: LatLon, what: String) {
         val (px, py) = p.xy()
         assertEquals(x, px, 1e-3, "$what x")
@@ -161,19 +162,78 @@ class SurveyGridTest {
     }
 
     /**
-     * Plane, turn radius 50 m, lead-in 30 m, lead-out 20 m. Each pass is 30 + 200 + 20 = 250 m. Lines are 45 m apart,
-     * less than 2r = 100 m, so every turn is a bulb turn: cos γ = (45 + 100) / 200 = 0.725, γ = 0.75953 rad,
-     * length 50 × (π + 4 × 0.75953) = 309.032 m. The next line's entry is 10 m further on than this line's exit
-     * (lead-in 30 vs lead-out 20), so each leg is 319.032 m. Distance 7 × 250 + 6 × 319.032 = 3664.19 m.
+     * THE Plane example (Pass 14), turn radius 50 m, lead-in 30 m, lead-out 20 m, on the 300 × 200 m worked example.
+     *
+     * Lines are 45 m apart, less than 2r = 100 m, so flying them side by side would need a loop at every turn (Pass
+     * 13: 3664.19 m). Every other line isn't enough either: 90 m < 100 m. So the grid skips k = ⌈100 / 45⌉ = ⌈2.22⌉
+     * = 3 lines. Nearest-first from line 0 (x = 15 m), never closer than 3 lines:
+     *   0 → 3 (the nearest ≥ 3 away) → 6 (0 is used) → 2 (from 6: 3 used, 2 nearest) → 5 → 1 → 4.
+     * Jumps: 3, 3, 4, 3, 4, 3 lines = 135, 135, 180, 135, 180, 135 m, all ≥ 100 m, so every turn is a U-turn:
+     *   π × 50 + (lateral − 100) = 157.0796 + 35 = 192.0796 m (135 m), 157.0796 + 80 = 237.0796 m (180 m).
+     * Plus 10 m along the line each time (lead-in 30 vs lead-out 20). Legs: 4 × 202.0796 + 2 × 247.0796.
+     * Distance: 7 passes × (30 + 200 + 20) = 1750, plus 808.3185 + 494.1593 = 1302.4778 → 3052.4778 m.
      */
     @Test
-    fun planeLeadInLeadOutAndTurns() {
+    fun planeFliesEveryThirdLineSoNoTurnNeedsALoop() {
         val (spec, g) = grid(rectangle, 0.0, 45.0, turn = Turnaround.Plane(turnRadiusM = 50.0, leadInM = 30.0, leadOutM = 20.0))
-        assertAt(15.0, -30.0, g.passes[0].entry, "lead-in before the area")
-        assertAt(15.0, 220.0, g.passes[0].exit, "lead-out after it")
-        assertAt(60.0, 230.0, g.passes[1].entry, "southbound line: lead-in north of the area")
-        g.connectorsM.forEach { assertEquals(319.032, it, 1e-3) }
-        assertEquals(3664.19, surveyStats(spec, g, 20.0, 20.0).distanceM, 0.01)
+        assertEquals(3, g.lineSkip)
+        assertEquals(0, g.loopTurns, "no bulb turns")
+        val xs = listOf(15.0, 150.0, 285.0, 105.0, 240.0, 60.0, 195.0) // lines 0, 3, 6, 2, 5, 1, 4
+        g.passes.forEachIndexed { i, p ->
+            val northbound = i % 2 == 0 // directions still alternate pass by pass
+            assertAt(xs[i], if (northbound) -30.0 else 230.0, p.entry, "pass $i lead-in")
+            assertAt(xs[i], if (northbound) 220.0 else -20.0, p.exit, "pass $i lead-out")
+        }
+        listOf(202.0796, 202.0796, 247.0796, 202.0796, 247.0796, 202.0796)
+            .zip(g.connectorsM).forEach { (want, got) -> assertEquals(want, got, 1e-3) }
+        assertEquals(3052.4778, surveyStats(spec, g, 20.0, 20.0).distanceM, 1e-3)
+    }
+
+    /**
+     * Turn radius 40 m: 2r = 80 m, and every other line (90 m) is enough, k = ⌈80 / 45⌉ = 2. Nearest-first:
+     * 0 → 2 → 4 → 6 → 3 (from 6: 5 is a neighbour, 3 is the nearest allowed) → 1 (tie with 5: the lower first) → 5.
+     */
+    @Test
+    fun planeFliesEveryOtherLineWhenThatIsEnough() {
+        val (_, g) = grid(rectangle, 0.0, 45.0, turn = Turnaround.Plane(turnRadiusM = 40.0, leadInM = 0.0, leadOutM = 0.0))
+        assertEquals(2, g.lineSkip)
+        assertEquals(0, g.loopTurns)
+        assertEquals(listOf(15.0, 105.0, 195.0, 285.0, 150.0, 60.0, 240.0), g.passes.map { it.photoStart.xy().first.round3() })
+    }
+
+    /** Lines at least 2r apart need no reordering: 45 m spacing, r = 20 m. */
+    @Test
+    fun planeWithWideSpacingFliesLinesInOrder() {
+        val (_, g) = grid(rectangle, 0.0, 45.0, turn = Turnaround.Plane(turnRadiusM = 20.0, leadInM = 0.0, leadOutM = 0.0))
+        assertEquals(1, g.lineSkip)
+        assertEquals((0..6).map { 15.0 + 45 * it }, g.passes.map { it.photoStart.xy().first.round3() })
+    }
+
+    /** Three lines can't avoid a neighbour (any order of 0, 1, 2 has 1 next to something): flown in order, loops counted. */
+    @Test
+    fun tooFewLinesToSkipKeepsTheLoopsAndCountsThem() {
+        val narrow = listOf(m(0.0, 0.0), m(120.0, 0.0), m(120.0, 200.0), m(0.0, 200.0)) // ⌈120 / 45⌉ = 3 lines
+        val (_, g) = grid(narrow, 0.0, 45.0, turn = Turnaround.Plane(turnRadiusM = 50.0, leadInM = 0.0, leadOutM = 0.0))
+        assertEquals(1, g.lineSkip)
+        assertEquals(2, g.loopTurns)
+    }
+
+    /**
+     * The order search, over many sizes: whenever it answers, the answer starts at line 0, uses every line once and
+     * never jumps fewer than `skip` lines. From 2·skip + 1 lines on it always finds one. (With exactly 2·skip lines
+     * it can't: lines skip−1 and skip each have only one allowed partner, so the path must start at one of them.)
+     */
+    @Test
+    fun planeLineOrderIsAlwaysValid() {
+        for (skip in 2..6) for (n in 1..80) {
+            val order = planeLineOrder(n, skip)
+            if (n >= 2 * skip + 1) assertTrue(order != null, "n=$n skip=$skip should have an order")
+            if (order == null) continue
+            assertEquals(0, order.first())
+            assertEquals((0 until n).toList(), order.sorted(), "n=$n skip=$skip visits every line once")
+            order.zipWithNext().forEach { (a, b) -> assertTrue(kotlin.math.abs(a - b) >= skip, "n=$n skip=$skip: $a → $b") }
+        }
+        assertEquals(null, planeLineOrder(4, 2), "n = 2·skip: impossible from line 0")
     }
 
     /**

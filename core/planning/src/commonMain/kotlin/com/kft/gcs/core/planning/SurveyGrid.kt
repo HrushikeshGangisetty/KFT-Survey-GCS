@@ -76,8 +76,18 @@ data class Pass(
 /**
  * The flight lines, in the order they're flown. [connectorsM] holds the length of each leg from one pass's exit to
  * the next pass's entry (so it has one element fewer than [passes]).
+ *
+ * [lineSkip] is 1 when the lines are flown side by side. A plane whose lines are closer than twice its turn radius
+ * flies every [lineSkip]-th line instead ([planeLineOrder]). [loopTurns] counts the plane turns that are still
+ * closer than 2r and so need a loop ("bulb" turn); 0 for a copter.
  */
-data class SurveyGrid(val passes: List<Pass>, val lineCount: Int, val connectorsM: List<Double>)
+data class SurveyGrid(
+    val passes: List<Pass>,
+    val lineCount: Int,
+    val connectorsM: List<Double>,
+    val lineSkip: Int = 1,
+    val loopTurns: Int = 0,
+)
 
 data class SurveyStats(
     val areaM2: Double,
@@ -102,7 +112,8 @@ internal const val MAX_LINES = 1000
  *    the edges are covered. A strip narrower than one spacing gets a single line down the middle.
  * 4. Clip each line to the polygon (scan-line crossings, sorted and paired), giving one or more inside segments.
  *    Unlike QGC (which joins the outermost crossings), a line over a concave notch gets separate passes.
- * 5. Order them by the entry corner, alternating direction line by line (boustrophedon).
+ * 5. Order them by the entry corner, alternating direction line by line (boustrophedon). A plane whose lines are
+ *    closer than 2 × its turn radius flies them out of order instead, so that no turn needs a loop ([planeLineOrder]).
  * 6. Add the run-in/run-out and measure the legs between passes with the Copter or Plane turn model.
  *
  * @throws IllegalArgumentException for fewer than 3 corners, a zero-area polygon, a polygon crossing the
@@ -122,8 +133,11 @@ fun buildSurveyGrid(spec: GridSpec): SurveyGrid {
     val lineCount = max(1, ceil(width / spec.lineSpacingM - 1e-9).toInt()) // 1e-9: a width of exactly k spacings is k lines
     require(lineCount <= MAX_LINES) { "$lineCount lines is too many (max $MAX_LINES): check the spacing and the area" }
     val firstAcross = minAcross + (width - (lineCount - 1) * spec.lineSpacingM) / 2
-    val sweepOrder = (0 until lineCount).map { firstAcross + it * spec.lineSpacingM }
+    val byEntry = (0 until lineCount).map { firstAcross + it * spec.lineSpacingM }
         .let { if (spec.entry == EntryCorner.BOTTOM_RIGHT || spec.entry == EntryCorner.TOP_RIGHT) it.reversed() else it }
+    val skip = (spec.turnaround as? Turnaround.Plane)?.let { minLineSkip(spec.lineSpacingM, it.turnRadiusM) } ?: 1
+    val order = planeLineOrder(lineCount, skip)
+    val sweepOrder = order?.map(byEntry::get) ?: byEntry
 
     val (runIn, runOut) = when (val t = spec.turnaround) {
         is Turnaround.Copter -> t.extensionM to t.extensionM
@@ -158,6 +172,10 @@ fun buildSurveyGrid(spec: GridSpec): SurveyGrid {
         }
     }
 
+    val loopTurns = if (spec.turnaround is Turnaround.Plane) {
+        passes.zipWithNext().count { (p, q) -> p.line != q.line && abs(q.across - p.across) < 2 * spec.turnaround.turnRadiusM - 1e-9 }
+    } else 0
+
     fun at(across: Double, along: Double) = projection.toLatLon(frame.fromGrid(across, along))
     return SurveyGrid(
         passes = passes.map { p ->
@@ -170,7 +188,47 @@ fun buildSurveyGrid(spec: GridSpec): SurveyGrid {
         },
         lineCount = flownLines,
         connectorsM = connectors,
+        lineSkip = if (order == null) 1 else skip,
+        loopTurns = loopTurns,
     )
+}
+
+/**
+ * How many lines over a plane must jump so every turn is at least 2r wide: k = ⌈2r / spacing⌉. k = 1 means the
+ * neighbouring line is already far enough; k = 2 is "every other line".
+ */
+internal fun minLineSkip(spacingM: Double, turnRadiusM: Double): Int = max(1, ceil(2 * turnRadiusM / spacingM - 1e-9).toInt())
+
+/**
+ * The order to fly [lineCount] lines in (0 = the line at the entry corner) so that consecutive lines are at least
+ * [skip] lines apart. Every turn is then a plain U-turn, never a loop. Null when [skip] is 1 (fly them in order) or
+ * when no such order starting at line 0 exists (fewer than about 2·skip + 1 lines); the caller then flies them in
+ * order and the grid reports the loops.
+ *
+ * How: a depth-first search from line 0 that always tries the *nearest* allowed line first, and backs up when it gets
+ * stuck. Nearest-first keeps the jumps (and so the transit between lines) short, and on real grids it almost never
+ * has to back up. For 7 lines and skip 3 it gives 0, 3, 6, 2, 5, 1, 4. QGC's "fly alternate transects" (every other
+ * line out, then the rest back) is the skip-2 case, but its switch-over turn is between neighbours, which this avoids.
+ * The search is capped, so a hopeless case costs milliseconds, not minutes.
+ */
+internal fun planeLineOrder(lineCount: Int, skip: Int): List<Int>? {
+    if (skip <= 1 || lineCount < 2) return null
+    val visited = BooleanArray(lineCount)
+    val path = ArrayList<Int>(lineCount)
+    var budget = 200_000
+
+    fun extend(line: Int): Boolean {
+        if (--budget < 0) return false
+        visited[line] = true
+        path += line
+        if (path.size == lineCount) return true
+        val next = (0 until lineCount).filter { !visited[it] && abs(it - line) >= skip }.sortedBy { abs(it - line) }
+        if (next.any(::extend)) return true
+        visited[line] = false
+        path.removeAt(path.lastIndex)
+        return false
+    }
+    return if (extend(0)) path else null
 }
 
 /**

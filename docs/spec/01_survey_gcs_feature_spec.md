@@ -31,27 +31,29 @@
 
 What the reference products offer, so that we pick deliberately.
 
-| Capability | DJI Pilot 2 | DJI Terra | UgCS | QGC / Mission Planner (ArduPilot baseline) |
-|---|---|---|---|---|
-| Waypoint route (speed, heading, gimbal, actions) | ✅ | ✅ (3D preview) | ✅ | ✅ |
-| Area / polygon mapping grid | ✅ | ✅ | ✅ Photogrammetry | ✅ Survey |
-| GSD ↔ altitude, front/side overlap, camera DB | ✅ | ✅ | ✅ + custom profiles | ✅ known/custom/manual camera |
-| Double grid / crosshatch | — | — | ✅ | ✅ refly at 90° |
-| Oblique (multi-pass, gimbal angle) | ✅ oblique, smart oblique | ✅ | ✅ | partial |
-| Linear / corridor (buffer, zigzag/single, centre line) | ✅ | ✅ | ✅ | ✅ Corridor Scan |
-| Facade / vertical / structure scan | slope route | detailed inspection from 3D model | ✅ vertical scan | ✅ Structure Scan |
-| Orbit / circlegrammetry / POI | ✅ POI | — | ✅ | orbit |
-| Terrain following | ✅ built-in model, DSM import, real-time on some aircraft | — | ✅ Smart AGL, custom DEM (GeoTIFF), rangefinder | ✅ terrain frame, tolerance, climb/descent limits |
-| Adaptive (curved) turns, turnaround distance | — | — | ✅ adaptive bank turn | ✅ turnaround, capture in turns |
-| Distance-based camera trigger | ✅ | ✅ | ✅ | ✅ |
-| Large-area splitting + battery-swap resume | — | — | ✅ | resume (MP) |
-| KML / CSV / SHP import | polygon sync (FlightHub) | ✅ | ✅ KML/CSV, KML/KMZ export | ✅ KML/SHP |
-| No-fly zones / geofence | ✅ | — | ✅ | ✅ geofence, rally |
-| Offline maps | ✅ mbtiles import | — | ✅ offline | ✅ tile cache |
-| 3D view, elevation profile | — | ✅ | ✅ full 3D + elevation profile | 2D (+ profile) |
-| Real-time 2D map while flying | — | ✅ | — | — |
-| LiDAR / magnetometer / GPR tools | L-series only | — | ✅ calibration patterns, geophysics | — |
-| Multi-drone | FlightHub 2 | — | ✅ Commander | limited |
+| Capability | DJI Pilot 2 | DJI Terra | UgCS | QGC / Mission Planner (ArduPilot baseline) | ArduDeck (ArduPilot, GPL-3.0) |
+|---|---|---|---|---|---|
+| Waypoint route (speed, heading, gimbal, actions) | ✅ | ✅ (3D preview) | ✅ | ✅ | ✅ grouped waypoints |
+| Area / polygon mapping grid | ✅ | ✅ | ✅ Photogrammetry | ✅ Survey | ✅ grid |
+| GSD ↔ altitude, front/side overlap, camera DB | ✅ | ✅ | ✅ + custom profiles | ✅ known/custom/manual camera | ✅ plan by altitude or GSD, live stats |
+| Double grid / crosshatch | — | — | ✅ | ✅ refly at 90° | ✅ |
+| Oblique (multi-pass, gimbal angle) | ✅ oblique, smart oblique | ✅ | ✅ | partial | ? |
+| Linear / corridor (buffer, zigzag/single, centre line) | ✅ | ✅ | ✅ | ✅ Corridor Scan | ✅ corridor |
+| Facade / vertical / structure scan | slope route | detailed inspection from 3D model | ✅ vertical scan | ✅ Structure Scan | ? |
+| Orbit / circlegrammetry / POI | ✅ POI | — | ✅ | orbit | circular / spiral grids, panorama |
+| Terrain following | ✅ built-in model, DSM import, real-time on some aircraft | — | ✅ Smart AGL, custom DEM (GeoTIFF), rangefinder | ✅ terrain frame, tolerance, climb/descent limits | ✅ DEM sampling, auto-inserted clearance waypoints |
+| Adaptive (curved) turns, turnaround distance | — | — | ✅ adaptive bank turn | ✅ turnaround, capture in turns | ? |
+| Distance-based camera trigger | ✅ | ✅ | ✅ | ✅ | ? |
+| Large-area splitting + battery-swap resume | — | — | ✅ | resume (MP) | ? |
+| KML / CSV / SHP import | polygon sync (FlightHub) | ✅ | ✅ KML/CSV, KML/KMZ export | ✅ KML/SHP | ✅ KML/KMZ/GeoJSON/SHP, pasted ground points |
+| No-fly zones / geofence | ✅ | — | ✅ | ✅ geofence, rally | ? |
+| Offline maps | ✅ mbtiles import | — | ✅ offline | ✅ tile cache | ? |
+| 3D view, elevation profile | — | ✅ | ✅ full 3D + elevation profile | 2D (+ profile) | altitude profile, flight preview playback |
+| Real-time 2D map while flying | — | ✅ | — | — | ? |
+| LiDAR / magnetometer / GPR tools | L-series only | — | ✅ calibration patterns, geophysics | — | — |
+| Multi-drone | FlightHub 2 | — | ✅ Commander | limited | ? |
+
+**Planning-UX rows (from ArduDeck, not in the table above):** mission items in named groups whose headers show distance, time and GSD; distinct icons for file actions (disk) and vehicle actions (arrows); a "NOT UPLOADED" state after every edit; full undo/redo and autosave. ArduDeck is GPL-3.0: its docs and screenshots are used for ideas only, and no code, icons or assets are copied (the same rule as QGC and Mission Planner, §3). Source: ardudeck.com/docs/Mission-Planning, read 2026-09-25. A "?" in its column means the docs didn't say.
 
 **What sets the leaders apart:** UgCS competes on **terrain accuracy** (custom DEM, Smart AGL, low AGL), **mission splitting / resume**, and **specialised patterns**. DJI competes on **simplicity** and tight hardware integration. For a survey customer on ArduPilot, the terrain-following quality and the planning UX are where we can win.
 
@@ -116,8 +118,19 @@ What the reference products offer, so that we pick deliberately.
 | Oblique multi-pass (gimbal angles per pass) | P1 |
 | **Terrain following:** DEM (Copernicus GLO-30 / SRTM + custom GeoTIFF) → AGL-constant waypoints with tolerance and max climb/descent checks | P1 |
 | Large-area splitting by battery + resume-from-point | P1 |
+| Mission as ordered, renamable groups (waypoints, survey…), header stats per group; survey groups keep their parameters and generate items; flat list only for upload/export | P0 |
+| Undo/redo of plan edits (Ctrl+Z / Ctrl+Shift+Z, buttons on tablet) | P0 |
+| Upload preview (flattened items + warnings, then confirm) and plan-vs-vehicle state ("Not uploaded", "Vehicle mission ≠ plan" in Fly) | P0 |
+| Save/load plans in our own JSON (groups + survey parameters) | P0 |
+| Camera presets (bundled JSON, "unverified" until checked) + custom cameras; GSD-first or altitude-first; batteries and data-size estimates; interval and GSD warnings | P0 |
+| Plane: fly every k-th line when spacing < 2 × turn radius, so turns need no loop | P0 |
+| Autosave of the plan being edited (ArduDeck) | P1 |
+| Circular / spiral grids, panorama capture (ArduDeck) | P2 |
+| Flight preview: play the planned flight on a timeline (ArduDeck) | P2 |
+| Paste surveyed ground points as text (ArduDeck) | P2 |
 | Mission validation before upload (altitude limits, fence, climb rates, battery margin, terrain clearance) | P1 |
-| Import: KML/KMZ, GeoJSON, SHP, CSV · Export: QGC `.plan`, MP `.waypoints`, KML | P1 |
+| Import/export QGC `.plan` and MP `.waypoints` as plain items (no survey parameters) | P0 |
+| Import: KML/KMZ, GeoJSON, SHP, CSV · Export: KML | P1 |
 | Adaptive/curved turns | P2 |
 | 3D-model-based inspection planning (DJI Terra style) | P2 |
 | LiDAR calibration patterns, geophysics tools | P2 |
@@ -130,8 +143,9 @@ What the reference products offer, so that we pick deliberately.
 | ~~Actions: arm/disarm, takeoff, mode change, RTL, land, start mission, pause~~ **Removed (S9).** The GCS shows mode and armed state; the pilot acts on the RC | — |
 | Pre-flight checklist | P1 |
 | Mission progress, current waypoint | P0 (needed for the week 2–3 exit check) |
-| Photos taken | P1 |
-| Large-screen layout (desktop, tablet) + phone-safe fallback | P0 |
+| Photos taken / planned, photo markers on the map (from CAMERA_FEEDBACK) | P0 (rapid-prototype exit check) |
+| Large-screen layout (desktop, tablet): map-first, floating toolbar, right-hand panel | P0 |
+| Phone-sized layout fallback | P1 (later, per the Pass 14–16 brief) |
 | Video pane (RTSP) | P2 — shared with the pod panel (OD-13) |
 | Pod panel (telemetry, lock/unlock) | P2 — counter-UAV phase |
 

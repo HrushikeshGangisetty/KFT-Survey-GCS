@@ -7,6 +7,13 @@ package com.kft.gcs.core.planning
  * The maths is the pinhole camera: a sensor of width w at focal length f sees a ground strip of width w·h/f from
  * height h (similar triangles). Every formula here follows from that; see the pass summary for a worked example.
  * Checked against QGC's `CameraCalc.cc` (master, 2026-09), which uses the same relations.
+ *
+ * The last four fields don't change the geometry:
+ * - [minTriggerIntervalS]: the fastest the camera can take photo after photo (0 = no limit known). ArduPilot has the
+ *   same idea in `CAM1_INTERVAL_MIN`, and skips a photo that comes too soon, so a survey flown too fast has gaps.
+ * - [mbPerPhoto]: the size of one saved photo, for the data-size estimate.
+ * - [name]: what the camera list shows.
+ * - [unverified]: true for bundled presets whose numbers haven't been checked against the maker's spec sheet yet.
  */
 data class Camera(
     val sensorWidthMm: Double,
@@ -14,10 +21,15 @@ data class Camera(
     val imageWidthPx: Int,
     val imageHeightPx: Int,
     val focalLengthMm: Double,
+    val minTriggerIntervalS: Double = 0.0,
+    val mbPerPhoto: Double = 0.0,
+    val name: String = "",
+    val unverified: Boolean = false,
 ) {
     init {
         require(sensorWidthMm > 0 && sensorHeightMm > 0 && focalLengthMm > 0) { "sensor size and focal length must be positive" }
         require(imageWidthPx > 0 && imageHeightPx > 0) { "image size must be positive" }
+        require(minTriggerIntervalS >= 0 && mbPerPhoto >= 0) { "trigger interval and photo size must not be negative" }
     }
 }
 

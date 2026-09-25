@@ -1246,3 +1246,82 @@ The same area as a **Plane** (turn radius 50 m, lead-in 30 m, lead-out 20 m):
 - **Plane on narrow spacing:** bulb turns more than double the distance in the example. QGC offers "fly alternate transects" for fixed wing (skip lines so each turn is at least 2r). It's a line-order option on top of this code, worth adding with the Plane survey UI.
 - Not built (yet): crosshatch (spec P1), camera trigger mission items (`DO_SET_CAM_TRIGG_DIST`), terrain following, and a camera database (GS-5: we still need KFT's actual survey payload).
 - **Next (waiting for you):** the Plan screen's survey tool: draw a polygon → grid on the map → stats → mission items with the camera trigger → upload → SITL flies it (the weeks 4–5 prototype).
+
+---
+
+## Pass 14 — Camera list, Plane line order, stats (2026-09-25)
+
+### What changed
+- **`core/planning/Camera.kt`**: `Camera` gains `minTriggerIntervalS`, `mbPerPhoto`, `name` and `unverified`, all with defaults, so every Pass 13 call still compiles unchanged. Landscape/portrait stays a per-survey choice (`CameraOrientation`), as in QGC: the same camera can be mounted either way.
+- **`core/planning/Survey.kt`** (new): `SurveyHeight` (altitude-first or GSD-first), `SurveyParams`, `SurveyLimits`, `SurveyWarning`, `SurveyPlan` and `planSurvey()`: one pure function from the operator's choices to everything the panel shows.
+- **`core/planning/SurveyGrid.kt`**: Plane lines closer than 2 × turn radius are flown every k-th line (`minLineSkip`, `planeLineOrder`). `SurveyGrid` gains `lineSkip` and `loopTurns`.
+- **`core/geo-io`**: kotlinx.serialization added. `Cameras.kt` (new) has the bundled presets as JSON (all `"unverified": true`), `CameraEntry` (the on-disk shape) and `decodeCameras`.
+- **`feature/plan/PlanSettings.kt`** (new): `PlanSettings` (custom cameras, battery minutes per vehicle kind, GSD warning limit), `SettingsStore` (a text blob, like the connection profiles' store) and `PlanSettingsRepository`. The survey panel and the file behind the store arrive in Pass 15.
+- **`docs/spec/01_survey_gcs_feature_spec.md`**:
+  - §1: an ArduDeck column and a planning-UX note (GPL-3.0: ideas and screenshots only).
+  - §2: rows for this batch's P0 items, ArduDeck's "later" items (autosave P1; circular/spiral grids, flight preview, pasted ground points P2), phone layout moved to P1, `.plan`/`.waypoints` as plain items moved to P0, and "Photos taken" moved to P0.
+- **Tests**:
+  - New: `SurveyTest` (5), `CamerasTest` (2), `PlanSettingsTest` (3).
+  - `SurveyGridTest`: the old Plane test (every turn a loop, 3664.19 m) is replaced by four Plane-order tests and a property test.
+
+### How it works
+```
+SurveyParams ──planSurvey()──▶ height: Altitude(h) → GSD = camera.gsdM(h) · Gsd(g) → h = camera.altitudeForGsdM(g)
+  (polygon, camera,             footprint(h, orientation) ─▶ spacing = across × (1 − side) · trigger = along × (1 − front)
+   overlaps, angle, entry,      buildSurveyGrid(GridSpec) ─▶ Plane and spacing < 2r? ─▶ k = ⌈2r / spacing⌉, planeLineOrder(n, k)
+   speed, turnaround)           surveyStats ─▶ batteries = ⌈time / usable time⌉ · data = photos × MB
+                                warnings: interval < camera minimum · GSD > limit · plane loops left
+                           ──▶ SurveyPlan (everything the panel shows, plus the grid the mission is built from)
+```
+
+**The Plane order, worked by hand** (it's `planeFliesEveryThirdLineSoNoTurnNeedsALoop`). Same 300 × 200 m area, 45 m spacing, turn radius 50 m, lead-in 30 m, lead-out 20 m:
+- Every other line isn't enough: 90 m < 2r = 100 m, so those turns would still be loops. Your brief said "every other line"; that's the k = 2 case of the general rule, and this example needs k = ⌈100 / 45⌉ = 3.
+- Nearest allowed line first, from line 0: 0 → 3 → 6 → 2 → 5 → 1 → 4. The jumps are 135, 135, 180, 135, 180 and 135 m, all ≥ 100 m, so there are no loop turns.
+- Turns: π·50 + (lateral − 100) = 192.08 m or 237.08 m, plus 10 m along the line each time (lead-in 30 m vs lead-out 20 m).
+- Distance: 7 × 250 + 4 × 202.08 + 2 × 247.08 = **3052.48 m**, down from 3664.19 m with loops (−17 %).
+
+### Engineering learnings
+- **GSD-first is the same formula backwards.** `SurveyHeight` is a two-case sealed type rather than two nullable fields, so "both set" or "neither set" can't be written. The panel stores which one the operator typed, and `planSurvey` derives the other.
+- **Why "every k-th line" and not QGC's "alternate transects".** QGC flies every other line out, then the rest back. That has two limits:
+  - k = 2 doesn't cover 2r > 2 × spacing (this example).
+  - The switch-over turn is between neighbouring lines, so it's a loop.
+
+  Here, "consecutive lines at least k apart" is a path through a graph, found by depth-first search, nearest line first. Nearest-first keeps transit short and almost never backtracks. The search is capped at 200 000 steps.
+  - The property test checks it: every size up to 80 lines and k = 2…6 gives a valid order, and one always exists from 2k + 1 lines.
+  - At exactly 2k lines no order can start at line 0: two lines have a single allowed partner, so they must be the two ends. Then the grid flies in order and **reports** the loops, as a warning rather than silently.
+- **One pure entry point.** `planSurvey` is the only function the Plan screen calls. The screen never chains camera, spacing, grid and stats itself, so there's one place where GSD-first and altitude-first can't disagree.
+- **Warnings, not errors.**
+  - Too short an interval: ArduPilot (`AP_Camera_Backend::take_picture`, master 2026-09) *skips* a photo requested sooner than `CAM1_INTERVAL_MIN` after the last one. That's a coverage gap, not a crash, so it's a warning with the fix in it (the fastest speed that works).
+  - GSD above the limit and leftover plane loops are warnings too: the plan is still flyable.
+- **Presets as JSON in a Kotlin string**, not a resource file. KMP Android libraries have no common resource loader without adding Compose resources. A `const val` is bundled, needs no I/O, and still reads as plain JSON for whoever checks the numbers. It lives in `core:geo-io`, so `core:planning` stays pure.
+- **Battery rounding:** the distance comes through the map projection, so 1670 m is 1670.000 00x m. `⌈167 / 83.5⌉` came out as 3 until the slack went from 1e-9 to 1e-6 of a battery. The first test run caught it.
+
+**Ponytail review:** lean already. `encodeCameras` was cut before the review (custom cameras go through the settings file). `SettingsStore` is kept (the repository's test seam, §7).
+
+### What to look at
+1. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/SurveyGrid.kt:214`: `planeLineOrder`, and `:139` where the grid uses it.
+2. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/Survey.kt:73`: `planSurvey`, the whole chain in 30 lines.
+3. `core/geo-io/src/commonMain/kotlin/com/kft/gcs/core/geoio/Cameras.kt:14`: the preset list to check against spec sheets.
+
+### Tests
+- `SurveyGridTest`:
+  - `planeFliesEveryThirdLineSoNoTurnNeedsALoop`: the hand example above, with pass positions, legs and total.
+  - `planeFliesEveryOtherLineWhenThatIsEnough`: r = 40 m → k = 2, order 0, 2, 4, 6, 3, 1, 5.
+  - `planeWithWideSpacingFliesLinesInOrder`: r = 20 m.
+  - `tooFewLinesToSkipKeepsTheLoopsAndCountsThem`: 3 lines → 2 loops.
+  - `planeLineOrderIsAlwaysValid`: the property test.
+- `SurveyTest`:
+  - Altitude-first on the worked example: batteries ⌈167 / 60⌉ = 3, data 77 × 8 = 616 MB, interval 2.0 s < 2.5 s → max 8 m/s, GSD 2.74 > 2.5 cm.
+  - GSD-first at 2 cm: altitude 72.96 m, footprint 109.44 m, spacing 32.832 m, trigger 14.592 m, no warnings.
+  - Exactly 2 batteries.
+  - Plane loops → warning.
+  - Bad inputs rejected.
+- `CamerasTest`: the bundled list parses, every entry is unverified, the P4P GSD equals the hand value, and broken input → null.
+- `PlanSettingsTest`: settings survive a restart, saving by name replaces, and a broken file → defaults.
+- `./gradlew check` passes with no warnings.
+
+### Open questions / next
+- **GS-5 stays open.** The presets are unverified, and none is KFT's payload.
+- "Per-vehicle" battery time is per vehicle *kind* (Copter / Plane). Per airframe (by system id or name) is possible later if one fleet has very different batteries.
+- The Plane turn radius comes from speed and bank (`planeTurnRadiusM`). Real ArduPlane turns (`NAVL1_PERIOD`, wind) are wider, so the Pass 16 SITL run will show how much margin k needs.
+- **Next: Pass 15**, the survey on the Plan screen.
