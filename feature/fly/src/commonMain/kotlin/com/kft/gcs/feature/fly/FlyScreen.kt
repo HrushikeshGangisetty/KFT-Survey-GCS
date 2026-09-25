@@ -49,6 +49,7 @@ fun FlyScreen(
             if (!state.connected) {
                 Text("No vehicle", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall)
             }
+            state.firmware?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f)) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 state.hud.forEach { item ->
                     Column {

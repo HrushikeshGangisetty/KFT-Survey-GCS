@@ -1,6 +1,7 @@
 # KFT Survey GCS — Feature Spec, MVP Cut, Stack and Timeline
 
-**Status:** v2, scope agreed · **Date:** 2026-09-24 · **Owner:** Hrushikesh (solo)
+**Status:** v3, scope agreed · **Date:** 2026-09-25 · **Owner:** Hrushikesh (solo)
+**v3 changes:** The GCS never commands flight: arming, takeoff, mode changes, RTL and landing belong to the pilot on the RC (S9). Every MAVLink message is checked against the dialect XML and ArduPilot's own handling (S10). Mission upload/download always treats seq 0 as home (S11). New open item GS-7. The §2.2 and §2.5 rows and the week 2–3 exit check follow from S9.
 **v2 changes:** MAVLink library fixed to mavlink-kotlin (S6). Architecture fixed to MVVM (S7). Map baseline chosen for zero cost (S8). Separate Claude project and repo confirmed.
 **Context:** Team reduced to one developer; pod hardware not accessible. The first deliverable is a Kotlin Multiplatform (Android tablet + desktop JVM) GCS for ArduPilot. Survey comes first; the counter-UAV pod panel plugs in later.
 **Repo note (2026-09-24):** P0 vehicles extended to Copter **and Plane** (see `docs/implementation/README.md`).
@@ -19,6 +20,9 @@
 | S6 | **MAVLink: `mavlink-kotlin`** (divpundir), ArduPilot `ardupilotmega` dialect, coroutines adapter. Our own transports sit behind a `MavTransport` interface | Kotlin Multiplatform, coroutine-native, maintained |
 | S7 | **MVVM**: Composable screens → ViewModel (`StateFlow<UiState>` + event functions) → repositories → data sources. Unidirectional data flow | Testable ViewModels, clear layering, familiar from Android |
 | S8 | **Maps, zero-cost baseline (temporary):** maplibre-compose engine; OpenFreeMap vector street tiles; Esri World Imagery for satellite via a free-tier key; AWS open Terrain Tiles for elevation. All sources behind a `TileSourceConfig` so each can be swapped without code changes. Licences re-checked before any commercial release. 3D engine chosen at P1 | See §3 map table and `docs/implementation/00-maps-decision.md` |
+| S9 | **No flight actions from the GCS.** The GCS never arms, disarms, takes off, changes mode, commands RTL or lands. The pilot does all of these on the RC (in SITL, MAVProxy stands in for the RC). There are no flight-action buttons. `MavTxGateway` rejects these as immediate commands (`COMMAND_LONG`/`COMMAND_INT` ARM_DISARM, NAV_TAKEOFF, DO_SET_MODE, NAV_RETURN_TO_LAUNCH, NAV_LAND, and `SET_MODE`). The same commands may still appear as **mission items** inside `MISSION_ITEM_INT` | One authority for flight: the pilot's hands. Keeps the GCS out of the pod's guidance path by construction, and makes the GCS a planning and monitoring tool, which is what the survey product needs |
+| S10 | **Every MAVLink message and command is checked against the source.** Before use: its definition in `common.xml` / `ardupilotmega.xml` (or `minimal.xml` / `standard.xml`), and ArduPilot's own handling (the `GCS_MAVLink` source and the ArduPilot docs). The KDoc of the code that sends or parses it names the dialect and notes any ArduPilot-specific behaviour | The MAVLink spec and ArduPilot differ in places (for example, ArduPilot requests mission items with the deprecated `MISSION_REQUEST`, ignores seq 0 on upload, and ignores `MISSION_ACK` from a GCS). Code written from the spec alone breaks on the real autopilot |
+| S11 | **Mission seq 0 is home.** Upload always sends the vehicle's current home (from `HOME_POSITION`) as seq 0, and the first real item is seq 1. On download, seq 0 becomes home and is never shown as a waypoint. A unit test fails if seq 0 isn't home | ArduPilot stores home at index 0 and numbers the mission from 1. Getting the offset wrong shifts every item by one, which is a silent and dangerous bug |
 
 ---
 
@@ -76,8 +80,8 @@ What the reference products offer, so that we pick deliberately.
 | Heartbeat, vehicle detection, sysid/compid handling | P0 |
 | Telemetry model (attitude, position, GPS, battery, EKF, RC, status text) as Kotlin Flows | P0 |
 | **TX gateway with allowlist**, one place in the code that can write, unit-tested | P0 |
-| Command protocol with ACK/retry (arm, mode, takeoff, RTL, land) | P0 |
-| Mission protocol upload/download (`MISSION_ITEM_INT`, partial-list resend) | P0 |
+| Command protocol with ACK/retry for non-flight commands (`SET_MESSAGE_INTERVAL`, `REQUEST_MESSAGE`). No flight commands (S9) | P0 |
+| Mission protocol upload/download/clear (`MISSION_ITEM_INT`, per-item resend, timeouts, cancel), home at seq 0 (S11), progress from `MISSION_CURRENT` / `MISSION_ITEM_REACHED` | P0 |
 | Parameter download + basic editor | P1 |
 | Geofence + rally protocol | P1 |
 | Terrain server (`TERRAIN_REQUEST` → `TERRAIN_DATA`) so the FC can terrain-follow without an SD terrain cache | P1 |
@@ -122,9 +126,10 @@ What the reference products offer, so that we pick deliberately.
 | Feature | Pri |
 |---|---|
 | HUD / instrument panel, mode, arm, battery, GPS/EKF status, messages | P0 |
-| Actions: arm/disarm, takeoff, mode change, RTL, land, start mission, pause | P0 |
+| ~~Actions: arm/disarm, takeoff, mode change, RTL, land, start mission, pause~~ **Removed (S9).** The GCS shows mode and armed state; the pilot acts on the RC | — |
 | Pre-flight checklist | P1 |
-| Mission progress, current waypoint, photos taken | P1 |
+| Mission progress, current waypoint | P0 (needed for the week 2–3 exit check) |
+| Photos taken | P1 |
 | Large-screen layout (desktop, tablet) + phone-safe fallback | P0 |
 | Video pane (RTSP) | P2 — shared with the pod panel (OD-13) |
 | Pod panel (telemetry, lock/unlock) | P2 — counter-UAV phase |
@@ -173,7 +178,7 @@ Reading QGC/Mission Planner source to check survey maths is fine. Copying code i
 | Week | Output | Exit check |
 |---|---|---|
 | 1 | Repo, KMP skeleton, CI. **Spikes:** maplibre-compose on desktop, Cesium in KCEF, serial on both platforms. UDP to SITL, vehicle on the map | Vehicle moves on the 2D map on both desktop and Android |
-| 2–3 | Telemetry model, fly view, command protocol, TCP/serial, TX gateway, mission upload/download, waypoint editor | Arm → takeoff → waypoint mission → RTL in SITL from both platforms |
+| 2–3 | Telemetry model, fly view, command protocol (non-flight), TCP/serial, TX gateway, mission upload/download, waypoint editor | The GCS uploads a waypoint mission; the pilot (MAVProxy in SITL) switches to GUIDED, arms, takes off and switches to AUTO; the mission flies and its progress shows in the GCS. Copter and Plane SITL, from desktop and the Android emulator |
 | 4–5 | Survey grid + camera DB + stats + distance trigger; save/load `.plan` | **🎯 Rapid prototype:** draw polygon → grid → upload → SITL flies it, photos triggered |
 | 6–8 | Corridor, structure, orbit, crosshatch, import/export, offline tiles, Bluetooth, params | |
 | 9–11 | Terrain following + DEM, 3D view, elevation profile, validation, fence/rally, splitting/resume, RTK injection, terrain server | |
@@ -194,3 +199,4 @@ Reading QGC/Mission Planner source to check survey maths is fine. Copying code i
 - GS-4 ✅ Closed: mavlink-kotlin (S6)
 - GS-5 Camera(s) for survey — pod's IMX296 fisheye is not a survey camera; the camera DB needs the actual payload
 - GS-6 Decision-log entry in counter-uav for the separate repo and schema sync (S2)
+- GS-7 The pod contract §3 table still lists operator commands (arm, takeoff, AUTO) and safe-direction modes (RTL, LOITER, LAND, BRAKE) as allowed from the GCS. S9 is stricter: the GCS sends none of them. The two don't conflict (the contract permits, it doesn't require), but the table should be brought in line in `counter-uav` so the pod team doesn't assume the GCS can revoke GUIDED. Owner: Hrushikesh with the pod side

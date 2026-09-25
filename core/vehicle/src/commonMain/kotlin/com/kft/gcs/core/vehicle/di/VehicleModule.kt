@@ -8,6 +8,6 @@ import org.koin.dsl.module
 val vehicleModule = module {
     single {
         val manager: ConnectionManager = get()
-        VehicleRepository(scope = get(), frames = manager.frames, link = manager.state) { manager.gateway.send(it) }
+        VehicleRepository(scope = get(), frames = manager.frames, link = manager.state, sender = manager.gateway)
     }
 }

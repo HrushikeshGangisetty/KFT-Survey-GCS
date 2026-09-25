@@ -4,6 +4,7 @@ import com.divpundir.mavlink.api.MavEnumValue
 import com.divpundir.mavlink.definitions.common.Attitude
 import com.divpundir.mavlink.definitions.common.GpsFixType
 import com.divpundir.mavlink.definitions.common.GpsRawInt
+import com.divpundir.mavlink.definitions.common.HomePosition
 import com.divpundir.mavlink.definitions.common.MavSeverity
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
@@ -72,5 +73,21 @@ class VehicleStateTest {
         assertEquals("Alt Hold", flightModeName(VehicleKind.COPTER, 2u))
         assertEquals("Auto", flightModeName(VehicleKind.PLANE, 10u)) // same name as Copter's 3, different number
         assertEquals("Mode 99", flightModeName(VehicleKind.COPTER, 99u))
+    }
+
+    @Test
+    fun homePositionUnits() {
+        // HOME_POSITION.altitude is mm AMSL: 584 000 mm = 584 m, CMAC's SITL home altitude.
+        val s = VehicleState().reduce(HomePosition(latitude = -353632610, longitude = 1491652300, altitude = 584_000))
+        assertEquals(Home(LatLon(-35.363261, 149.165230), 584.0), s.home)
+    }
+
+    @Test
+    fun firmwareVersionBytes() {
+        // major.minor.patch.type, one byte each: 0x04 06 03 FF = 4.6.3 official; 0x00 = dev, 0xC0 (192) = rc.
+        assertEquals("4.6.3", firmwareVersionName(0x040603FFu))
+        assertEquals("4.7.0-dev", firmwareVersionName(0x04070000u))
+        assertEquals("4.6.0-rc", firmwareVersionName(0x040600C0u))
+        assertEquals("4.5.7-beta", firmwareVersionName(0x04050780u))
     }
 }

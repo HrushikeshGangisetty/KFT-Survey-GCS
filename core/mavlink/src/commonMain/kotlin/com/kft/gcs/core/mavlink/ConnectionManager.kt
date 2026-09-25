@@ -83,7 +83,7 @@ class ConnectionManager internal constructor(
     private val _frames = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val frames: SharedFlow<MavFrame<out MavMessage<*>>> = _frames.asSharedFlow()
 
-    val gateway = MavTxGateway(podStatus) { (state.value as? LinkState.Connected)?.vehicle?.kind ?: VehicleKind.UNKNOWN }
+    val gateway = MavTxGateway(podStatus)
 
     private var linkJob: Job? = null
 

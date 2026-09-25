@@ -5,9 +5,11 @@ import com.divpundir.mavlink.definitions.ardupilotmega.CopterMode
 import com.divpundir.mavlink.definitions.ardupilotmega.PlaneMode
 import com.divpundir.mavlink.definitions.common.Attitude
 import com.divpundir.mavlink.definitions.common.GpsRawInt
+import com.divpundir.mavlink.definitions.common.HomePosition
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
 import com.divpundir.mavlink.definitions.common.VfrHud
+import com.divpundir.mavlink.definitions.standard.AutopilotVersion
 import com.divpundir.mavlink.definitions.standard.GlobalPositionInt
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
@@ -39,7 +41,14 @@ data class VehicleState(
     val flightMode: String? = null,
     /** The latest STATUSTEXT, e.g. "PreArm: GPS not healthy". */
     val lastMessage: StatusMessage? = null,
+    /** Where the vehicle will return to, and what mission seq 0 is (spec S11). Null until HOME_POSITION arrives. */
+    val home: Home? = null,
+    /** Firmware version from AUTOPILOT_VERSION, e.g. "4.6.3" or "4.7.0-dev". */
+    val firmwareVersion: String? = null,
 )
+
+/** The vehicle's home. [altitudeMslM] is above mean sea level, which is what mission seq 0 carries. */
+data class Home(val position: LatLon, val altitudeMslM: Double)
 
 /** GPS fix quality, from GPS_RAW_INT.fix_type. Survey work wants at least 3D, ideally RTK. */
 enum class GpsFix(val label: String) {
@@ -74,7 +83,28 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
         batteryPercent = message.batteryRemaining.toInt().takeIf { it >= 0 },  // -1 = not estimated
     )
     is Statustext -> copy(lastMessage = StatusMessage(message.text.trimEnd('\u0000'), severityOf(message.severity.value)))
+    // HOME_POSITION (common.xml). ArduPilot sends it only once home is set, on request, and on every change (for
+    // Copter, arming moves home to where it armed), plus at the interval VehicleRepository asks for.
+    is HomePosition -> copy(home = Home(LatLon.fromE7(message.latitude, message.longitude), message.altitude / 1000.0)) // mm -> m
+    // AUTOPILOT_VERSION is in standard.xml.
+    is AutopilotVersion -> copy(firmwareVersion = firmwareVersionName(message.flightSwVersion))
     else -> this
+}
+
+/**
+ * Decodes AUTOPILOT_VERSION.flight_sw_version. ArduPilot packs it as major, minor, patch, FIRMWARE_VERSION_TYPE,
+ * one byte each from the top (GCS_Common.cpp `send_autopilot_version`). Type 255 is an official release.
+ */
+internal fun firmwareVersionName(packed: UInt): String {
+    val number = "${packed shr 24}.${(packed shr 16) and 0xFFu}.${(packed shr 8) and 0xFFu}"
+    val suffix = when (packed and 0xFFu) {
+        0u -> "-dev"
+        64u -> "-alpha"
+        128u -> "-beta"
+        192u -> "-rc"
+        else -> ""
+    }
+    return number + suffix
 }
 
 /** ArduPilot mode name for a custom mode number, e.g. Copter 5 -> "Loiter", Plane 10 -> "Auto". */

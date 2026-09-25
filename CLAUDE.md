@@ -65,7 +65,10 @@ Composable screen ──events──▶ ViewModel ──calls──▶ Repositor
 - `MavTxGateway` in `core:mavlink` is the **only** code allowed to write to a `MavTransport`. `MavTransport.write` is `internal` to `core:mavlink`, and nothing else gets a reference that can send.
 - Every outgoing message is checked against the allowlist from `docs/spec/02_pod_interface_contract.md` §3. Anything not on the list is rejected and logged.
 - **Never** send `SET_POSITION_TARGET_*`, `SET_ATTITUDE_TARGET`, or any lock/engage command. These rows are in the gateway from day one, even before a pod exists.
-- Mission upload is blocked while the pod reports LOCKED / TERMINAL / ENGAGE. Entering GUIDED is blocked while pod AI-enable is high. Safe-direction modes (RTL, LOITER, LAND, BRAKE) are always allowed.
+- Mission upload is blocked while the pod reports LOCKED / TERMINAL / ENGAGE.
+- **S9: no flight actions.** The GCS never arms, disarms, takes off, changes mode (SET_MODE or DO_SET_MODE, GUIDED and the safe-direction modes included), commands RTL or lands. The pilot does these on the RC; in SITL, MAVProxy is the RC. No flight-action buttons. The gateway rejects them as immediate commands. They may still appear as mission items inside `MISSION_ITEM_INT`. This is stricter than pod contract §3, which permits some of them (open item GS-7).
+- **S10: check the source.** Before sending or parsing a MAVLink message or command, check its definition in `common.xml` / `ardupilotmega.xml` (or `minimal.xml` / `standard.xml`) and ArduPilot's own handling (`libraries/GCS_MAVLink`, ArduPilot docs). The KDoc says which dialect defines it and notes any ArduPilot-specific behaviour.
+- **S11: mission seq 0 is home.** Upload always sends the vehicle's current home (from `HOME_POSITION`) as seq 0; the first real item is seq 1. On download, seq 0 becomes home and is never shown as a waypoint. Keep the test that fails if seq 0 isn't home.
 - Any change to the allowlist needs a matching unit test in `MavTxGatewayTest`, and a mention in the pass summary under a **Safety** heading.
 
 ## 5. Testing expectations

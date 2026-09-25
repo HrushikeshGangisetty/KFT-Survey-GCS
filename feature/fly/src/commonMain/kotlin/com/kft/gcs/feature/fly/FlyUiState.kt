@@ -15,6 +15,8 @@ import kotlin.math.roundToInt
 @Immutable
 data class FlyUiState(
     val connected: Boolean,
+    /** e.g. "ArduPilot 4.6.3", once AUTOPILOT_VERSION has arrived. */
+    val firmware: String?,
     /** The HUD strip: "Mode Loiter", "Alt 12.3 m", … Always the same items in the same order, so nothing jumps. */
     val hud: List<HudItem>,
     val message: MessageUi?,

@@ -386,3 +386,105 @@ Before this pass, the NavHost swapped Fly out when you left it. That disposed th
 - Report the dispose/recreate crash upstream to maplibre-compose, with a minimal repro.
 - **Plan screen (W2):** it must reuse the one hoisted map (for example, the map layer takes overlays from whichever tab is active), not create a second `MapView`. That design goes in the Plan pass.
 - **Next: Pass 6, the command protocol.** Waiting for Hrushikesh's go-ahead.
+
+---
+
+## Pass 6 — W2-1: Scope v3 (S9–S11) and the command protocol (non-flight) (2026-09-25)
+
+### What changed
+- **`docs/spec/01_survey_gcs_feature_spec.md`** → v3:
+  - S9 (no flight actions from the GCS), S10 (check every message against the dialect XML and ArduPilot's source), S11 (mission seq 0 is home), and open item GS-7.
+  - §2.2 command and mission rows updated. §2.5 actions row removed. Mission progress raised to P0.
+  - The new week 2–3 exit check.
+- **`CLAUDE.md` §4**: S9, S10 and S11 as rules. The old "safe-direction modes are always allowed" line is gone, because S9 is stricter.
+- **`core/mavlink`**:
+  - `TxPolicy.kt`: new `PILOT_ONLY` category. It replaces `OPERATOR` for flight commands and the `SAFE_DIRECTION` / `ENTER_GUIDED` mode rules. The mode-number tables and the vehicle-kind lookup are deleted. KDoc lists the dialect of every allowed message.
+  - `MavTxGateway.kt`: a `MavSender` interface, which the gateway implements. The gateway no longer needs the vehicle kind.
+  - `ConnectionManager.kt`: builds the gateway with the pod status only.
+- **`core/vehicle`**:
+  - `CommandProtocol.kt` (new): COMMAND_LONG / COMMAND_INT → COMMAND_ACK matching, retry with `confirmation`, timeout, and IN_PROGRESS / DENIED / UNSUPPORTED handling.
+  - `VehicleRepository.kt`: on every vehicle appearance it sends REQUEST_DATA_STREAM, then REQUEST_MESSAGE(AUTOPILOT_VERSION), REQUEST_MESSAGE(HOME_POSITION) and SET_MESSAGE_INTERVAL(HOME_POSITION, 10 s). It takes a `MavSender` instead of a one-message lambda.
+  - `VehicleState.kt`: `home` (from HOME_POSITION) and `firmwareVersion` (from AUTOPILOT_VERSION).
+  - Tests: `FakeFc.kt` (a scripted flight controller), `CommandProtocolTest.kt`, new cases in `VehicleRepositoryTest` / `VehicleStateTest`, and `jvmTest/SitlCheck.kt` (a real-SITL check, skipped unless `KFT_SITL` is set).
+- **`feature/fly`**:
+  - Shows "ArduPilot 4.6.3" under the HUD title.
+  - The KDoc and the module comment now say "monitoring only (S9)".
+
+### How it works
+```
+vehicle appears (LinkState) ──▶ VehicleRepository ──launch──▶ requestStartupMessages()
+                                                                 │ REQUEST_DATA_STREAM (no ACK in ArduPilot)
+                                                                 │ CommandProtocol.send(REQUEST_MESSAGE 148)
+                                                                 │ CommandProtocol.send(REQUEST_MESSAGE 242)
+                                                                 └ CommandProtocol.send(SET_MESSAGE_INTERVAL 242, 10 s)
+CommandProtocol.send(cmd):
+   subscribe to frames (before sending) ─▶ send attempt 0 ─▶ wait 1.5 s for COMMAND_ACK(cmd, from target, to us)
+        no ACK ─▶ resend with confirmation+1 (max 3 attempts) ─▶ NoAck
+        IN_PROGRESS ─▶ stop resending, wait up to 30 s for the final ACK
+        ACCEPTED ─▶ Accepted      DENIED / UNSUPPORTED / … ─▶ Refused(result), never retried
+        gateway refused / no link ─▶ NotSent(tx), never retried
+HOME_POSITION / AUTOPILOT_VERSION frames ──reduce──▶ VehicleState.home / firmwareVersion
+```
+
+### Engineering learnings
+- **Subscribe before you send.** The ACK listener starts with `CoroutineStart.UNDISPATCHED`, so it is already collecting the shared frame flow before the first byte leaves. *Why:* a SharedFlow doesn't replay, so an ACK that arrives before collection starts is lost. A fast fake FC shows this at once; a fast link would too.
+- **Startup requests run in their own coroutine.** They suspend while waiting for ACKs, and the ACKs arrive on the same frames the repository's collector reads. If the collector made the requests itself, it would stop reading the frames it is waiting for. The job is cancelled when the vehicle disappears.
+- **Default-deny plus one blunt category.** Under S9 the mode-number logic isn't needed (GUIDED is 4 on Copter but 15 on Plane, and so on), because every mode change is refused whatever the number. *Why delete it rather than keep it "for the pod":* the stricter rule already satisfies both pod rows. Git keeps the old code in case GS-7 ever reverses S9.
+- **`MavSender` interface.** `MavTxGateway`'s constructor is internal, so `core:vehicle` tests couldn't build one. A one-method interface lets `FakeFc` stand in for the gateway and the vehicle behind it. The app still passes the real gateway, so the allowlist still applies to everything.
+- **Mutex, not a per-command map.** MAVLink matches ACKs by command id only. Sending one command at a time removes the ambiguity. With a few commands per connect it costs nothing and needs no bookkeeping.
+- **ArduPilot facts (S10)**, from `ardupilot/libraries/GCS_MAVLink/GCS_Common.cpp` (master 2026-09):
+  - Every COMMAND_LONG/INT gets exactly one ACK, addressed back to the sender's sysid/compid.
+  - COMMAND_LONG is converted to COMMAND_INT internally. A build without COMMAND_LONG answers `COMMAND_INT_ONLY`.
+  - SET_MESSAGE_INTERVAL DENIES a nonzero param3 and clamps the interval to 1 ms–60 s.
+  - HOME_POSITION is in no stream group. It is sent on request, on change (AP_AHRS `set_home`), or at an interval we set.
+  - AUTOPILOT_VERSION lives in `standard.xml`, not `common.xml`.
+  - REQUEST_DATA_STREAM is deprecated in `common.xml`, but ArduPilot maps it to its SRx groups and never ACKs it.
+
+**Ponytail review:** one cut. Nobody ever set `CommandProtocol`'s three timing constructor parameters, so they're constants now. Kept:
+- `send(CommandInt)`: you asked for COMMAND_INT, though nothing calls it yet.
+- The `MavSender` testing seam.
+- All tests.
+
+### Safety
+- **Allowlist change (S9).** These are now rejected as immediate `COMMAND_LONG`/`COMMAND_INT` in every pod state, with the reason "…spec S9": `COMPONENT_ARM_DISARM`, `NAV_TAKEOFF`, `DO_SET_MODE` (any mode), `NAV_RETURN_TO_LAUNCH` and `NAV_LAND`. `SET_MODE` is also rejected with any mode number, including GUIDED, RTL, LOITER, LAND and BRAKE.
+- **Beyond the list you gave**, so yours to reverse: `MISSION_START` (it switches ArduPilot to AUTO), `DO_CHANGE_SPEED` and `DO_PAUSE_CONTINUE` (they change what a flying aircraft does) are `PILOT_ONLY` too.
+- **Still allowed as mission items.** `MISSION_ITEM_INT` stays `MISSION_CHANGE` whatever command it carries, so TAKEOFF, LAND, RTL and DO_CHANGE_SPEED can still be in a mission (`flightCommandsAreAllowedAsMissionItems`).
+- **Pod contract §3** *permits* operator commands and safe-direction modes but doesn't *require* them. S9 is stricter and compatible, so I didn't stop. The mismatch is recorded as **GS-7**: the counter-uav table should say the GCS won't revoke GUIDED, so the pod side doesn't count on it.
+- **`MISSION_SET_CURRENT`** is unchanged (`MISSION_CHANGE`) and unused. It can redirect an aircraft flying AUTO, so it is arguably a flight action. Worth deciding before anyone uses it.
+- **New transmissions:** REQUEST_MESSAGE and SET_MESSAGE_INTERVAL. Both were already `ALWAYS` (read-only).
+
+### What to look at
+1. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/TxPolicy.kt:122`: the command table, with S9 in one block.
+2. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/CommandProtocol.kt:102`: the retry and IN_PROGRESS loop.
+3. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/VehicleRepository.kt:84`: what's asked for on connect, and why.
+
+### Tests
+- `MavTxGatewayTest` (9):
+  - `flightActionsAreRejectedAsImmediateCommands`: 8 commands × LONG/INT, plus 7 modes via SET_MODE and DO_SET_MODE, with no pod and with the worst-case pod.
+  - `flightCommandsAreAllowedAsMissionItems`.
+  - The existing row tests, updated.
+- `CommandProtocolTest` (10, virtual time):
+  - Accepted on the first try, with no waiting.
+  - Lost once: resent with confirmation 1 after exactly 1.5 s.
+  - No ACK: 3 attempts, 4.5 s.
+  - DENIED, UNSUPPORTED and TEMPORARILY_REJECTED are final: 1 send each.
+  - IN_PROGRESS, then ACCEPTED 5 s later: Accepted, with no resend.
+  - IN_PROGRESS forever: NoAck at 30 s.
+  - ACKs for another command, GCS or vehicle are ignored.
+  - An old-firmware ACK with zero target fields still matches.
+  - A gateway refusal gives `NotSent` with no wait.
+  - COMMAND_INT resends are identical.
+- `VehicleRepositoryTest` (+2): the exact connect sequence (ids 148 / 242, 10 000 000 µs), and HOME_POSITION / AUTOPILOT_VERSION reaching the state.
+- `VehicleStateTest` (+2):
+  - 584 000 mm → 584 m.
+  - `0x040603FF` → "4.6.3", `0x04070000` → "4.7.0-dev", `0xC0` → rc, `0x80` → beta.
+- **SITL, done:** Mission Planner's ArduCopter SITL on TCP 5760, then `KFT_SITL=127.0.0.1:5760 gradlew :core:vehicle:jvmTest --tests '*SitlCheck*'`. Result: `SITL: ArduPilot 4.8.0-dev, home (-35.363261, 149.1652299) 584.09 m`, through the real TCP transport and gateway.
+- `./gradlew check` passes. No compiler warnings in the touched modules.
+
+### Open questions / next
+- **KFT firmware GCS authentication (found while checking S10).**
+  - `ardupilotKFT` (ArduCopter 4.6.3, "MOINA") drops every incoming message except HEARTBEAT and the MAV_CMD_USER_1/2 HMAC challenge-response until the GCS authenticates (`GCS_Common.cpp:4178`, `KFT_GCSAuth.h`). Stock SITL doesn't do this.
+  - On a KFT flight controller, this GCS will see heartbeats and whatever the FC streams by default, but its stream requests and mission upload will be dropped.
+  - Implementing the auth means handling the app secret, so that decision is yours (where the key lives, which app id). It blocks the real-FC check, not SITL.
+- GS-7 (see Safety).
+- **Next: Pass 7, the mission protocol.**

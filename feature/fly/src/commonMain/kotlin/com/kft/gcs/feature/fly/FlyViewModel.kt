@@ -17,8 +17,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * The Fly view: vehicle on the map, HUD strip, basemap choice. Read-only for now; vehicle actions (arm, takeoff,
- * RTL, land) arrive with the command protocol, which needs ACK/retry handling first.
+ * The Fly view: vehicle on the map, HUD strip, basemap choice. Monitoring only, by design: the pilot arms, takes
+ * off, changes mode and lands on the RC, never from the GCS (spec S9), so this screen has no flight-action buttons.
  *
  * @param basemaps what this build can show; passed in (not read from the platform here) so tests are deterministic.
  */
@@ -72,6 +72,7 @@ class FlyViewModel(
 
     private fun build(v: VehicleState, l: Local) = FlyUiState(
         connected = v.connected,
+        firmware = v.firmwareVersion?.let { "ArduPilot $it" },
         hud = hudItems(v),
         message = v.lastMessage?.let { MessageUi(it.text, it.severity) },
         overlays = listOfNotNull(

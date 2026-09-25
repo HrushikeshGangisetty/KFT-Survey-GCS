@@ -1,4 +1,4 @@
-// Fly view: HUD, map with vehicle, actions (arm, takeoff, RTL, land).
+// Fly view: HUD and map with vehicle. Monitoring only: flight actions are the pilot's, on the RC (spec S9).
 plugins { id("kft.kmp.compose") }
 
 kotlin {

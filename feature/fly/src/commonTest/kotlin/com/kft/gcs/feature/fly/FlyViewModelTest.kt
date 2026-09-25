@@ -8,6 +8,7 @@ import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.LinkStats
+import com.kft.gcs.core.mavlink.MavSender
 import com.kft.gcs.core.mavlink.TxResult
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
@@ -43,7 +44,7 @@ class FlyViewModelTest {
 
     /** A real VehicleRepository, driven by scripted link state and frames instead of a socket. */
     private fun TestScope.viewModel(): FlyViewModel {
-        val repo = VehicleRepository(backgroundScope, frames, link) { TxResult.Sent }
+        val repo = VehicleRepository(backgroundScope, frames, link, SilentSender)
         return FlyViewModel(repo, listOf(TileSources.Street, TileSources.Satellite)).also {
             link.value = LinkState.Connected(LinkConfig.UdpListen(), copter, LinkStats())
             runCurrent()
@@ -139,4 +140,9 @@ class FlyViewModelTest {
         override val sequence: UByte = 0u,
         override val checksum: UShort = 0u,
     ) : MavFrame<MavMessage<*>>
+}
+
+/** Accepts every message and never answers, so the connect-time requests simply wait in the background. */
+private object SilentSender : MavSender {
+    override suspend fun <T : MavMessage<T>> send(message: T) = TxResult.Sent
 }

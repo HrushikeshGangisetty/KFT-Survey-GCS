@@ -40,8 +40,15 @@ data class PodStatus(val lock: PodLockState = PodLockState.NONE, val aiEnableHig
     }
 }
 
-/** The rows of the TX rules table in the pod contract §3, plus [UNLISTED] for everything the table doesn't name. */
-internal enum class TxCategory { ALWAYS, OPERATOR, MISSION_CHANGE, SAFE_DIRECTION, ENTER_GUIDED, NEVER, UNLISTED }
+/**
+ * The rows of the TX rules table in the pod contract §3, as tightened by spec S9, plus [UNLISTED] for everything
+ * the table doesn't name.
+ *
+ * [PILOT_ONLY] replaces the contract's "operator commands", "safe-direction modes" and "enter GUIDED" rows for
+ * anything that makes the aircraft move or change mode. Under S9 the GCS sends none of them, in any pod state, so
+ * the GUIDED and safe-direction rules are covered by a stricter one (see open item GS-7 in the spec).
+ */
+internal enum class TxCategory { ALWAYS, OPERATOR, MISSION_CHANGE, PILOT_ONLY, NEVER, UNLISTED }
 
 /** A message's category plus a human-readable name for logs and rejection reasons. */
 internal data class TxClassification(val category: TxCategory, val label: String)
@@ -52,10 +59,18 @@ internal data class TxClassification(val category: TxCategory, val label: String
  *
  * Anything not explicitly listed is [TxCategory.UNLISTED] and rejected. Default-deny means a new message type
  * can't slip through just because nobody thought about it; adding it here (with a test) is a deliberate act.
+ *
+ * Where each allowed message is defined (spec S10), checked against mavlink-kotlin's generated packages and
+ * ArduPilot master `libraries/GCS_MAVLink/GCS_Common.cpp` (2026-09):
+ * - HEARTBEAT: `minimal.xml`.
+ * - PARAM_*, MISSION_*, COMMAND_LONG/COMMAND_INT, SET_MODE, REQUEST_DATA_STREAM: `common.xml`.
+ *   REQUEST_DATA_STREAM is deprecated there, but ArduPilot still maps it onto its SRx stream groups.
+ * - ArduPilot converts every COMMAND_LONG to COMMAND_INT before handling it, and builds without COMMAND_LONG
+ *   answer `MAV_RESULT_COMMAND_INT_ONLY`, so both forms are classified by the same command table.
  */
 internal object TxPolicy {
 
-    fun classify(message: MavMessage<*>, vehicle: VehicleKind): TxClassification = when (message) {
+    fun classify(message: MavMessage<*>): TxClassification = when (message) {
         // Always allowed: link keep-alive and read-only requests.
         is Heartbeat -> always("HEARTBEAT")
         is ParamRequestRead -> always("PARAM_REQUEST_READ")
@@ -74,9 +89,11 @@ internal object TxPolicy {
         is MissionSetCurrent -> missionChange("MISSION_SET_CURRENT")
         is MissionWritePartialList -> missionChange("MISSION_WRITE_PARTIAL_LIST")
 
-        is SetMode -> classifyMode(message.customMode, vehicle, "SET_MODE")
-        is CommandLong -> classifyCommand(message.command.value, message.param2, vehicle)
-        is CommandInt -> classifyCommand(message.command.value, message.param2, vehicle)
+        // Mission items can hold TAKEOFF, LAND or RTL: those are a plan the pilot starts by switching to AUTO on
+        // the RC, not an immediate action, so they are MISSION_CHANGE above whatever command they carry (S9).
+        is SetMode -> pilotOnly("SET_MODE")
+        is CommandLong -> classifyCommand(message.command.value)
+        is CommandInt -> classifyCommand(message.command.value)
 
         // Never, whatever the state. Guidance belongs to the pod's pod_mavlink module alone (pod invariant 7).
         is SetPositionTargetLocalNed -> never("SET_POSITION_TARGET_LOCAL_NED")
@@ -92,33 +109,32 @@ internal object TxPolicy {
 
     /** Null means allowed. Otherwise the reason the message is refused. */
     fun check(category: TxCategory, pod: PodStatus): String? = when (category) {
-        TxCategory.ALWAYS, TxCategory.OPERATOR, TxCategory.SAFE_DIRECTION -> null
+        TxCategory.ALWAYS, TxCategory.OPERATOR -> null
         TxCategory.MISSION_CHANGE ->
             if (pod.lock in MISSION_LOCKOUT) "mission changes are blocked while the pod reports ${pod.lock}" else null
-        TxCategory.ENTER_GUIDED ->
-            if (pod.aiEnableHigh) "entering GUIDED is blocked while pod AI-enable is high" else null
+        TxCategory.PILOT_ONLY -> "flight actions belong to the pilot on the RC, never the GCS (spec S9)"
         TxCategory.NEVER -> "never sent from the GCS (pod contract §3)"
         TxCategory.UNLISTED -> "not on the TX allowlist"
     }
 
     private val MISSION_LOCKOUT = setOf(PodLockState.LOCKED, PodLockState.TERMINAL, PodLockState.ENGAGE)
 
-    private fun classifyCommand(command: UInt, param2: Float, vehicle: VehicleKind): TxClassification = when (command) {
+    private fun classifyCommand(command: UInt): TxClassification = when (command) {
         MavCmd.SET_MESSAGE_INTERVAL.value -> always("MAV_CMD_SET_MESSAGE_INTERVAL")
         MavCmd.REQUEST_MESSAGE.value -> always("MAV_CMD_REQUEST_MESSAGE")
         MavCmd.REQUEST_AUTOPILOT_CAPABILITIES.value -> always("MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES")
 
-        MavCmd.COMPONENT_ARM_DISARM.value -> operator("MAV_CMD_COMPONENT_ARM_DISARM")
-        MavCmd.NAV_TAKEOFF.value -> operator("MAV_CMD_NAV_TAKEOFF")
-        MavCmd.MISSION_START.value -> operator("MAV_CMD_MISSION_START")
-        MavCmd.DO_CHANGE_SPEED.value -> operator("MAV_CMD_DO_CHANGE_SPEED")
-        MavCmd.DO_PAUSE_CONTINUE.value -> operator("MAV_CMD_DO_PAUSE_CONTINUE")
-
-        MavCmd.NAV_RETURN_TO_LAUNCH.value -> safe("MAV_CMD_NAV_RETURN_TO_LAUNCH")
-        MavCmd.NAV_LAND.value -> safe("MAV_CMD_NAV_LAND")
-
-        // DO_SET_MODE carries ArduPilot's custom mode number in param2.
-        MavCmd.DO_SET_MODE.value -> classifyMode(param2.toUInt(), vehicle, "MAV_CMD_DO_SET_MODE")
+        // S9: everything that arms, moves the aircraft or changes its mode is the pilot's. DO_SET_MODE is here
+        // whatever mode it names (GUIDED, RTL, LAND…). MISSION_START switches ArduPilot to AUTO, and
+        // DO_CHANGE_SPEED / DO_PAUSE_CONTINUE change what a flying aircraft does, so they are flight actions too.
+        MavCmd.COMPONENT_ARM_DISARM.value -> pilotOnly("MAV_CMD_COMPONENT_ARM_DISARM")
+        MavCmd.NAV_TAKEOFF.value -> pilotOnly("MAV_CMD_NAV_TAKEOFF")
+        MavCmd.DO_SET_MODE.value -> pilotOnly("MAV_CMD_DO_SET_MODE")
+        MavCmd.NAV_RETURN_TO_LAUNCH.value -> pilotOnly("MAV_CMD_NAV_RETURN_TO_LAUNCH")
+        MavCmd.NAV_LAND.value -> pilotOnly("MAV_CMD_NAV_LAND")
+        MavCmd.MISSION_START.value -> pilotOnly("MAV_CMD_MISSION_START")
+        MavCmd.DO_CHANGE_SPEED.value -> pilotOnly("MAV_CMD_DO_CHANGE_SPEED")
+        MavCmd.DO_PAUSE_CONTINUE.value -> pilotOnly("MAV_CMD_DO_PAUSE_CONTINUE")
 
         // DO_REPOSITION is a guided setpoint in command form, so it's the same rule as SET_POSITION_TARGET_*.
         MavCmd.DO_REPOSITION.value -> never("MAV_CMD_DO_REPOSITION")
@@ -129,38 +145,8 @@ internal object TxPolicy {
         else -> TxClassification(TxCategory.UNLISTED, "MAV_CMD $command")
     }
 
-    /**
-     * Sorts an ArduPilot custom mode into ENTER_GUIDED / SAFE_DIRECTION / OPERATOR. Numbers come from ArduPilot's
-     * mode enums (mavlink-kotlin `CopterMode` / `PlaneMode`). Plane has no LAND mode: QLAND and QRTL are its
-     * VTOL landing/return modes, so they count as safe-direction too.
-     */
-    private fun classifyMode(mode: UInt, vehicle: VehicleKind, via: String): TxClassification {
-        val label = "$via mode $mode"
-        return when (vehicle) {
-            VehicleKind.COPTER -> when (mode) {
-                COPTER_GUIDED, COPTER_GUIDED_NOGPS -> TxClassification(TxCategory.ENTER_GUIDED, label)
-                in COPTER_SAFE -> TxClassification(TxCategory.SAFE_DIRECTION, label)
-                else -> TxClassification(TxCategory.OPERATOR, label)
-            }
-            VehicleKind.PLANE -> when (mode) {
-                PLANE_GUIDED -> TxClassification(TxCategory.ENTER_GUIDED, label)
-                in PLANE_SAFE -> TxClassification(TxCategory.SAFE_DIRECTION, label)
-                else -> TxClassification(TxCategory.OPERATOR, label)
-            }
-            // Without a vehicle type we can't tell whether this number means GUIDED, so refuse rather than guess.
-            VehicleKind.UNKNOWN -> TxClassification(TxCategory.UNLISTED, "$label on an unknown vehicle type")
-        }
-    }
-
-    private const val COPTER_GUIDED = 4u
-    private const val COPTER_GUIDED_NOGPS = 20u
-    private val COPTER_SAFE = setOf(6u, 5u, 9u, 17u)   // RTL, LOITER, LAND, BRAKE
-    private const val PLANE_GUIDED = 15u
-    private val PLANE_SAFE = setOf(11u, 12u, 20u, 21u) // RTL, LOITER, QLAND, QRTL
-
     private fun always(label: String) = TxClassification(TxCategory.ALWAYS, label)
-    private fun operator(label: String) = TxClassification(TxCategory.OPERATOR, label)
     private fun missionChange(label: String) = TxClassification(TxCategory.MISSION_CHANGE, label)
-    private fun safe(label: String) = TxClassification(TxCategory.SAFE_DIRECTION, label)
+    private fun pilotOnly(label: String) = TxClassification(TxCategory.PILOT_ONLY, label)
     private fun never(label: String) = TxClassification(TxCategory.NEVER, label)
 }

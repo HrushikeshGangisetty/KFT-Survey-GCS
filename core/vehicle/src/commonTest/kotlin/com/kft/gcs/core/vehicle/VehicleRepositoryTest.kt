@@ -1,21 +1,23 @@
 package com.kft.gcs.core.vehicle
 
-import com.divpundir.mavlink.api.MavFrame
 import com.divpundir.mavlink.api.MavMessage
+import com.divpundir.mavlink.definitions.common.CommandLong
+import com.divpundir.mavlink.definitions.common.HomePosition
+import com.divpundir.mavlink.definitions.common.MavCmd
 import com.divpundir.mavlink.definitions.common.MavDataStream
 import com.divpundir.mavlink.definitions.common.RequestDataStream
 import com.divpundir.mavlink.definitions.common.VfrHud
+import com.divpundir.mavlink.definitions.standard.AutopilotVersion
+import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.LinkStats
-import com.kft.gcs.core.mavlink.TxResult
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -26,14 +28,15 @@ class VehicleRepositoryTest {
     private val copter = VehicleInfo(systemId = 1u, componentId = 1u, kind = VehicleKind.COPTER, armed = true, customMode = 5u)
 
     private val link = MutableStateFlow<LinkState>(LinkState.Disconnected)
-    private val frames = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = 16)
-    private val requests = mutableListOf<RequestDataStream>()
+
+    // The fake FC ACKs every command, like ArduPilot does for REQUEST_MESSAGE and SET_MESSAGE_INTERVAL.
+    private val fc = FakeFc().apply { reply = { m -> if (m is CommandLong) listOf(ackFor(m)) else emptyList() } }
+    private val requests get() = fc.sentOf<RequestDataStream>()
 
     private fun TestScope.repository() =
-        VehicleRepository(backgroundScope, frames, link) { requests += it; TxResult.Sent }.also { runCurrent() }
+        VehicleRepository(backgroundScope, fc.frames, link, fc).also { runCurrent() }
 
-    private fun frame(message: MavMessage<*>, componentId: UByte = 1u) =
-        check(frames.tryEmit(TestFrame(systemId = 1u, componentId = componentId, message = message)))
+    private fun frame(message: MavMessage<*>, componentId: UByte = 1u) = fc.emit(message, componentId = componentId)
 
     @Test
     fun requestsStreamsOncePerVehicleAppearance() = runTest {
@@ -52,6 +55,37 @@ class VehicleRepositoryTest {
         link.value = LinkState.Connected(udp, copter, LinkStats())
         runCurrent()
         assertEquals(2, requests.size)
+    }
+
+    @Test
+    fun asksForVersionAndHomeWhenTheVehicleAppears() = runTest {
+        repository()
+        link.value = LinkState.Connected(udp, copter, LinkStats())
+        runCurrent()
+        val commands = fc.sentOf<CommandLong>().map { Triple(it.command.value, it.param1, it.param2) }
+        assertEquals(
+            listOf(
+                Triple(MavCmd.REQUEST_MESSAGE.value, 148f, 0f),               // AUTOPILOT_VERSION
+                Triple(MavCmd.REQUEST_MESSAGE.value, 242f, 0f),               // HOME_POSITION
+                Triple(MavCmd.SET_MESSAGE_INTERVAL.value, 242f, 10_000_000f), // HOME_POSITION every 10 s, in µs
+            ),
+            commands,
+        )
+        assertEquals(148u, AutopilotVersion.id, "message ids from common.xml / standard.xml")
+        assertEquals(242u, HomePosition.id)
+        assertTrue(fc.sent.first() is RequestDataStream, "telemetry streams are asked for first")
+    }
+
+    @Test
+    fun homeAndVersionReachTheState() = runTest {
+        val repo = repository()
+        link.value = LinkState.Connected(udp, copter, LinkStats())
+        runCurrent()
+        frame(HomePosition(latitude = -353632610, longitude = 1491652300, altitude = 584_000))
+        frame(AutopilotVersion(flightSwVersion = 0x040603FFu))
+        runCurrent()
+        assertEquals(Home(LatLon(-35.363261, 149.165230), 584.0), repo.state.value.home)
+        assertEquals("4.6.3", repo.state.value.firmwareVersion)
     }
 
     @Test
@@ -93,12 +127,4 @@ class VehicleRepositoryTest {
         assertNull(repo.state.value.groundspeedMs)
         assertNull(repo.state.value.flightMode)
     }
-
-    private data class TestFrame(
-        override val systemId: UByte,
-        override val componentId: UByte,
-        override val message: MavMessage<*>,
-        override val sequence: UByte = 0u,
-        override val checksum: UShort = 0u,
-    ) : MavFrame<MavMessage<*>>
 }
