@@ -31,15 +31,17 @@ import com.kft.gcs.ui.map.MapView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.compose.KoinApplication
+import org.koin.core.module.Module
 import org.koin.dsl.koinConfiguration
 
 /**
  * Root composable shared by the Android and desktop shells: starts Koin, applies the theme, and hosts navigation.
+ * [platformModule] carries what only a shell can build, today the platform's serial ports (Android's need a Context).
  * Routes live here, not in features, because features must never import each other (CLAUDE.md §2).
  */
 @Composable
-fun App() {
-    KoinApplication(configuration = koinConfiguration { modules(allModules) }) {
+fun App(platformModule: Module) {
+    KoinApplication(configuration = koinConfiguration { modules(allModules + platformModule) }) {
         MaterialTheme(colorScheme = KftColors.dark) {
             Surface(Modifier.fillMaxSize()) {
                 val nav = rememberNavController()

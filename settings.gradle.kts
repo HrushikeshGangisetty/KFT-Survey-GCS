@@ -17,6 +17,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // usb-serial-for-android is published only on JitPack. Limited to its group, so no other dependency can
+        // ever be resolved from JitPack by accident.
+        maven("https://jitpack.io") { content { includeGroup("com.github.mik3y") } }
     }
 }
 

@@ -25,6 +25,12 @@ sealed interface LinkConfig {
         init { requirePort(port); require(host.isNotBlank()) { "host is blank" } }
         override val summary get() = "TCP $host:$port"
     }
+
+    /** A serial port: a telemetry radio or the flight controller's own USB. See [STANDARD_BAUD_RATES]. */
+    data class Serial(val port: String, val baud: Int = 57600) : LinkConfig {
+        init { require(port.isNotBlank()) { "port is blank" }; require(baud > 0) { "baud must be positive: $baud" } }
+        override val summary get() = "Serial $port @ $baud"
+    }
 }
 
 private fun requirePort(port: Int) = require(port in 1..65535) { "port out of range: $port" }

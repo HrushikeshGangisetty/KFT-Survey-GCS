@@ -72,9 +72,9 @@ class ConnectionManager internal constructor(
     private val timeSource: TimeSource.WithComparableMarks,
     podStatus: StateFlow<PodStatus>,
 ) {
-    /** Production constructor: real UDP/TCP transports doing their blocking I/O on [ioDispatcher]. */
-    constructor(scope: CoroutineScope, ioDispatcher: CoroutineDispatcher, podStatus: StateFlow<PodStatus>) :
-        this(scope, { config -> openTransportConnection(config, ioDispatcher) }, TimeSource.Monotonic, podStatus)
+    /** Production constructor: real UDP/TCP/serial transports doing their blocking I/O on [ioDispatcher]. */
+    constructor(scope: CoroutineScope, ioDispatcher: CoroutineDispatcher, podStatus: StateFlow<PodStatus>, serialPorts: SerialPorts) :
+        this(scope, { config -> openTransportConnection(config, ioDispatcher, serialPorts) }, TimeSource.Monotonic, podStatus)
 
     private val _state = MutableStateFlow<LinkState>(LinkState.Disconnected)
     val state: StateFlow<LinkState> = _state.asStateFlow()

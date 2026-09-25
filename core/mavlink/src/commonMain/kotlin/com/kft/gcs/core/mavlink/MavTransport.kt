@@ -47,7 +47,7 @@ internal class TransportMavConnection(private val transport: MavTransport) : Abs
 }
 
 /** Builds the platform transport for [config], wrapped for coroutines. Socket code lives in `jvmCommonMain`. */
-internal fun openTransportConnection(config: LinkConfig, ioDispatcher: CoroutineDispatcher): CoroutinesMavConnection =
-    TransportMavConnection(createTransport(config)).asCoroutine(ioDispatcher)
+internal fun openTransportConnection(config: LinkConfig, ioDispatcher: CoroutineDispatcher, serialPorts: SerialPorts): CoroutinesMavConnection =
+    TransportMavConnection(createTransport(config, serialPorts)).asCoroutine(ioDispatcher)
 
-internal expect fun createTransport(config: LinkConfig): MavTransport
+internal expect fun createTransport(config: LinkConfig, serialPorts: SerialPorts): MavTransport

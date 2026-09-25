@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +35,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kft.gcs.core.mavlink.STANDARD_BAUD_RATES
+import com.kft.gcs.core.mavlink.SerialPortInfo
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
@@ -62,6 +65,9 @@ fun ConnectionsRoute(viewModel: ConnectionsViewModel = koinViewModel()) {
             onFormHostChanged = viewModel::onFormHostChanged,
             onFormPortChanged = viewModel::onFormPortChanged,
             onSaveProfile = viewModel::onSaveProfileClicked,
+            onFormSerialPortChanged = viewModel::onFormSerialPortChanged,
+            onFormBaudChanged = viewModel::onFormBaudChanged,
+            onRefreshSerialPorts = viewModel::onRefreshSerialPortsClicked,
         )
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
@@ -79,6 +85,9 @@ fun ConnectionsScreen(
     onFormHostChanged: (String) -> Unit,
     onFormPortChanged: (String) -> Unit,
     onSaveProfile: () -> Unit,
+    onFormSerialPortChanged: (String) -> Unit,
+    onFormBaudChanged: (Int) -> Unit,
+    onRefreshSerialPorts: () -> Unit,
 ) {
     // One scroll container for everything; the profile list is short, so it's a plain Column, not a LazyColumn
     // (a LazyColumn inside a vertical scroll crashes on an unbounded height).
@@ -87,7 +96,10 @@ fun ConnectionsScreen(
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val profiles = @Composable { mod: Modifier -> ProfileList(state.profiles, onConnect, onDelete, mod) }
             val form = @Composable { mod: Modifier ->
-                NewProfileForm(state.form, onFormKindChanged, onFormNameChanged, onFormHostChanged, onFormPortChanged, onSaveProfile, mod)
+                NewProfileForm(
+                    state.form, state.serialPorts, onFormKindChanged, onFormNameChanged, onFormHostChanged,
+                    onFormPortChanged, onFormSerialPortChanged, onFormBaudChanged, onRefreshSerialPorts, onSaveProfile, mod,
+                )
             }
             if (maxWidth > 720.dp) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -148,17 +160,21 @@ private fun ProfileList(rows: List<ProfileRow>, onConnect: (String) -> Unit, onD
 @Composable
 private fun NewProfileForm(
     form: ProfileForm,
+    serialPorts: List<SerialPortInfo>,
     onKindChanged: (LinkKind) -> Unit,
     onNameChanged: (String) -> Unit,
     onHostChanged: (String) -> Unit,
     onPortChanged: (String) -> Unit,
+    onSerialPortChanged: (String) -> Unit,
+    onBaudChanged: (Int) -> Unit,
+    onRefreshSerialPorts: () -> Unit,
     onSave: () -> Unit,
     modifier: Modifier,
 ) {
     Card(modifier) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("New profile", style = MaterialTheme.typography.titleSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LinkKind.entries.forEach { kind ->
                     FilterChip(selected = form.kind == kind, onClick = { onKindChanged(kind) }, label = { Text(kind.label) })
                 }
@@ -167,12 +183,36 @@ private fun NewProfileForm(
             if (form.needsHost) {
                 OutlinedTextField(form.host, onHostChanged, Modifier.fillMaxWidth(), label = { Text("Host") }, singleLine = true)
             }
-            OutlinedTextField(
-                form.port, onPortChanged, Modifier.fillMaxWidth(), label = { Text("Port") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                isError = form.error != null,
-                supportingText = form.error?.let { { Text(it) } },
-            )
+            if (form.isSerial) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Device", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                    TextButton(onClick = onRefreshSerialPorts) { Text("Refresh") }
+                }
+                if (serialPorts.isEmpty()) Text("No serial ports found. Plug in the radio or flight controller, then Refresh.", style = MaterialTheme.typography.bodySmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    serialPorts.forEach { p ->
+                        FilterChip(
+                            selected = form.serialPort == p.name,
+                            onClick = { onSerialPortChanged(p.name) },
+                            label = { Text(if (p.description.isBlank()) p.name else "${p.name} · ${p.description}") },
+                        )
+                    }
+                }
+                Text("Baud rate (57600 for a SiK radio; ignored over the FC's own USB)", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    STANDARD_BAUD_RATES.forEach { baud ->
+                        FilterChip(selected = form.baud == baud, onClick = { onBaudChanged(baud) }, label = { Text("$baud") })
+                    }
+                }
+                form.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            } else {
+                OutlinedTextField(
+                    form.port, onPortChanged, Modifier.fillMaxWidth(), label = { Text("Port") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = form.error != null,
+                    supportingText = form.error?.let { { Text(it) } },
+                )
+            }
             Button(onClick = onSave, modifier = Modifier.align(Alignment.End)) { Text("Save profile") }
         }
     }

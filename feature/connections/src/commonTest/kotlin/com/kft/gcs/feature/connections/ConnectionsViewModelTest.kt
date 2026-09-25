@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.LinkStats
+import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
 import kotlin.test.AfterTest
@@ -15,6 +16,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
@@ -33,6 +35,9 @@ private class FakeConnectionsRepository : ConnectionsRepository {
     override fun deleteProfile(id: String) = profiles.update { list -> list.filterNot { it.id == id } }
     override fun connect(profileId: String) { connected += profileId }
     override fun disconnect() { disconnects++ }
+
+    var ports = listOf(SerialPortInfo("COM7", "Silicon Labs CP210x"))
+    override fun serialPorts() = ports
 }
 
 class ConnectionsViewModelTest {
@@ -87,6 +92,37 @@ class ConnectionsViewModelTest {
             val saved = awaitItem()
             assertEquals("TCP 192.168.4.1:5760", saved.profiles.last().name, "a blank name falls back to the summary")
             assertEquals(ProfileForm(), saved.form)
+        }
+    }
+
+    @Test
+    fun serialProfileNeedsAPortAndKeepsTheChosenBaud() = runTest(dispatcher) {
+        val vm = ConnectionsViewModel(repository)
+        backgroundScope.launch { vm.state.collect {} } // the screen's collector; values are read with runCurrent()
+        runCurrent()
+        assertEquals(listOf("COM7"), vm.state.value.serialPorts.map { it.name }, "ports listed at start")
+
+        vm.onFormKindChanged(LinkKind.SERIAL)
+        vm.onSaveProfileClicked()
+        runCurrent()
+        assertEquals("Pick a serial port (plug it in, then Refresh)", vm.state.value.form.error)
+
+        vm.onFormSerialPortChanged("COM7")
+        vm.onFormBaudChanged(115200)
+        vm.onSaveProfileClicked()
+        runCurrent()
+        assertEquals(LinkConfig.Serial("COM7", 115200), repository.profiles.value.last().config)
+        assertEquals("Serial COM7 @ 115200", vm.state.value.profiles.last().name)
+    }
+
+    @Test
+    fun refreshListsNewlyPluggedPorts() = runTest(dispatcher) {
+        val vm = ConnectionsViewModel(repository)
+        vm.state.test {
+            skipItems(1)
+            repository.ports = repository.ports + SerialPortInfo("COM9", "FTDI")
+            vm.onRefreshSerialPortsClicked()
+            assertEquals(listOf("COM7", "COM9"), awaitItem().serialPorts.map { it.name })
         }
     }
 

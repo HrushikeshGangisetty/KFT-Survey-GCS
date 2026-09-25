@@ -8,6 +8,6 @@ import org.koin.dsl.module
 
 /** Connections bindings. One repository for the app, a fresh ViewModel per screen instance. */
 val connectionsModule = module {
-    single<ConnectionsRepository> { DefaultConnectionsRepository(get()) }
+    single<ConnectionsRepository> { DefaultConnectionsRepository(get(), get()) }
     viewModelOf(::ConnectionsViewModel)
 }

@@ -3,6 +3,7 @@ package com.kft.gcs.core.vehicle
 import com.kft.gcs.core.mavlink.ConnectionManager
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.PodStatus
+import com.kft.gcs.core.mavlink.SerialPorts
 import kotlin.test.Test
 import com.kft.gcs.core.geo.LatLon
 import kotlin.test.assertEquals
@@ -31,7 +32,7 @@ class SitlCheck {
     private fun withSitl(block: suspend (ConnectionManager, VehicleRepository, MissionRepository) -> Unit) {
         val (host, port) = target?.split(":") ?: return println("KFT_SITL not set: SITL check skipped")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod))
+        val manager = ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), SerialPorts())
         val vehicles = VehicleRepository(scope, manager.frames, manager.state, manager.gateway)
         val missions = DefaultMissionRepository(manager.frames, manager.state, vehicles.state, manager.gateway)
         try {

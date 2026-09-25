@@ -696,3 +696,84 @@ Read   ──▶ MissionRepository.download ──▶ fromMissionItems(mission.i
 - On the ground, the home marker sits under the vehicle arrow. That's expected (the vehicle is drawn on top).
 - **Not checked:** touch dragging on the Android emulator or tablet (same code path per F4). It's in the Pass 10 tablet checklist.
 - **Next: Pass 9, serial transports.**
+
+---
+
+## Pass 9 — W2-4: Serial transports (desktop jSerialComm, Android USB-OTG) (2026-09-25)
+
+### What changed
+- **`core/mavlink`**:
+  - `SerialTransport.kt` (new, common):
+    - `SerialPortInfo`, and `expect class SerialPorts` (list and open).
+    - An internal `SerialLink` seam (read with a 200 ms timeout, write, close).
+    - `SerialTransport` (a `MavTransport` over a `SerialLink`), and `STANDARD_BAUD_RATES`.
+  - `SerialPorts.jvm.kt` (new): jSerialComm. `SerialPorts.android.kt` (new): usb-serial-for-android, plus the USB permission request.
+  - `LinkConfig.Serial(port, baud)`.
+  - `createTransport` takes the platform's `SerialPorts`, as does `ConnectionManager`'s production constructor, and `mavlinkModule` gets it from Koin.
+  - `build.gradle.kts`: jSerialComm on `jvmMain`, usb-serial-for-android on `androidMain` (both were already in the version catalog).
+- **`settings.gradle.kts`**: the JitPack repository, limited to `com.github.mik3y`.
+- **`app/shared`**:
+  - `App(platformModule)`.
+  - `DesktopApp` passes `SerialPorts()`, and a new `AndroidApp(context)` passes `SerialPorts(context)`.
+- **`app/android`**: `MainActivity` hosts `AndroidApp(this)`. The manifest has `uses-feature usb.host` with `required="false"`.
+- **`feature/connections`**:
+  - A "Serial" link kind.
+  - Device chips with Refresh, and baud-rate chips (9600 … 921600, default 57600).
+  - Form validation.
+  - `ConnectionsRepository.serialPorts()`.
+- **Tests**: `SerialTransportTest` (7), `DesktopSerialPortsTest` (2), and `ConnectionsViewModelTest` (+2).
+
+### How it works
+```
+Links: Serial · COM7 · 57600 ──save──▶ LinkConfig.Serial("COM7", 57600) ──connect──▶ ConnectionManager
+    reconnect loop ──▶ createTransport(config, serialPorts) ──▶ SerialTransport { serialPorts.open("COM7", 57600) }
+                                                                   │ open() inside MavTransport.open():
+                                                                   │   desktop: jSerialComm 8N1, semi-blocking 200 ms reads
+                                                                   │   Android: find USB driver → no permission? request it, throw
+                                                                   │            (the loop retries every ≤5 s; after "Allow" it opens)
+                                                                   ▼
+                    BufferedMavConnection (framing) ◀── Source: poll read(200 ms) until bytes, or closed → IOException
+                                                    ──▶ Sink: one write() per frame (flush)
+```
+
+### Engineering learnings
+- **One seam, three implementations.** `SerialLink` is three methods. Everything with logic (polling, close handling, one write per frame) is in the common `SerialTransport` and tested against a fake. The platform files are thin library calls, so the untested surface is as small as it can be. That's the "interface on purpose, for testing" CLAUDE.md allows.
+- **Poll with a timeout instead of blocking.** Neither library reliably wakes a blocked read when another thread closes the port. A 200 ms read timeout plus a `closed` flag means the reader notices a disconnect within 0.2 s, and the connection manager's existing reconnect loop handles the rest.
+- **Permission as a retryable error.** Android asks for USB permission asynchronously. Instead of a BroadcastReceiver with its own lifecycle, `open()` requests permission and throws "Waiting for USB permission". The reconnect loop (1, 2, 4, 5 s…) calls `open()` again, which succeeds once `hasPermission` is true. There's no new state and no new code path.
+- **expect/actual class with different constructors.** `SerialPorts` needs a `Context` on Android and nothing on desktop. The expect class declares no constructor, so each shell builds its own and gives it to Koin through `App(platformModule)`. `AndroidApp` mirrors `DesktopApp`, so the Android shell never imports Koin.
+- **Repository hygiene.** JitPack is added with `content { includeGroup("com.github.mik3y") }`, so it can only ever serve that one library. An unrestricted extra repository is a supply-chain hole.
+- **ArduPilot facts (S10):**
+  - SiK radios and ArduPilot's `SERIALn_BAUD = 57` default to 57600 8N1, which is our default.
+  - Over the FC's native USB (CDC-ACM) the baud rate is ignored.
+  - Some CDC flight controllers wait for DTR before sending, so the Android adapter raises it.
+
+**Ponytail review:** one cut, a `SerialFormEvents` holder class, inlined as three lambdas like every other event on that screen. Kept: the `SerialLink` seam (testing), and `STANDARD_BAUD_RATES` (the picker).
+
+### Safety
+- No allowlist change. Serial is only another byte pipe under the same `MavTxGateway`, and nothing new can write to it: `SerialLink`/`SerialTransport` are `internal` to `core:mavlink`, like the socket transports.
+
+### What to look at
+1. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/SerialTransport.kt`: the seam and the polling source.
+2. `core/mavlink/src/androidMain/kotlin/com/kft/gcs/core/mavlink/SerialPorts.android.kt`: USB permission via the reconnect loop.
+3. `feature/connections/src/commonMain/kotlin/com/kft/gcs/feature/connections/ConnectionsUiState.kt`: `toConfigOrError` for serial.
+
+### Tests
+- `SerialTransportTest` (7, common, fake port):
+  - Bytes pass through after read timeouts.
+  - Exactly one `write()` per flush, so a frame isn't split.
+  - `close()` makes the pending read throw `IOException`.
+  - A detached device throws `IOException`.
+  - Open failures surface from `open()` (which the reconnect loop retries).
+  - A real MAVLink v2 heartbeat encoded by mavlink-kotlin decodes through the serial transport.
+  - `LinkConfig.Serial` validation and summary.
+- `DesktopSerialPortsTest` (2, real jSerialComm): a missing port gives a readable `IOException` naming the port, and listing ports doesn't crash.
+- `ConnectionsViewModelTest` (+2): Serial requires a device, and the chosen baud is saved (`Serial COM7 @ 115200`). Refresh shows a newly plugged port.
+- `./gradlew check` and `:app:android:assembleDebug` pass.
+- **Real hardware: yours** (see the tablet checklist after Pass 10):
+  - Desktop: Links → Serial → pick the radio's COM port → 57600 → Save → Connect.
+  - Android: plug the radio or FC in over OTG → Refresh → pick it → Connect → tap **Allow** → it connects on the next retry, within 5 s.
+
+### Open questions / next
+- Desktop: the device list comes from jSerialComm's enumeration, so a Bluetooth SPP pairing appears as its COM port (spec §2.1). Not tried.
+- Android: an OTG device plugged in *after* connecting isn't auto-detected; tap Refresh. Auto-launch on attach (a device filter in the manifest) is a P1 nicety.
+- **Next: Pass 10, the Plane SITL profile and the week 2–3 exit check.**

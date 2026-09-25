@@ -4,6 +4,8 @@
     <!-- UDP/TCP links to SITL, network radios and companion computers -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- USB-OTG serial (telemetry radio or the flight controller's USB). Not required: tablets without host mode still install. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:label="@string/app_name"

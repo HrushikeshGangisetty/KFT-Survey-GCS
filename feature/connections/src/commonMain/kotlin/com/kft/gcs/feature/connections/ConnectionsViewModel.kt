@@ -32,10 +32,17 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
 
     private val form = MutableStateFlow(ProfileForm())
 
+    // Listed once at start and on Refresh, not polled: a USB device appearing is something the user just did.
+    private val serialPorts = MutableStateFlow(repository.serialPorts())
+
     val state: StateFlow<ConnectionsUiState> =
-        combine(repository.profiles, repository.linkState, form, ::buildUiState)
+        combine(repository.profiles, repository.linkState, form, serialPorts, ::buildUiState)
             // WhileSubscribed(5 s): keep going through a rotation or a quick tab switch, stop if the screen is gone.
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), buildUiState(emptyList(), LinkState.Disconnected, ProfileForm()))
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                buildUiState(emptyList(), LinkState.Disconnected, ProfileForm(), serialPorts.value),
+            )
 
     private val _effects = Channel<ConnectionsEffect>(Channel.BUFFERED)
     val effects: Flow<ConnectionsEffect> = _effects.receiveAsFlow()
@@ -67,6 +74,14 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
     fun onFormHostChanged(host: String) = form.update { it.copy(host = host, error = null) }
 
     fun onFormPortChanged(port: String) = form.update { it.copy(port = port, error = null) }
+
+    fun onFormSerialPortChanged(name: String) = form.update { it.copy(serialPort = name, error = null) }
+
+    fun onFormBaudChanged(baud: Int) = form.update { it.copy(baud = baud, error = null) }
+
+    fun onRefreshSerialPortsClicked() {
+        serialPorts.value = repository.serialPorts()
+    }
 
     fun onSaveProfileClicked() {
         val current = form.value

@@ -3,6 +3,8 @@ package com.kft.gcs.feature.connections
 import com.kft.gcs.core.mavlink.ConnectionManager
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.LinkState
+import com.kft.gcs.core.mavlink.SerialPortInfo
+import com.kft.gcs.core.mavlink.SerialPorts
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,10 +24,16 @@ interface ConnectionsRepository {
     fun deleteProfile(id: String)
     fun connect(profileId: String)
     fun disconnect()
+
+    /** Serial ports present right now (COM ports on desktop, USB-OTG devices on Android). */
+    fun serialPorts(): List<SerialPortInfo>
 }
 
-/** Profiles held in memory, link delegated to the app-wide [ConnectionManager]. */
-class DefaultConnectionsRepository(private val manager: ConnectionManager) : ConnectionsRepository {
+/** Profiles held in memory, link delegated to the app-wide [ConnectionManager], ports listed by [SerialPorts]. */
+class DefaultConnectionsRepository(
+    private val manager: ConnectionManager,
+    private val ports: SerialPorts,
+) : ConnectionsRepository {
 
     // ponytail: profiles are in memory only and reset on restart. Persist them with the settings storage pass.
     private var nextId = 0
@@ -48,6 +56,8 @@ class DefaultConnectionsRepository(private val manager: ConnectionManager) : Con
     }
 
     override fun disconnect() = manager.disconnect()
+
+    override fun serialPorts() = ports.list()
 
     private fun profile(name: String, config: LinkConfig) = ConnectionProfile("p${nextId++}", name, config)
 }
