@@ -57,6 +57,13 @@ We don't need MapComposeMP (option B) or the WebView (option C) for P0.
 - **F9: Esri source.** Use `World_Imagery` (256 px JPEG) from `ibasemaps-api.arcgis.com`, not Static Basemap Tiles, which only has street/reference styles and an imagery *labels* overlay (`arcgis/imagery/labels`, usable later for a hybrid view). `00-maps-decision.md` §2.2 assumed a 512 px static imagery style, and this finding supersedes that.
 - **F8: Attribution.** The default overlay shows the attributions of every source in the style. With the permanent-Liberty approach (F1), the OpenFreeMap credit stays visible under satellite. That's acceptable, but section 04's attribution control should read `TileSourceConfig.attribution` for the visible sources only.
 
+## GS-2 follow-up: crash when the map leaves composition (Pass 5.1, 2026-09-25)
+
+- **Finding (F10):** on desktop (Vulkan, maplibre-compose 0.17.0), disposing a `MaplibreMap` and creating a new one crashes the JVM with `0xC0000374` (native heap corruption). In the app, every Fly→Links switch disposed the map: the log shows `Host surface lost; closing the render session and waiting for a new one`. Reproduced on the dev laptop: the first Fly→Links→Fly survived (a second map session was created), and the second Fly→Links killed the process. Resize and minimise don't dispose the map, so they were never affected. The spike missed this because it had a single screen.
+- **Fix:** `App()` composes the Fly screen (and so the one `MapView`) once, **below** the `NavHost`, and never removes it. The Fly route in the `NavHost` is empty, and other tabs cover the map with an opaque M3 `Surface`, which also blocks clicks. The map session now lives as long as the window (one session per run in the log).
+- **Verified:** 24 Fly↔Links switches with no crash and no `Host surface lost`. Then, connected to ArduCopter SITL (TCP 5760): Fly→Links→connect→Fly, plus 10 more switches while telemetry streamed, again with no crash. The vehicle and HUD were live on return.
+- **Rule for later screens (Plan):** don't give a screen its own `MapView`. Share the one hoisted map, or accept this crash. Not fixed: the underlying bug in maplibre-compose, which should be reported upstream with a minimal repro (dispose and recreate a `MaplibreMap` twice). Clean disposal was not attempted, because the hoist worked.
+
 ## Dev-environment note (not a map finding)
 
 On this laptop, Java NIO fails with `Unable to establish loopback connection`: it can't create its AF_UNIX pipe in the `%TEMP%` path, which uses the `HRUSHI~1` short name. Gradle's launcher is affected, so every build fails. Workaround: `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:\Users\Hrushikesh`. Android Studio isn't affected. The packaged app didn't hit it.

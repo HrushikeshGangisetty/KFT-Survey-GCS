@@ -1,5 +1,6 @@
 package com.kft.gcs.app
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
@@ -39,9 +40,18 @@ fun App() {
                 // safeDrawing: Android 15 draws edge-to-edge, so without this the UI sits under the status bar (ADR-001 F3).
                 Row(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     AppRail(nav)
-                    NavHost(nav, startDestination = START.route) {
-                        composable(Destination.FLY.route) { FlyRoute() }
-                        composable(Destination.CONNECTIONS.route) { ConnectionsRoute() }
+                    Box(Modifier.weight(1f)) {
+                        // The Fly screen (and its map) is composed once, below the NavHost, and never leaves
+                        // composition. Other tabs cover it with an opaque Surface instead of replacing it.
+                        // Why: tearing down a MapLibre desktop session and creating a new one corrupts the native
+                        // heap in maplibre-compose 0.17.0 (0xC0000374 on the second Fly→Links). See ADR-001, GS-2.
+                        FlyRoute()
+                        NavHost(nav, startDestination = START.route) {
+                            // Empty on purpose: it draws nothing and handles no input, so the Fly layer shows through.
+                            composable(Destination.FLY.route) {}
+                            // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
+                            composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
+                        }
                     }
                 }
             }

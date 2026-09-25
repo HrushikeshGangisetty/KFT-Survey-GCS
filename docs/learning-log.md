@@ -341,3 +341,48 @@ FlyScreen ◀── StateFlow<FlyUiState> ◀── FlyViewModel: combine(Vehicl
 - `ponytail:` Esri on Android waits for the key-distribution decision (GS-1). The desktop runtime is Windows x64 only. The battery warning is a fixed 20 %.
 - The vehicle arrow's heading is a `const` rebuilt at 4 Hz. That's fine at this rate; a data-driven `iconRotate` would be the upgrade if we draw many vehicles.
 - **Next: Pass 6, the command protocol.** COMMAND_LONG with ACK/retry/timeout as a tested state machine, then the Fly actions: arm/disarm, takeoff, mode change, RTL, land. After that comes mission upload/download (week 2–3 exit: arm → takeoff → mission → RTL in SITL).
+
+---
+
+## Pass 5.1 — W1-5 follow-up: map crash on navigation, Android app id (2026-09-25)
+
+### What changed
+- `app/shared/.../App.kt`: the Fly screen is composed once, under the `NavHost`, and never disposed. The Fly route is now empty, and Links draws on an opaque `Surface` over the map.
+- `app/android/build.gradle.kts`: `applicationId = "com.kft.survey"`, and debug keeps the `.dev` suffix (`com.kft.survey.dev`). The existing `com.kft.gcs` app is untouched.
+- `docs/decisions/ADR-001-map-engine.md`: new "GS-2 follow-up" section (finding F10 and the fix).
+
+### How it works
+```
+Row ─ AppRail
+    └ Box ─ FlyRoute()            ← always composed; owns the one MapView / MapLibre session
+          └ NavHost (on top)
+              ├ "fly"         → {}                        (draws nothing, so Fly shows through)
+              └ "connections" → Surface { ConnectionsRoute() }  (opaque: hides the map, blocks its clicks)
+```
+Before this pass, the NavHost swapped Fly out when you left it. That disposed the `MaplibreMap`, so MapLibre closed its render session, and coming back created a new one. On desktop, the second teardown corrupts the native heap (`0xC0000374`). Now navigation only changes what draws on top, and the map session lives as long as the window.
+
+### Engineering learnings
+- **Composition lifetime is resource lifetime.** In Compose, "leaving the screen" means leaving composition, and that disposes everything the screen `remember`ed, native GPU sessions included. *Why hoist rather than dispose cleanly:* clean disposal depends on getting maplibre-compose's internal teardown order right (a library bug we can't fix from outside). Never disposing takes the whole failure path away, and it also keeps camera, tiles and track when you come back.
+- **Z-order instead of routing.** Siblings in a `Box` stack in declaration order. Compose passes a pointer event to the layer below when the top layer has no input handler at that point, so the empty Fly route lets the map receive drags. M3 `Surface` deliberately blocks clicks, so Links can't pan the map through itself.
+- **Trade-off:** the hidden map keeps receiving telemetry and may redraw at 4 Hz while you're on Links. That's cheap for one vehicle, and it's the price of never disposing.
+- **ViewModel scope moved.** `FlyRoute()` now runs outside the NavHost, so `koinViewModel()` uses the window's/activity's `ViewModelStoreOwner` instead of a back-stack entry. The track and camera already survived tab switches (saveState); now they're simply never torn down.
+
+**Ponytail review:** one cut, a single-use `Covering {}` helper inlined into the `NavHost`. Nothing else to remove.
+
+### What to look at
+1. `app/shared/src/commonMain/kotlin/com/kft/gcs/app/App.kt:43`: the hoist, and why.
+2. `docs/decisions/ADR-001-map-engine.md`, "GS-2 follow-up": the finding, the reproduction, and the rule for the Plan screen.
+
+### Tests
+- `./gradlew check` passes. `:app:android:assembleDebug` / `assembleRelease` produce `com.kft.survey.dev` / `com.kft.survey` (from `output-metadata.json`).
+- **No new unit test.** The bug is in native rendering and needs a GPU window to show up. The existing tests don't create a MapLibre window, and a headless Compose test wouldn't reproduce it. The manual repro below is the proof.
+- **Manual, dev laptop (Vulkan, RTX 4050):**
+  - *Before the fix:* Fly→Links→Fly→Links → process died with `0xC0000374`, after `Host surface lost` in the log. Reproduced.
+  - *After the fix:* 24 Fly↔Links switches, then panned the map: no crash, `Host surface lost` count 0, one map runtime created per run.
+  - *SITL (ArduCopter.exe from Mission Planner's `sitl` folder, TCP 5760, no MAVProxy):* Fly→Links→Connect "SITL (TCP 5760)"→Fly, where the arrow at CMAC and the HUD were live (Stabilize, 12.6 V, RTK fixed · 10 sats). Then 10 more switches while telemetry streamed, and zoomed: no crash. Closing the window exited cleanly (exit 0).
+- **Not checked:** the Android emulator. The same layering applies there; the MapLibre surface is covered by a Compose `Surface`, which should be fine, but it's untested.
+
+### Open questions / next
+- Report the dispose/recreate crash upstream to maplibre-compose, with a minimal repro.
+- **Plan screen (W2):** it must reuse the one hoisted map (for example, the map layer takes overlays from whichever tab is active), not create a second `MapView`. That design goes in the Plan pass.
+- **Next: Pass 6, the command protocol.** Waiting for Hrushikesh's go-ahead.

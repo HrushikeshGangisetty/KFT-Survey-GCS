@@ -10,7 +10,8 @@ android {
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.kft.gcs"
+        // Not "com.kft.gcs": the existing KFT GCS (v1.3.x) owns that id on field tablets, and this app installs beside it.
+        applicationId = "com.kft.survey"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
@@ -18,8 +19,7 @@ android {
     }
 
     buildTypes {
-        // The existing KFT GCS (v1.3.x) already uses "com.kft.gcs" on field tablets. The suffix lets debug builds
-        // install next to it instead of being refused as a downgrade (or replacing it). Release id: open question.
+        // com.kft.survey.dev: a dev build installs next to the release build instead of replacing it.
         debug { applicationIdSuffix = ".dev" }
     }
 
