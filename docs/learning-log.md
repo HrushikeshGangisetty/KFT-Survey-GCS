@@ -1119,3 +1119,130 @@ first vehicle heartbeat on a link (or a heartbeat after a gap > 6 s; at most one
 - `ponytail:` other float-carrying messages (for example PARAM_SET of a NaN) still go through the library encoder. Only COMMAND_LONG needed raw bits. Extend `BitExact…` if another message ever carries bit patterns.
 - GS-9 and the firmware findings above.
 - **Next: Pass 13, the survey maths.**
+
+---
+
+## Pass 13 — Survey maths in `core:planning` (2026-09-25)
+
+### What changed
+- **`core/geo/LocalProjection.kt`** (new): `LocalProjection` and `LocalPoint`, a flat metre map around an origin (the "local projection" `core:geo` was always meant to hold). `Geodesy.kt`'s KDoc now points to it.
+- **`core/planning/Camera.kt`** (new): `Camera`, `CameraOrientation`, `Footprint`; `gsdM`, `altitudeForGsdM`, `footprint`, `lineSpacingM`, `triggerDistanceM`.
+- **`core/planning/SurveyGrid.kt`** (new):
+  - `GridSpec`, `EntryCorner`, `Turnaround.Copter` / `Turnaround.Plane`, `Pass`, `SurveyGrid`, `SurveyStats`.
+  - `buildSurveyGrid`, `surveyStats`, `polygonAreaM2`, `planeTurnRadiusM`, `planeTurnM`.
+- **Tests**: `LocalProjectionTest` (5), `CameraTest` (5), `SurveyGridTest` (14).
+- Pure throughout: no I/O, coroutines, clocks or platform code (CLAUDE.md §2). Nothing outside `core:planning` uses it yet; the Plan screen's survey tool is the next step.
+
+### How it works: the maths in plain language
+**1. What one photo sees (pinhole camera).** Light through the lens makes two similar triangles: sensor ↔ lens and ground ↔ lens. So ground width / height = sensor width / focal length.
+- Footprint across = sensor width × height / focal length. The same for the other side with the sensor height.
+- **GSD** (ground sample distance, how much ground one pixel covers) = footprint / pixels = height × sensor width / (focal length × image width).
+- Turned round: height for a wanted GSD = GSD × focal length × image width / sensor width.
+- *Landscape* means the image's long side lies across the flight line. Portrait swaps the two footprints.
+
+**2. How far apart the lines and photos are.** Overlap is the fraction of each photo that the next one repeats, so only (1 − overlap) of it is new ground.
+- Line spacing = footprint across × (1 − side overlap).
+- Trigger distance = footprint along × (1 − front overlap).
+
+**3. Laying lines over the area.**
+1. Flatten the corners onto a local map in metres.
+2. Turn the map so the lines run straight "up" (the grid angle: 0° = north–south lines, 90° = east–west).
+3. Measure the area's width sideways to the lines. Use n = ⌈width / spacing⌉ lines, exactly one spacing apart, centred.
+   - The outer lines end up at most half a spacing from the edge. Each photo reaches half a footprint sideways, and half a footprint is always more than half a spacing, so the edges are covered.
+   - Anything narrower than one spacing gets a single line down the middle.
+4. Cut each line where it crosses the area's edges. Sorted crossings pair up as in → out, in → out. A concave area can give one line two or more pieces.
+5. Fly them back and forth (boustrophedon), starting from the chosen corner.
+6. Add the run-in/run-out outside the area.
+
+**4. Turning, Copter vs Plane.**
+- A **copter** stops, turns and hops straight to the next line. Its optional *extension* is straight flight before and after the area, so it's at speed for the first photo.
+- A **plane** can't stop. It flies a *lead-in* before the area (to settle after the turn) and a *lead-out* after, then turns with radius r = v² / (g·tan bank).
+  - Lines at least 2r apart: a U-turn, πr plus the straight bit across.
+  - Lines closer than 2r: the plane has to swing out the other way and loop back (a "bulb" turn), r·(π + 4γ) with cos γ = (spacing + 2r) / 4r.
+  - The two formulas give the same length at exactly 2r, so the cost has no jump. Just below 2r the bulb grows quickly (like a square root).
+
+**5. Stats.**
+- Area: the shoelace formula on the flat map.
+- Photos per pass: ⌊length / trigger distance⌋ + 1. ArduPilot's distance trigger fires once when it's switched on, then every d metres.
+- Distance: passes + run-ins/outs + the legs between passes.
+- Flight time: distance / speed.
+
+### Worked example (it's the test `rectangleWithNorthSouthLines`; check it by hand)
+DJI Phantom 4 Pro: sensor 13.2 × 8.8 mm, 5472 × 3648 px, focal length 8.8 mm. 100 m above ground, landscape, 70 % side / 80 % front overlap. Area 300 m east–west × 200 m north–south, north–south lines (grid angle 0), copter at 10 m/s.
+
+| Step | Sum | Result |
+|---|---|---|
+| GSD | 100 × 13.2 / (8.8 × 5472) = 1320 / 48 153.6 | **0.0274 m = 2.74 cm/px** |
+| Footprint across | 13.2 × 100 / 8.8 | **150 m** |
+| Footprint along | 8.8 × 100 / 8.8 | **100 m** |
+| Line spacing | 150 × (1 − 0.70) | **45 m** |
+| Trigger distance | 100 × (1 − 0.80) | **20 m** |
+| Lines | ⌈300 / 45⌉ = ⌈6.67⌉ | **7** |
+| Placement | 7 lines span 6 × 45 = 270 m; (300 − 270) / 2 = 15 m spare each side | x = **15, 60, 105, 150, 195, 240, 285 m** |
+| Photos | per 200 m line ⌊200 / 20⌋ + 1 = 11; × 7 | **77** |
+| Distance | 7 lines × 200 m + 6 hops × 45 m = 1400 + 270 | **1670 m** |
+| Flight time | 1670 / 10 | **167 s** (2 min 47 s) |
+| Area | 300 × 200 | **60 000 m² = 6 ha** |
+
+Coverage check: the outer line is 15 m from the edge, and each photo reaches 150 / 2 = 75 m sideways, so the edge is well covered.
+
+The same area as a **Plane** (turn radius 50 m, lead-in 30 m, lead-out 20 m):
+- Each pass is 30 + 200 + 20 = 250 m.
+- The lines are 45 m apart, less than 2r = 100 m, so each turn is a bulb: cos γ = (45 + 100) / 200 = 0.725, γ = 0.7595 rad, turn = 50 × (π + 4 × 0.7595) = 309.03 m.
+- The next line's lead-in starts 10 m further out than this line's lead-out ended (30 vs 20), so each leg is 319.03 m.
+- Total 7 × 250 + 6 × 319.03 = **3664.19 m**, over twice the copter's distance. That's the cost of a plane on narrow spacing (see Open questions).
+
+### Engineering learnings
+- **Flat map, then plain geometry.** Every step after the projection is 2-D school maths: rotation, line crossings, the shoelace formula. The projection is the only spherical part. Its error is tested against the haversine distance and bounded in its KDoc (≈ 2 cm per km at CMAC's latitude). *Why not work in lat/lon directly:* spacing is in metres, and a degree of longitude isn't a fixed number of metres.
+- **Scan-line crossing rule.** An edge counts when its ends are on different sides of the line, with "on the line" counted as below. A vertex exactly on a line is then counted once or not at all, so crossings always pair up. No special cases for touching a corner.
+- **Centred lines instead of lines from the edge.** Lines starting exactly on the boundary hit single vertices (a zero-length "line" at a triangle's tip). Centring keeps every line strictly inside the width, spacing is exactly what the overlap asks for, and coverage of the edges is guaranteed (above).
+- **Where we differ from QGC, on purpose** (checked in QGC master 2026-09, `src/MissionManager/CameraCalc.cc` and `SurveyComplexItem.cc`; read, not copied):
+  - The camera formulas are the same. QGC computes along-track footprint as image height × GSD, which assumes square pixels. We use the sensor height directly, which also handles non-square pixels.
+  - QGC starts its sweep lines at the bounding box's centre minus a margin, so the first line's distance from the edge is arbitrary. We centre them in the width.
+  - QGC's `_intersectLinesWithPolygon` keeps only the two furthest crossings, so over a concave notch it photographs the notch as if it were inside. We keep each inside piece as its own pass (`concaveAreaGetsSeparatePassesPerArm`).
+  - Entry corner and turnaround extension work the same way (reverse the line order and/or the first direction; extend the ends along the line).
+- **The Plane turn is a model, and it's labelled as one.** It's the shortest (Dubins) 180° turn between parallel lines, plus any along-line offset flown straight. Real ArduPlane turns (L1/TECS, wind) will be longer. It's for estimates and for noticing when spacing < 2r, not for flying.
+- **Hand values first, then code.** Every expected number in the tests was worked out on paper (and cross-checked in Python) before running the code. Two tests failed on the first run, and both were my tolerances, not the maths:
+  - The projection's diagonal error was 2 cm per km, not the 1 cm I'd guessed, and the KDoc's own error formula predicts exactly that.
+  - The plane-turn continuity check used too large a step for a function that rises like a square root.
+
+  Both tolerances now come from the formula, not a guess.
+
+**Ponytail review:** one cut, `MAX_LINES` made `internal` (only the grid uses it). Kept: `LocalProjection` in `core:geo` (the module table puts local projections there, and planning needs it), and `GridFrame` (the rotation both ways, used for every point). Every public function is one formula you asked for.
+
+### What to look at
+1. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/SurveyGrid.kt:111`: `buildSurveyGrid`, with the six steps in its KDoc. `:122` is the line count and centring.
+2. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/SurveyGrid.kt:268`: the scan-line clip.
+3. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/Camera.kt`: the camera formulas, one line each.
+
+### Tests
+- `LocalProjectionTest` (5):
+  - 0.001° = 111.1951 m at the equator, and 55.5975 m east–west at 60°.
+  - Within the predicted error of haversine over 1 km at CMAC.
+  - A round trip back to lat/lon.
+  - Across ±180°: 0.2° = 22 239 m.
+- `CameraTest` (5, P4P):
+  - GSD 0.027412 m at 100 m; 72.96 m for 2 cm/px, and the inverse.
+  - Footprint 150 × 100 m (portrait 100 × 150).
+  - Spacing 45 m, trigger 20 m.
+  - Overlap 1.0, negative overlap and a zero focal length are rejected.
+- `SurveyGridTest` (14):
+  - **The worked example**: 7 lines at x = 15…285, alternating direction; 77 photos, 1670 m, 167 s, 60 000 m².
+  - **Grid angle 90**: 5 lines at y = 190, 145, 100, 55, 10; 1680 m.
+  - **Grid angle 45** on a 100 m square: 5 chords of 21.42 / 81.42 / 141.42 / 81.42 / 21.42 m (the diamond formula), the middle one exactly corner to corner.
+  - **Concave U**: 4 lines, 6 passes (two arms on the upper lines), photo length 1000 m, 1380 m in total, straight across the notch.
+  - **Very thin** 1000 × 10 m: 1 centre line at y = 5, 51 photos.
+  - **Very small** 5 × 5 m: 1 line, 1 photo, 25 m².
+  - **Entry corners**: all four start where named.
+  - **Copter extension** 10 m: entry at y = −10, exit at y = 210, 1810 m.
+  - **Plane**: lead-in/out positions (including the southbound line's lead-in north of the area), legs of 319.032 m, 3664.19 m.
+  - **Plane turn lengths**: 157.080 / 207.080 / 366.519 / 301.626 m, continuous at 2r, never shorter for closer lines. **Turn radius** 70.648 m at 20 m/s and 30° bank.
+  - **Area at CMAC latitude**: 60 000 m² within 5 m².
+  - **Rejected**: 2 corners, collinear corners, spacing 0, 3000 lines, a polygon crossing the **antimeridian**. Accepted: an area right next to it.
+- `./gradlew check` and `:app:android:assembleDebug` pass, with no compiler warnings in the touched modules.
+
+### Open questions / next
+- `ponytail:` flight time uses constant speed, with no copter slow-down at turns and no wind. Add a per-turn allowance once SITL or field logs show how far off it is.
+- **Plane on narrow spacing:** bulb turns more than double the distance in the example. QGC offers "fly alternate transects" for fixed wing (skip lines so each turn is at least 2r). It's a line-order option on top of this code, worth adding with the Plane survey UI.
+- Not built (yet): crosshatch (spec P1), camera trigger mission items (`DO_SET_CAM_TRIGG_DIST`), terrain following, and a camera database (GS-5: we still need KFT's actual survey payload).
+- **Next (waiting for you):** the Plan screen's survey tool: draw a polygon → grid on the map → stats → mission items with the camera trigger → upload → SITL flies it (the weeks 4–5 prototype).
