@@ -50,7 +50,25 @@ sealed interface MapOverlay {
 
     /** The path flown so far. */
     data class Track(val points: List<LatLon>) : MapOverlay
+
+    /** The planned path, waypoint to waypoint. Drawn in a different colour from [Track], the path already flown. */
+    data class Route(val points: List<LatLon>) : MapOverlay
+
+    /**
+     * A labelled point (home, a waypoint). [id] is what click and drag callbacks report back. Only [draggable]
+     * markers can be dragged; any marker can be clicked when the map has a click callback.
+     */
+    data class Marker(
+        val id: String,
+        val position: LatLon,
+        val label: String,
+        val style: MarkerStyle,
+        val draggable: Boolean = false,
+    ) : MapOverlay
 }
+
+/** How a [MapOverlay.Marker] looks. The map decides the colours, so every screen shows the same meaning the same way. */
+enum class MarkerStyle { HOME, WAYPOINT, SELECTED, CURRENT }
 
 /** "Move the camera here." A new [id] means a new request, even to the same place (e.g. "centre" pressed twice). */
 data class CameraRequest(val target: LatLon, val zoom: Double, val id: Long)

@@ -1,4 +1,4 @@
-// Planning screens: polygon drawing, survey grid parameters, mission upload.
+// Planning screens: waypoint editor and mission upload/read/clear now; survey grid (polygon, camera, overlap) in weeks 4-5.
 plugins { id("kft.kmp.compose") }
 
 kotlin {

@@ -5,6 +5,7 @@ import com.kft.gcs.core.mavlink.di.mavlinkModule
 import com.kft.gcs.core.vehicle.di.vehicleModule
 import com.kft.gcs.feature.connections.di.connectionsModule
 import com.kft.gcs.feature.fly.di.flyModule
+import com.kft.gcs.feature.plan.di.planModule
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,4 +25,4 @@ val appModule = module {
 }
 
 /** Every Koin module in the app, in one list, so both shells start the same graph. */
-val allModules = listOf(appModule, mavlinkModule, vehicleModule, connectionsModule, flyModule)
+val allModules = listOf(appModule, mavlinkModule, vehicleModule, connectionsModule, flyModule, planModule)

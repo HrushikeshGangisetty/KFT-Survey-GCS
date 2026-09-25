@@ -59,7 +59,12 @@ class VehicleRepository(
                         if (seen == null) startup?.cancel()
                         vehicle = seen
                         _state.value = if (seen == null) _state.value.copy(connected = false)
-                        else _state.value.copy(connected = true, armed = seen.armed, flightMode = flightModeName(seen.kind, seen.customMode))
+                        else _state.value.copy(
+                            connected = true,
+                            vehicleKind = seen.kind,
+                            armed = seen.armed,
+                            flightMode = flightModeName(seen.kind, seen.customMode),
+                        )
                     }
                     is Update.Frame -> {
                         val v = vehicle ?: return@collect

@@ -26,6 +26,8 @@ import kotlin.math.PI
 data class VehicleState(
     /** True while the vehicle's heartbeat is arriving. Everything else keeps its last value when this goes false. */
     val connected: Boolean = false,
+    /** Copter or Plane, from the heartbeat. Kept after the link drops, like the mode, so a plan keeps its defaults. */
+    val vehicleKind: VehicleKind? = null,
     val position: LatLon? = null,
     /** Height above home (the takeoff point). */
     val altitudeRelativeM: Double? = null,

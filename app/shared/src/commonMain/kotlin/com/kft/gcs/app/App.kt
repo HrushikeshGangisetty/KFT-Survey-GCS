@@ -24,6 +24,12 @@ import androidx.navigation.compose.rememberNavController
 import com.kft.gcs.app.di.allModules
 import com.kft.gcs.feature.connections.ConnectionsRoute
 import com.kft.gcs.feature.fly.FlyRoute
+import com.kft.gcs.feature.fly.FlyViewModel
+import com.kft.gcs.feature.plan.PlanRoute
+import com.kft.gcs.feature.plan.PlanViewModel
+import com.kft.gcs.ui.map.MapView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.koin.compose.viewmodel.koinViewModel
 import org.koin.compose.KoinApplication
 import org.koin.dsl.koinConfiguration
 
@@ -40,28 +46,55 @@ fun App() {
                 // safeDrawing: Android 15 draws edge-to-edge, so without this the UI sits under the status bar (ADR-001 F3).
                 Row(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     AppRail(nav)
-                    Box(Modifier.weight(1f)) {
-                        // The Fly screen (and its map) is composed once, below the NavHost, and never leaves
-                        // composition. Other tabs cover it with an opaque Surface instead of replacing it.
-                        // Why: tearing down a MapLibre desktop session and creating a new one corrupts the native
-                        // heap in maplibre-compose 0.17.0 (0xC0000374 on the second Fly→Links). See ADR-001, GS-2.
-                        FlyRoute()
-                        NavHost(nav, startDestination = START.route) {
-                            // Empty on purpose: it draws nothing and handles no input, so the Fly layer shows through.
-                            composable(Destination.FLY.route) {}
-                            // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
-                            composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
-                        }
-                    }
+                    Box(Modifier.weight(1f)) { MapAndScreens(nav) }
                 }
             }
         }
     }
 }
 
+/**
+ * The one map, and the screens on top of it.
+ *
+ * The map is composed once, below the NavHost, and never leaves composition (ADR-001 F10). Tearing down a MapLibre
+ * desktop session and creating a new one corrupts the native heap in maplibre-compose 0.17.0 (0xC0000374 on the
+ * second Fly→Links), so screens never own a map: Fly and Plan hand their overlays and callbacks to this one, and
+ * Links covers it with an opaque Surface.
+ *
+ * Both map ViewModels are created here, at window scope, and passed to their routes, so the map and the panels read
+ * the same instance. The plan's route and markers show on the Fly view too, but only the Plan tab can edit them.
+ */
+@Composable
+private fun MapAndScreens(nav: NavHostController) {
+    val fly: FlyViewModel = koinViewModel()
+    val plan: PlanViewModel = koinViewModel()
+    val flyState by fly.state.collectAsStateWithLifecycle()
+    val planState by plan.state.collectAsStateWithLifecycle()
+    val current by nav.currentBackStackEntryAsState()
+    val planning = current?.destination?.route == Destination.PLAN.route
+
+    MapView(
+        Modifier.fillMaxSize(),
+        basemap = flyState.selectedBasemap,
+        overlays = planState.overlays + flyState.overlays,
+        cameraRequest = flyState.cameraRequest,
+        onMapClick = if (planning) plan::onMapClick else null,
+        onMarkerClick = if (planning) plan::onMarkerClick else null,
+        onMarkerDrag = if (planning) plan::onMarkerDragged else null,
+    )
+    NavHost(nav, startDestination = START.route) {
+        // Fly and Plan draw only their panels; where they draw nothing, input falls through to the map.
+        composable(Destination.FLY.route) { FlyRoute(fly) }
+        composable(Destination.PLAN.route) { PlanRoute(plan) }
+        // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
+        composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
+    }
+}
+
 /** Top-level destinations. A navigation rail suits tablets and desktop, the P0 screens (spec §2.5). */
 internal enum class Destination(val route: String, val label: String) {
     FLY("fly", "Fly"),
+    PLAN("plan", "Plan"),
     CONNECTIONS("connections", "Links"),
 }
 

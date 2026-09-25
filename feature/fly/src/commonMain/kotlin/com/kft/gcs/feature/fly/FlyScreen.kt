@@ -21,10 +21,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kft.gcs.core.vehicle.Severity
-import com.kft.gcs.ui.map.MapView
 import org.koin.compose.viewmodel.koinViewModel
 
-/** Gets the ViewModel from Koin and hands its state to [FlyScreen]. */
+/**
+ * Collects the ViewModel's state and hands it to [FlyScreen]. `App()` passes the ViewModel in, because it also feeds
+ * the same state (overlays, basemap, camera) to the one shared map (ADR-001 F10).
+ */
 @Composable
 fun FlyRoute(viewModel: FlyViewModel = koinViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -32,8 +34,9 @@ fun FlyRoute(viewModel: FlyViewModel = koinViewModel()) {
 }
 
 /**
- * Map-first layout, as in every GCS: the map fills the screen, the HUD strip floats top-left, map controls
- * top-right, and the latest vehicle message bottom-left. Controls sit on translucent panels so the map stays visible.
+ * Map-first layout, as in every GCS: the map (drawn underneath by `App()`) fills the screen, the HUD strip floats
+ * top-left, map controls top-right, and the latest vehicle message bottom-left. Translucent panels keep the map
+ * visible. Monitoring only: no flight-action buttons (spec S9).
  */
 @Composable
 fun FlyScreen(
@@ -43,8 +46,6 @@ fun FlyScreen(
     onClearTrack: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
-        MapView(Modifier.fillMaxSize(), state.selectedBasemap, state.overlays, state.cameraRequest)
-
         Panel(Modifier.align(Alignment.TopStart).padding(12.dp)) {
             if (!state.connected) {
                 Text("No vehicle", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall)

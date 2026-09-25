@@ -593,3 +593,106 @@ Download: REQUEST_LIST → COUNT(n) → for k in 0 until n: REQUEST_INT(k) → I
 - The `Mission` HUD shows the vehicle's own item numbers (1 = first after home), which match the editor's list numbering from Pass 8.
 - Partial/resume upload (MISSION_WRITE_PARTIAL_LIST) isn't used. A full re-upload of a survey (hundreds of items) takes about 2 × n round trips; measure it on the real radio before optimising.
 - **Next: Pass 8, the waypoint editor.**
+
+---
+
+## Pass 8 — W2-3: Waypoint editor on the shared map (2026-09-25)
+
+### What changed
+- **`ui/map`**:
+  - `MapModel.kt`: new `MapOverlay.Route`, `MapOverlay.Marker(id, position, label, style, draggable)` and `MarkerStyle`.
+  - `MapView.kt`:
+    - Route line, markers (circle + number), and `onMapClick` / `onMarkerClick` / `onMarkerDrag` callbacks.
+    - F4 drag handling on the map's own modifier, plus a pure `hitMarker`.
+    - The layers are always declared, so each source keeps its place.
+- **`feature/plan`** (was empty):
+  - `PlanItems.kt` (pure): `PlanItem`, `addWaypoint` (Copter item 1 = NAV_TAKEOFF), `seqNumbers`, `toMissionItems` / `fromMissionItems` (speed as DO_CHANGE_SPEED, passthrough for anything the editor can't edit).
+  - `PlanUiState.kt`: state, overlays and form parsing, all pure.
+  - `PlanViewModel.kt`: edit events; Upload / Read / Clear / Cancel through `MissionRepository`; snackbar effects.
+  - `PlanScreen.kt`: the right-hand panel, with a confirm dialog for Clear.
+  - `di/PlanModule.kt`.
+- **`feature/fly`**: `FlyScreen` no longer draws a map, only its panels.
+- **`core/vehicle`**: `VehicleState.vehicleKind`, from the heartbeat.
+- **`app/shared`**:
+  - `App.kt`: `MapAndScreens()` owns the one `MapView` and both map ViewModels, and gains a "Plan" tab.
+  - `AppModule.kt`: registers `planModule`.
+  - `build.gradle.kts`: `ui:map`, lifecycle-runtime-compose and koin-compose-viewmodel in commonMain.
+- **`docs/decisions/ADR-001-map-engine.md`**: an F10 note saying the Plan tab now shares the map.
+
+### How it works
+```
+App() ─ MapAndScreens
+   ├─ FlyViewModel  ─state─┐                         (both created here, window scope)
+   ├─ PlanViewModel ─state─┤
+   │                        ▼
+   ├─ MapView(basemap/camera from Fly, overlays = plan.overlays + fly.overlays,
+   │          callbacks = Plan tab ? plan::onMapClick/onMarkerClick/onMarkerDragged : null)
+   └─ NavHost ─ Fly  → FlyRoute(fly)   panels only
+              ─ Plan → PlanRoute(plan) panel on a Surface (blocks clicks from reaching the map)
+              ─ Links→ Surface { ConnectionsRoute() }
+
+click on map ──▶ PlanViewModel.onMapClick ──▶ items.addWaypoint(at, vehicleKind) ──▶ state ──▶ markers/route
+drag marker  ──▶ MapView (Initial pass, consumes) ──▶ onMarkerDrag(id, LatLon) ──▶ item.position updated
+Upload ──▶ toMissionItems(items) ──▶ MissionRepository.upload (home added as seq 0, S11) ──▶ snackbar
+Read   ──▶ MissionRepository.download ──▶ fromMissionItems(mission.items) ──▶ rows (home never a row)
+```
+
+### Engineering learnings
+- **Hoisting the map to the app.** F10 says one map per window, so no screen owns it. Each map screen's ViewModel produces map *data* (overlays, and camera for Fly), and `App()` routes the input callbacks to whichever tab is active. *Why not a "map layer" interface per feature:* there are two screens. A `when` on the current route in one place is less code, and it's easy to read.
+- **ViewModels at window scope, passed down.** `koinViewModel()` inside a NavHost entry would create a *second* instance tied to the back-stack entry, so the map and the panel would disagree. Creating both in `MapAndScreens` and passing them to the routes gives one instance each.
+- **`rememberUpdatedState` for gesture code.** `pointerInput(mapState)` starts once and must not restart on every recomposition, or a drag would be cut off mid-gesture. It reads the latest markers and callbacks through `rememberUpdatedState`.
+- **Tap vs drag by touch slop.** A press on a marker is a click unless it moves more than `viewConfiguration.touchSlop` (the platform's own number), so selecting a waypoint doesn't nudge it.
+- **Surface blocks, background doesn't.** Compose sends a pointer event to the layer underneath when nothing on top handles it. The Plan panel is an M3 `Surface`, so clicking empty panel space doesn't add a waypoint behind it.
+- **Speed is an item, not a field.** NAV_WAYPOINT has no speed parameter, so a row's speed becomes a DO_CHANGE_SPEED item in front of it. The rows show the *vehicle's* seq numbers (`seqNumbers`), so "item 4" on the map, in the list and in the Fly HUD's "Mission 4 / 5" are the same item. On download, only a DO_CHANGE_SPEED that looks exactly like ours folds back into a row. Anything else stays a passthrough row, so read → upload never changes a mission it didn't understand.
+- **ArduPilot facts (S10)**, from ArduPilot master 2026-09:
+  - DO_CHANGE_SPEED type 0 is horizontal speed on Copter and the airspeed target on Plane.
+  - On Plane, type 1 sets the *minimum groundspeed* (`Plane::do_change_speed`), so we always send 0.
+  - ArduCopter's NAV_TAKEOFF ignores lat/lon, so the takeoff row has no position.
+
+**Ponytail review:** no cuts. `MarkerStyle` (four values) and the three callbacks are all used. `PlanItem.passthrough` exists to keep read-back lossless. `PlanScreen`'s confirm dialog guards a destructive action.
+
+### Safety
+- No allowlist change. The editor only uploads, reads and clears the mission, through `MissionRepository` → gateway.
+- Upload doesn't start the mission. The snackbar says "Switch to AUTO on the RC to fly it" (S9). The editor has no flight buttons.
+- Clear asks for confirmation. A cancelled transfer warns that the vehicle mission may be incomplete.
+- Copter plans start with NAV_TAKEOFF (item 1), so AUTO from the ground climbs before it travels. Plane plans don't get one (the pilot launches, per the exit-check flow).
+
+### What to look at
+1. `app/shared/src/commonMain/kotlin/com/kft/gcs/app/App.kt:68`: one map, two screens, callbacks by tab.
+2. `ui/map/src/commonMain/kotlin/com/kft/gcs/ui/map/MapView.kt:171`: the marker gesture (F4).
+3. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanItems.kt:68`: rows ↔ mission items, with speed as DO_CHANGE_SPEED.
+
+### Tests
+- `PlanItemsTest` (6):
+  - Copter's first click gives [takeoff 30 m, waypoint], and the next waypoint takes the previous altitude.
+  - Plane gets no takeoff, at 100 m.
+  - Seq numbers count the speed items: [1, 3, 4].
+  - The exact mission items: DO_CHANGE_SPEED (0, 8, -1).
+  - Round trip with RTL passthrough; a throttle-setting or trailing speed change stays as its own row.
+  - An AMSL waypoint from another tool isn't silently made relative.
+- `PlanViewModelTest` (9):
+  - Home is the "H" marker (never a row), markers are labelled by seq, the newest is selected, and the route starts at home.
+  - Drag moves a waypoint; dragging home is ignored.
+  - Altitude/speed editing, with parse errors.
+  - Upload progress "Uploading 2 / 3…", then the result.
+  - Upload error text.
+  - Cancel message.
+  - Read replaces the rows.
+  - The item being flown gets the CURRENT style.
+  - Offline: you can plan, but not transfer.
+- `GeoJsonTest` (+2): markers keep their labels and `[lon, lat]`; a one-point route is dropped; `hitMarker` picks the nearest marker within 24 dp (5 dp beats 30 dp).
+- `VehicleRepositoryTest`: `vehicleKind` from the heartbeat.
+- **Manual, desktop + SITL (ArduCopter 4.8.0-dev, MAVProxy → UDP 14550):**
+  - Links → "SITL (UDP 14550)" → Connect → Plan. Three map clicks gave "1 Takeoff, 2 Waypoint, 3 Waypoint, 4 Waypoint" with numbered markers and a route from home.
+  - Dragged waypoint 3 to a new place, and typed speed 6 on the selected waypoint, which renumbered it to 4 ("30.0 m · 6.0 m/s").
+  - Upload → "Uploaded 5 items. Switch to AUTO on the RC to fly it." Read → "Read 5 items from the vehicle", with identical rows.
+  - Plan→Fly→Links→Plan→Links→Fly: no crash. Fly shows the mission route, "ArduPilot 4.8.0-dev" and "Mission 0 / 5".
+  - Closing the window exited cleanly. The only "Host surface lost" was at close.
+- `./gradlew check` and `:app:android:assembleDebug` pass.
+
+### Open questions / next
+- MapLibre logged "Invalid geometry in line layer" once during the run. The route and track never emit fewer than two points, so it may be from the OpenFreeMap style. Harmless so far; worth a look if it repeats.
+- `ponytail:` the plan is in memory only. `.plan` save/load belongs to weeks 4–5.
+- On the ground, the home marker sits under the vehicle arrow. That's expected (the vehicle is drawn on top).
+- **Not checked:** touch dragging on the Android emulator or tablet (same code path per F4). It's in the Pass 10 tablet checklist.
+- **Next: Pass 9, serial transports.**

@@ -94,6 +94,7 @@ class VehicleRepositoryTest {
         link.value = LinkState.Connected(udp, copter, LinkStats())
         runCurrent()
         assertEquals("Loiter", repo.state.value.flightMode)
+        assertEquals(VehicleKind.COPTER, repo.state.value.vehicleKind)
         assertTrue(repo.state.value.armed)
         assertTrue(repo.state.value.connected)
 

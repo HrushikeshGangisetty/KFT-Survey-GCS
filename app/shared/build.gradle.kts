@@ -11,13 +11,13 @@ kotlin {
             implementation(project(":core:mavlink")) // for mavlinkModule and the IoDispatcher qualifier
             implementation(project(":core:vehicle"))
             implementation(libs.jb.navigation.compose)
+            implementation(project(":ui:map")) // App() owns the one MapView (ADR-001 F10); DesktopApp gives it a GPU context
             implementation(libs.jb.lifecycle.viewmodel.compose)
+            implementation(libs.jb.lifecycle.runtime.compose)
             implementation(project.dependencies.platform(libs.koin.bom))
             implementation(libs.koin.core)
             implementation(libs.koin.compose)
-        }
-        jvmMain.dependencies {
-            implementation(project(":ui:map")) // DesktopApp gives the map its window's GPU context
+            implementation(libs.koin.compose.viewmodel)
         }
     }
 }
