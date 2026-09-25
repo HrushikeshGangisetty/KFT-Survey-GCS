@@ -93,7 +93,7 @@ fun MapView(
         baseStyle = BaseStyle.Uri((TileSources.Street.source as TileSourceConfig.Source.VectorStyle).styleUrl),
         initialCameraPosition = CameraPosition(zoom = 2.0),
     ) {
-        // Declaration order is drawing order: basemap, track, planned route, markers, and the vehicle on top.
+        // Declaration order is drawing order: basemap, planned route, flown track, markers, and the vehicle on top.
         val raster = basemap.source as? TileSourceConfig.Source.RasterTiles
         if (raster != null) {
             RasterLayer(
@@ -105,6 +105,14 @@ fun MapView(
                 ),
             )
         }
+        // Always declared, even when empty, so the layer list (and each remembered source) keeps its place. Under the
+        // track: once the vehicle flies the plan, the flown path must show on top of the planned one.
+        LineLayer(
+            id = "route",
+            source = rememberGeoJsonSource(GeoJsonData.JsonString(routeGeoJson(overlays.filterIsInstance<MapOverlay.Route>()))),
+            color = const(Color(0xFF4FC3F7)),
+            width = const(3.dp),
+        )
         overlays.filterIsInstance<MapOverlay.Track>().forEachIndexed { i, track ->
             if (track.points.size >= 2) {
                 LineLayer(
@@ -117,13 +125,6 @@ fun MapView(
                 )
             }
         }
-        // Always declared, even when empty, so the layer list (and each remembered source) keeps its place.
-        LineLayer(
-            id = "route",
-            source = rememberGeoJsonSource(GeoJsonData.JsonString(routeGeoJson(overlays.filterIsInstance<MapOverlay.Route>()))),
-            color = const(Color(0xFF4FC3F7)),
-            width = const(3.dp),
-        )
         MarkerStyle.entries.forEach { style ->
             val source = rememberGeoJsonSource(GeoJsonData.JsonString(markersGeoJson(markers.filter { it.style == style })))
             CircleLayer(

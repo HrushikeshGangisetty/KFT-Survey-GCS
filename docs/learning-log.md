@@ -777,3 +777,86 @@ Links: Serial · COM7 · 57600 ──save──▶ LinkConfig.Serial("COM7", 576
 - Desktop: the device list comes from jSerialComm's enumeration, so a Bluetooth SPP pairing appears as its COM port (spec §2.1). Not tried.
 - Android: an OTG device plugged in *after* connecting isn't auto-detected; tap Refresh. Auto-launch on attach (a device filter in the manifest) is a P1 nicety.
 - **Next: Pass 10, the Plane SITL profile and the week 2–3 exit check.**
+
+---
+
+## Pass 10 — W3-1: SITL profiles and the week 2–3 exit check (2026-09-25)
+
+### What changed
+- **`tools/sitl/start-sitl.ps1`** (new): the SITL profile for `-Vehicle copter|plane`.
+  - Starts Mission Planner's Windows SITL build (model, CMAC home, default params) minimized.
+  - Starts MAVProxy in its own console as the pilot's RC, holding SERIAL0 and forwarding to UDP 14550.
+  - Documents the free ports: 5762 for a GCS over TCP, 5763 for tools, and how to reach them from the emulator.
+- **`tools/sitl/sitl_pilot.py`** (new, SITL only): sends what MAVProxy sends for `mode guided`, `arm throttle`, `takeoff 20` and `mode auto`, so the exit check can run unattended. It's never part of the app (S9).
+- **`ui/map/MapView.kt`**: the planned route now draws *under* the flown track. In the first SITL run the blue route hid the orange track exactly where the vehicle flew.
+
+### How it works
+```
+start-sitl.ps1 ─▶ ArduCopter.exe / ArduPlane.exe (SITL, -I0)
+                    ├─ 5760 SERIAL0 ◀── MAVProxy (RC: mode/arm/takeoff) ──▶ UDP 14550 ─▶ desktop GCS "SITL (UDP 14550)"
+                    ├─ 5762 SERIAL1 ◀── GCS over TCP (desktop 127.0.0.1, emulator 10.0.2.2)
+                    └─ 5763 SERIAL2 ◀── sitl_pilot.py (unattended runs only)
+GCS: Plan → Upload (home = seq 0) ─▶ pilot: GUIDED → arm → takeoff 20 → AUTO ─▶ GCS Fly: "Mission n / N" … "Done"
+```
+
+### Engineering learnings
+- **The exit check proves S9 end to end.** The GCS only planned, uploaded and watched. Every flight action came from the pilot's side (MAVProxy / the pilot script) on a *different* MAVLink system id (254) and port. The GCS gateway would have refused all of them anyway.
+- **Windows SITL quirks** (worth knowing before you run it yourself):
+  - The Cygwin SITL build exits when its SERIAL0 TCP client disconnects. That's why MAVProxy holds 5760 and everything else uses 5762/5763.
+  - MAVProxy on Windows needs a real console (`prompt_toolkit` fails when detached), so the script gives it its own window.
+- **Emulator networking:** UDP into the emulator needs `adb emu redir`, and the host port can have only one listener, so the desktop GCS must be closed. A direct TCP profile to `10.0.2.2:5762` avoids both problems, and that's what the emulator run used.
+- **Why a pilot script at all:** the MAVProxy console is a terminal, and my automation can click terminals but not type into them. The script sends the same four MAVLink messages MAVProxy would, so the evidence is the same. **Your manual runs use the MAVProxy console**, exactly as the spec says.
+
+**Ponytail review:** lean already. The launcher is one script with one switch, and the pilot script is ~60 lines with no options beyond link and altitude. The MapView change *removes* a visual bug with a reorder (0 net lines).
+
+### Safety
+- No allowlist change. The pilot script is a test tool that plays the RC in SITL. It isn't built, packaged or referenced by the app, and it uses system id 254 so it can't be mistaken for the GCS (255).
+- During both runs the GCS sent only REQUEST_DATA_STREAM, REQUEST_MESSAGE, SET_MESSAGE_INTERVAL and the MISSION_* upload. The flight actions came from the pilot side.
+
+### What to look at
+1. `tools/sitl/start-sitl.ps1`: ports and the pilot commands in the header.
+2. `tools/sitl/sitl_pilot.py`: what "the RC" sends.
+
+### Tests
+- **Week 2–3 exit check, Copter (ArduCopter 4.8.0-dev SITL):**
+  - **Desktop:** Links → SITL (UDP 14550) → Plan → four clicks gave Takeoff + 4 waypoints → Upload ("Uploaded 5 items") → pilot: GUIDED → ARMED → climbed to 20 m → AUTO.
+    - The Fly view showed Auto / ARMED / 30 m, "Mission 2 / 5", "3 / 5" … "Done", with the magenta current-waypoint marker moving along.
+    - ArduPilot's "Reached command #5" appeared in the message strip. Then RTL, landed, disarmed.
+  - **Android emulator (Medium_Tablet, Android 15):** Links → new TCP profile 10.0.2.2:5762 → "ArduCopter · system 1 · ARMED, 126 msg/s" → Plan → three taps → Upload ("Uploaded 4 items") → pilot sequence.
+    - Fly showed Auto / ARMED / 9 m/s, "Mission 2 / 4", then "Done", and "Reached command #4". The orange flown track sat over the blue route after the reorder.
+- **Plane: not run.** There's no ArduPlane SITL binary on this machine, and you chose not to download one (2026-09-25). `start-sitl.ps1 -Vehicle plane` is written, and checked only for its missing-binary message.
+- `start-sitl.ps1 -Vehicle copter` was checked: it starts SITL and MAVProxy, and SITL answers heartbeats on 5763.
+- `./gradlew check` and `:app:android:assembleDebug` pass.
+- **Serial on desktop, partial:** the Links form listed this laptop's real ports (COM26/COM27, Bluetooth SPP). No radio was connected.
+
+### Your checklist: Plane SITL on desktop
+1. In Mission Planner: Simulation → Plane → start it once (this downloads `ArduPlane.exe` and `plane.parm`), then close Mission Planner.
+2. `powershell -ExecutionPolicy Bypass -File tools\sitl\start-sitl.ps1 -Vehicle plane`
+3. `gradlew.bat :app:desktop:run` → Links → **SITL (UDP 14550)** → Connect. Expect "ArduPlane · system 1 · disarmed", and "ArduPilot 4.x" under the HUD.
+4. Plan → click 4 points 300–500 m apart. Expect **no** Takeoff row (Plane) and 100 m default altitude. Upload → "Uploaded 4 items".
+5. In the MAVProxy window: `mode guided`, `arm throttle`, `takeoff 20` (ArduPlane 4.5+; on older firmware `mode takeoff`), then `mode auto` once it's above ~20 m.
+6. Expect: "Mission 1 / 4" → … → "Done", the current marker turning magenta, and the orange track following the route. At the end ArduPlane loiters or RTLs by itself.
+
+### Your checklist: physical tablet
+1. `gradlew.bat :app:android:installDebug` with the tablet on USB, or copy the APK. The app is "KFT Survey (dev)", id `com.kft.survey.dev`.
+2. **Map:** the Fly view shows the street map, pinch-zoom and pan work, and switching Fly ↔ Plan ↔ Links 10 times doesn't crash (ADR-001 F10).
+3. **Network SITL:** on the laptop, run `start-sitl.ps1`. MAVProxy only forwards to the laptop itself, so on the tablet add a **TCP client** profile to `<laptop IP>:5762` and allow port 5762 through Windows Firewall. Connect → vehicle found.
+4. **Plan by touch:**
+   - Tap to add waypoints: Copter gets Takeoff as item 1.
+   - Drag a numbered marker with a finger: it moves, and the map does **not** pan underneath.
+   - Tap a marker: it's selected, and the altitude/speed fields edit it.
+   - Tapping on the panel must not add a waypoint behind it.
+5. **Transfer:** Upload → Read gives the same rows. Clear asks to confirm and empties both.
+6. **Exit check:** pilot in MAVProxy on the laptop (`mode guided`, `arm throttle`, `takeoff 20`, `mode auto`). The tablet shows "Mission n / N", then "Done".
+7. **USB-OTG serial**, with a SiK radio or the FC's USB through an OTG adapter:
+   - Links → Serial → Refresh → the device appears (FTDI / CP210x / CH34x / CDC) → pick 57600 for a radio → Save → Connect.
+   - Expect "Waiting for USB permission: tap Allow". Tap **Allow**, and within 5 s the link connects.
+   - Unplug the radio: "Reconnecting…". Plug it back in: it reconnects.
+8. **Desktop serial**, with the same radio on the laptop: Links → Serial → the COM port → 57600 → Connect.
+9. **Real flight controller:** if it runs KFT firmware (`ardupilotKFT`, MOINA), expect heartbeats only. Mission upload and the startup requests will be ignored until the GCS HMAC login exists (see Pass 6 open questions).
+
+### Open questions / next
+- **Plane exit check still open.** Run the Plane checklist above, or allow the ArduPlane SITL download and I'll run it.
+- MAVProxy's UDP output didn't reach the emulator through `adb emu redir` (not investigated; TCP 5762 worked).
+- KFT firmware GCS authentication (Pass 6) is still the blocker for a real KFT FC.
+- **Next (waiting for your go-ahead):** weeks 4–5, the survey grid.
