@@ -488,3 +488,108 @@ HOME_POSITION / AUTOPILOT_VERSION frames ──reduce──▶ VehicleState.home
   - Implementing the auth means handling the app secret, so that decision is yours (where the key lives, which app id). It blocks the real-FC check, not SITL.
 - GS-7 (see Safety).
 - **Next: Pass 7, the mission protocol.**
+
+---
+
+## Pass 7 — W2-2: Mission protocol (upload, download, clear, progress) (2026-09-25)
+
+### What changed
+- **`core/vehicle/Mission.kt`** (new):
+  - `MissionItem`, `AltitudeFrame`, `MissionCommand` and `Mission(home, items)`: plain types with no MAVLink in them.
+  - `missionToWire` / `missionFromWire`: the only place seq 0 is built or removed (S11).
+- **`core/vehicle/MissionProtocol.kt`** (new): the upload/download/clear state machine, with per-message resend, timeouts, cancel, and the ArduPilot quirks listed in its KDoc.
+- **`core/vehicle/MissionRepository.kt`** (new):
+  - A `MissionRepository` interface for screens, and `DefaultMissionRepository`.
+  - It refuses to start without a vehicle, and refuses to upload without a home.
+- **`core/vehicle/VehicleState.kt`**: `mission: MissionProgress?` from MISSION_CURRENT and MISSION_ITEM_REACHED.
+- **`core/vehicle/di/VehicleModule.kt`**: binds `MissionRepository`.
+- **`feature/fly`**: a "Mission" HUD item ("3 / 5", "Done").
+- **Tests**:
+  - `MissionTest` (S11, frames, command numbers).
+  - `MissionProtocolTest` (12 cases against `ArduPilotMissionFake`).
+  - `MissionRepositoryTest` (3).
+  - `VehicleStateTest.missionProgress`, and `FlyViewModelTest.missionProgressText`.
+  - `SitlCheck.missionUploadReadBackCompareAndClear`.
+
+### How it works
+```
+PlanViewModel (Pass 8) ──upload(items)──▶ DefaultMissionRepository
+                                             │ vehicle ids from LinkState, home from VehicleState
+                                             │ missionToWire(home, items): [home=seq0, items…=seq1…]   (S11)
+                                             ▼
+                                         MissionProtocol ──MISSION_*──▶ MavTxGateway ──▶ link
+                                             ▲ inbox: mission replies from that vehicle, addressed to us
+                                    ConnectionManager.frames
+```
+**Upload state machine** (download and clear use the same `exchange` step):
+```
+            send COUNT(n)                         any wait: 1.5 s without an accepted reply
+   ┌──────────────────────────┐                   → resend the last message (COUNT or item k)
+   ▼                          │                   → after 5 sends: fail "no answer …"
+ [WAIT] ──REQUEST(k) / REQUEST_INT(k)──▶ send ITEM(k) ──▶ [WAIT]      (a repeated k is simply resent)
+   │  ──ACK(INVALID_SEQUENCE)──▶ ignore, keep waiting    (ArduPilot keeps the upload open)
+   │  ──ACK(ACCEPTED)──────────▶ [DONE]
+   │  ──ACK(other error)───────▶ [FAILED] "the vehicle refused: NO_SPACE … may now hold a partial mission"
+   └─ coroutine cancelled ─────▶ send ACK(OPERATION_CANCELLED), rethrow
+```
+Download: REQUEST_LIST → COUNT(n) → for k in 0 until n: REQUEST_INT(k) → ITEM_INT(k) → our ACK(ACCEPTED). Clear: CLEAR_ALL → ACK.
+
+### Engineering learnings
+- **One `exchange` step for every wait.** The pieces are: send, then wait until a handler *accepts* a reply, then resend on timeout. Every step of all three flows is that one function plus a small handler that says which reply it wants. Replies it doesn't want don't restart the clock, so a noisy link can't keep a dead transfer alive. *Why not a hand-written state enum:* the order of steps is the program itself. A `while (reply is Request)` loop is the state machine, and it reads top to bottom.
+- **`Result` + one exception type.** Operator-facing failures ("the vehicle refused: DENIED") are `MissionTransferException`, and they come back as `Result.failure`. Cancellation is *not* caught: structured concurrency needs `CancellationException` to propagate, so the cancel ACK is sent in `NonCancellable` and the exception is rethrown.
+- **S11 in two pure functions.** The seq-0 rule lives only in `missionToWire` / `missionFromWire`, so the test that guards it is a plain function call, with no protocol or time involved.
+- **The fake behaves like ArduPilot, not like the spec.** `ArduPilotMissionFake` requests with MISSION_REQUEST, answers a wrong seq with INVALID_SEQUENCE without ending the upload, counts home in MISSION_COUNT, and keeps home on clear. Each behaviour comes from the ArduPilot source, so the tests fail the way the real vehicle would.
+- **ArduPilot facts (S10)**, from `MissionItemProtocol.cpp` and `AP_Mission.cpp`, master 2026-09:
+  - It requests upload items with the deprecated MISSION_REQUEST (hence the `@Suppress("DEPRECATION")`).
+  - It re-requests every 1 s and gives up after 8 s. Our 1.5 s × 5 = 7.5 s stays inside that.
+  - It writes items as they arrive, so a failed upload leaves a partial mission. The error message says so.
+  - It ignores MISSION_ACK from a GCS, so our cancel and complete ACKs are for other autopilots.
+  - It ignores whatever is written at index 0.
+  - It returns frame GLOBAL for commands that store no location (DO_CHANGE_SPEED, RTL). SITL showed this, and the check now compares frames only for location commands.
+  - MISSION_CURRENT.total excludes home.
+
+**Ponytail review:** lean already. `MissionRepository` is an interface on purpose (CLAUDE.md §7: repositories), and every other type has exactly one job and a caller.
+
+### Safety
+- These transmissions start being used now: MISSION_COUNT, MISSION_ITEM_INT and MISSION_CLEAR_ALL (`MISSION_CHANGE`: blocked while the pod reports LOCKED/TERMINAL/ENGAGE), and MISSION_REQUEST_LIST, MISSION_REQUEST_INT and MISSION_ACK (`ALWAYS`). **The allowlist is unchanged.** Everything goes through the gateway via `MavSender`.
+- Uploading a mission doesn't fly it. The pilot switches to AUTO on the RC (S9).
+- A failed or cancelled upload can leave a partial mission on the vehicle. The error text tells the operator to upload again or clear, and it's worth re-reading before flight.
+
+### What to look at
+1. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/MissionProtocol.kt:79`: the upload loop, then `exchange` at `:162`.
+2. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/Mission.kt:49`: S11 in one function.
+3. `core/vehicle/src/commonTest/kotlin/com/kft/gcs/core/vehicle/MissionTest.kt:20`: the test that fails if seq 0 isn't home.
+
+### Tests
+- `MissionTest` (5):
+  - Seq 0 is home (NAV_WAYPOINT, GLOBAL, home lat/lon ×1e7, 584 m) and planned items start at seq 1.
+  - Download drops seq 0 into `home` (arrival order doesn't matter).
+  - An empty download works.
+  - The `_INT` frames map the way AP_Mission maps them.
+  - Our command constants equal the `common.xml` numbers.
+- `MissionProtocolTest` (12, virtual time):
+  - Clean upload via MISSION_REQUEST, and via MISSION_REQUEST_INT.
+  - A stale re-request is answered with no timeout, and its INVALID_SEQUENCE is ignored.
+  - A lost item is resent at exactly 1.5 s.
+  - NO_SPACE fails with a "partial mission" warning.
+  - A silent vehicle fails after 5 COUNTs at 7.5 s.
+  - Cancelling sends OPERATION_CANCELLED.
+  - Upload then download gives back `Mission(home, plan)`, and ends with our ACK.
+  - A lost download request is re-sent.
+  - An empty vehicle downloads fine.
+  - DENIED fails.
+  - Clear keeps only home.
+- `MissionRepositoryTest` (3): no vehicle → nothing sent; no home → nothing sent (S11); the upload goes to the linked sysid with count = home + items.
+- `VehicleStateTest.missionProgress`: seq/total/reached/complete, and the 0 / 65535 totals. `FlyViewModelTest.missionProgressText`.
+- **SITL, done** (ArduCopter 4.8.0-dev from Mission Planner's `sitl` folder):
+  - Setup: MAVProxy on TCP 5760 as the permanent SERIAL0 client, then `KFT_SITL=127.0.0.1:5762 gradlew :core:vehicle:jvmTest --tests '*SitlCheck*'`.
+  - Upload progress was 1/6 … 6/6.
+  - The read-back matched the upload: TAKEOFF 20 m relative, DO_CHANGE_SPEED (1, 8, -1), two waypoints at 30 m with identical 1e-7 lat/lon, and RTL.
+  - Home was 584.09 m, and clearing it left an empty mission.
+  - **Finding:** the Windows SITL build exits when its SERIAL0 TCP client disconnects. So SITL checks go through SERIAL1 (5762) while MAVProxy holds 5760, which is also how Pass 10 runs.
+- `./gradlew check` passes, with no warnings.
+
+### Open questions / next
+- The `Mission` HUD shows the vehicle's own item numbers (1 = first after home), which match the editor's list numbering from Pass 8.
+- Partial/resume upload (MISSION_WRITE_PARTIAL_LIST) isn't used. A full re-upload of a survey (hundreds of items) takes about 2 × n round trips; measure it on the real radio before optimising.
+- **Next: Pass 8, the waypoint editor.**

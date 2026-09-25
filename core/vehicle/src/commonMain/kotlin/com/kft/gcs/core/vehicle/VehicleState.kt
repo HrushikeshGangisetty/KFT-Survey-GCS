@@ -6,6 +6,9 @@ import com.divpundir.mavlink.definitions.ardupilotmega.PlaneMode
 import com.divpundir.mavlink.definitions.common.Attitude
 import com.divpundir.mavlink.definitions.common.GpsRawInt
 import com.divpundir.mavlink.definitions.common.HomePosition
+import com.divpundir.mavlink.definitions.common.MissionCurrent
+import com.divpundir.mavlink.definitions.common.MissionItemReached
+import com.divpundir.mavlink.definitions.common.MissionState
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
 import com.divpundir.mavlink.definitions.common.VfrHud
@@ -45,7 +48,16 @@ data class VehicleState(
     val home: Home? = null,
     /** Firmware version from AUTOPILOT_VERSION, e.g. "4.6.3" or "4.7.0-dev". */
     val firmwareVersion: String? = null,
+    /** Where the vehicle is in its mission. Null until the first MISSION_CURRENT. */
+    val mission: MissionProgress? = null,
 )
+
+/**
+ * Mission progress. Seq numbers are the vehicle's, so item 1 is the first item after home (spec S11).
+ * @property total items excluding home, or null if the firmware doesn't report it.
+ * @property lastReached the last item the vehicle reported reaching (MISSION_ITEM_REACHED), if any.
+ */
+data class MissionProgress(val current: Int, val total: Int?, val lastReached: Int?, val complete: Boolean)
 
 /** The vehicle's home. [altitudeMslM] is above mean sea level, which is what mission seq 0 carries. */
 data class Home(val position: LatLon, val altitudeMslM: Double)
@@ -86,6 +98,20 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
     // HOME_POSITION (common.xml). ArduPilot sends it only once home is set, on request, and on every change (for
     // Copter, arming moves home to where it armed), plus at the interval VehicleRepository asks for.
     is HomePosition -> copy(home = Home(LatLon.fromE7(message.latitude, message.longitude), message.altitude / 1000.0)) // mm -> m
+    // MISSION_CURRENT (common.xml), in ArduPilot's EXTENDED_STATUS stream group. ArduPilot fills `total` with the
+    // item count minus home (GCS_Common.cpp `send_mission_current`); 0 means "not supported", 65535 "no mission".
+    is MissionCurrent -> copy(
+        mission = MissionProgress(
+            current = message.seq.toInt(),
+            total = message.total.toInt().takeIf { it != 0 && it != 65535 },
+            lastReached = mission?.lastReached,
+            complete = message.missionState.value == MissionState.COMPLETE.value,
+        ),
+    )
+    // MISSION_ITEM_REACHED (common.xml): ArduPilot sends it once per item, as an event, not in a stream.
+    is MissionItemReached -> copy(
+        mission = (mission ?: MissionProgress(message.seq.toInt(), null, null, false)).copy(lastReached = message.seq.toInt()),
+    )
     // AUTOPILOT_VERSION is in standard.xml.
     is AutopilotVersion -> copy(firmwareVersion = firmwareVersionName(message.flightSwVersion))
     else -> this

@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import com.kft.gcs.core.geo.Geodesy
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.vehicle.GpsFix
+import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.Severity
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.ui.map.CameraRequest
@@ -46,7 +47,15 @@ fun hudItems(v: VehicleState): List<HudItem> = listOf(
         // ponytail: fixed 20% warning. Make it a setting (and add a voltage-per-cell rule) with the pre-flight checklist.
         warning = (v.batteryPercent ?: 100) < 20,
     ),
+    HudItem("Mission", missionText(v.mission)),
 )
+
+/** "3 / 5" while flying the mission, "Done" at the end. Item numbers are the vehicle's: 1 is the first after home. */
+internal fun missionText(m: MissionProgress?): String = when {
+    m == null -> DASH
+    m.complete -> "Done"
+    else -> "${m.current}${m.total?.let { " / $it" } ?: ""}"
+}
 
 /**
  * Adds [point] to the flown track if the vehicle moved at least [minSpacingM] since the last point, keeping at

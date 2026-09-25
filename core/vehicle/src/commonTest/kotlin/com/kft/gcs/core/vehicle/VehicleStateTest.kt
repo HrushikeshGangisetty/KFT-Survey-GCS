@@ -5,6 +5,9 @@ import com.divpundir.mavlink.definitions.common.Attitude
 import com.divpundir.mavlink.definitions.common.GpsFixType
 import com.divpundir.mavlink.definitions.common.GpsRawInt
 import com.divpundir.mavlink.definitions.common.HomePosition
+import com.divpundir.mavlink.definitions.common.MissionCurrent
+import com.divpundir.mavlink.definitions.common.MissionItemReached
+import com.divpundir.mavlink.definitions.common.MissionState
 import com.divpundir.mavlink.definitions.common.MavSeverity
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
@@ -89,5 +92,22 @@ class VehicleStateTest {
         assertEquals("4.7.0-dev", firmwareVersionName(0x04070000u))
         assertEquals("4.6.0-rc", firmwareVersionName(0x040600C0u))
         assertEquals("4.5.7-beta", firmwareVersionName(0x04050780u))
+    }
+
+    @Test
+    fun missionProgress() {
+        // Home + 5 items on the vehicle: ArduPilot reports total 5 (home excluded) and seq 1..5.
+        val flying = VehicleState()
+            .reduce(MissionCurrent(seq = 3u, total = 5u, missionState = MavEnumValue.of(MissionState.ACTIVE)))
+            .reduce(MissionItemReached(seq = 2u))
+        assertEquals(MissionProgress(current = 3, total = 5, lastReached = 2, complete = false), flying.mission)
+
+        // The next MISSION_CURRENT keeps the last reached item; COMPLETE marks the end.
+        val done = flying.reduce(MissionCurrent(seq = 5u, total = 5u, missionState = MavEnumValue.of(MissionState.COMPLETE)))
+        assertEquals(MissionProgress(current = 5, total = 5, lastReached = 2, complete = true), done.mission)
+
+        // 65535 = no mission, 0 = total not supported: both unknown.
+        assertNull(VehicleState().reduce(MissionCurrent(seq = 0u, total = 65535u)).mission!!.total)
+        assertNull(VehicleState().reduce(MissionCurrent(seq = 0u, total = 0u)).mission!!.total)
     }
 }

@@ -13,6 +13,7 @@ import com.kft.gcs.core.mavlink.TxResult
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.vehicle.GpsFix
+import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.VehicleRepository
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.ui.map.MapOverlay
@@ -103,6 +104,14 @@ class FlyViewModelTest {
             vm.onBasemapSelected("no-such-map") // ignored
             expectNoEvents()
         }
+    }
+
+    @Test
+    fun missionProgressText() {
+        assertEquals("–", missionText(null))
+        assertEquals("3 / 5", missionText(MissionProgress(current = 3, total = 5, lastReached = 2, complete = false)))
+        assertEquals("3", missionText(MissionProgress(current = 3, total = null, lastReached = null, complete = false)))
+        assertEquals("Done", missionText(MissionProgress(current = 5, total = 5, lastReached = 5, complete = true)))
     }
 
     @Test
