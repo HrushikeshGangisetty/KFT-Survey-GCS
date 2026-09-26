@@ -172,6 +172,8 @@ class SurveyGridTest {
      *   π × 50 + (lateral − 100) = 157.0796 + 35 = 192.0796 m (135 m), 157.0796 + 80 = 237.0796 m (180 m).
      * Plus 10 m along the line each time (lead-in 30 vs lead-out 20). Legs: 4 × 202.0796 + 2 × 247.0796.
      * Distance: 7 passes × (30 + 200 + 20) = 1750, plus 808.3185 + 494.1593 = 1302.4778 → 3052.4778 m.
+     * Pass 17: the first line's lead-in is max(30, 4 × 50) = 200 m (see firstLineLeadInIsTwoTurnDiameters), which
+     * adds 170 m: 3222.4778 m. The legs don't change: they start at each pass's exit.
      */
     @Test
     fun planeFliesEveryThirdLineSoNoTurnNeedsALoop() {
@@ -181,12 +183,32 @@ class SurveyGridTest {
         val xs = listOf(15.0, 150.0, 285.0, 105.0, 240.0, 60.0, 195.0) // lines 0, 3, 6, 2, 5, 1, 4
         g.passes.forEachIndexed { i, p ->
             val northbound = i % 2 == 0 // directions still alternate pass by pass
-            assertAt(xs[i], if (northbound) -30.0 else 230.0, p.entry, "pass $i lead-in")
+            assertAt(xs[i], if (i == 0) -200.0 else if (northbound) -30.0 else 230.0, p.entry, "pass $i lead-in")
             assertAt(xs[i], if (northbound) 220.0 else -20.0, p.exit, "pass $i lead-out")
         }
         listOf(202.0796, 202.0796, 247.0796, 202.0796, 247.0796, 202.0796)
             .zip(g.connectorsM).forEach { (want, got) -> assertEquals(want, got, 1e-3) }
-        assertEquals(3052.4778, surveyStats(spec, g, 20.0, 20.0).distanceM, 1e-3)
+        assertEquals(3222.4778, surveyStats(spec, g, 20.0, 20.0).distanceM, 1e-3)
+    }
+
+    /**
+     * The first line's lead-in is max(lead-in, 2 turn diameters = 4r), for the approach from home at any angle:
+     * - r = 50 m, lead-in 30 m: max(30, 200) = 200 m. The first pass starts at y = −200 (northbound, x = 15) and its
+     *   run-in is 200; the second pass keeps 30 m (southbound, entry at y = 230).
+     * - r = 5 m: max(30, 20) = 30 m, unchanged.
+     * - A copter has no such rule: its first run-in stays the extension.
+     */
+    @Test
+    fun firstLineLeadInIsTwoTurnDiameters() {
+        val (_, g) = grid(rectangle, 0.0, 45.0, turn = Turnaround.Plane(turnRadiusM = 50.0, leadInM = 30.0, leadOutM = 20.0))
+        assertAt(15.0, -200.0, g.passes[0].entry, "first lead-in 200 m")
+        assertEquals(200.0, g.passes[0].runInM, 1e-9)
+        assertEquals(30.0, g.passes[1].runInM, 1e-9)
+        assertAt(150.0, 230.0, g.passes[1].entry, "second pass (line 3, southbound) keeps 30 m")
+        val (_, small) = grid(rectangle, 0.0, 45.0, turn = Turnaround.Plane(turnRadiusM = 5.0, leadInM = 30.0, leadOutM = 20.0))
+        assertEquals(30.0, small.passes[0].runInM, 1e-9)
+        val (_, copter) = grid(rectangle, 0.0, 45.0, turn = Turnaround.Copter(extensionM = 10.0))
+        assertEquals(10.0, copter.passes[0].runInM, 1e-9)
     }
 
     /**

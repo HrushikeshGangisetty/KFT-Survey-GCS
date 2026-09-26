@@ -4,8 +4,8 @@ import androidx.compose.runtime.Immutable
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.SurveyLimits
 import com.kft.gcs.core.planning.SurveyWarning
-import com.kft.gcs.core.vehicle.MissionCommand
-import com.kft.gcs.core.vehicle.MissionItem
+import com.kft.gcs.core.mission.MissionCommand
+import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.MissionSyncState
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.sameMission

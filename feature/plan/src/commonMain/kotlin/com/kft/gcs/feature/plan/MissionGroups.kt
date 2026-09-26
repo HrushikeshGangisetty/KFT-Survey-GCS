@@ -15,8 +15,8 @@ import com.kft.gcs.core.planning.cameraOff
 import com.kft.gcs.core.planning.gsdM
 import com.kft.gcs.core.planning.planSurvey
 import com.kft.gcs.core.planning.planeTurnRadiusM
-import com.kft.gcs.core.vehicle.MissionCommand
-import com.kft.gcs.core.vehicle.MissionItem
+import com.kft.gcs.core.mission.MissionCommand
+import com.kft.gcs.core.mission.MissionItem
 
 /**
  * One block of the mission, in flight order. The plan is a list of these, not a flat item list: a survey keeps its

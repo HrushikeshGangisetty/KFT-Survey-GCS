@@ -1,12 +1,11 @@
 package com.kft.gcs.core.geoio
 
 import com.kft.gcs.core.geo.LatLon
-import com.kft.gcs.core.mavlink.VehicleKind
-import com.kft.gcs.core.vehicle.AltitudeFrame
-import com.kft.gcs.core.vehicle.Home
-import com.kft.gcs.core.vehicle.Mission
-import com.kft.gcs.core.vehicle.MissionCommand
-import com.kft.gcs.core.vehicle.MissionItem
+import com.kft.gcs.core.mission.AltitudeFrame
+import com.kft.gcs.core.mission.Home
+import com.kft.gcs.core.mission.Mission
+import com.kft.gcs.core.mission.MissionCommand
+import com.kft.gcs.core.mission.MissionItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -29,7 +28,7 @@ class MissionFilesTest {
     /** NaN is compared by bits in data classes, so equality works for the NaN yaw too. */
     @Test
     fun qgcPlanRoundTrip() {
-        val back = decodeQgcPlan(encodeQgcPlan(survey, VehicleKind.COPTER))
+        val back = decodeQgcPlan(encodeQgcPlan(survey, plane = false))
         assertEquals(survey, back.mission)
         assertEquals(0, back.skipped)
     }

@@ -15,8 +15,8 @@
     UDP 14550      MAVProxy forwards here: the GCS's "SITL (UDP 14550)" profile. For the emulator, run
                    `adb emu redir add udp:14550:14550` with the desktop GCS closed (only one can listen).
 
-  Survey camera (Pass 16): camera.parm is loaded too. The first time for each vehicle, also type
-  `param set CAM1_TYPE 1` in MAVProxy and restart this script (see camera.parm for why).
+  Survey camera (Pass 16): camera.parm is loaded too. SITL keeps parameters in eeprom.bin, and a saved value wins
+  over the defaults files, so run with -Wipe once per vehicle (or whenever the defaults change) to start fresh.
 
   The pilot (you) types into the MAVProxy window, e.g.
     Copter: mode guided -> arm throttle -> takeoff 20 -> mode auto
@@ -33,7 +33,10 @@ param(
     [string]$SitlDir = (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Mission Planner\sitl"),
     # Default parameters. Mission Planner downloads plane.parm next to copter.parm the first time it runs Plane SITL;
     # an ArduPilot checkout has the same file in Tools\autotest\default_params.
-    [string]$Defaults = ""
+    [string]$Defaults = "",
+    # Start from factory parameters: SITL's --wipe clears this vehicle's saved eeprom.bin, so every value in the
+    # defaults files (camera.parm included) applies. Without it, a value saved earlier wins over the defaults files.
+    [switch]$Wipe
 )
 
 $exe = Join-Path $SitlDir $(if ($Vehicle -eq "plane") { "ArduPlane.exe" } else { "ArduCopter.exe" })
@@ -49,9 +52,10 @@ $model = if ($Vehicle -eq "plane") { "plane" } else { "quad" }
 $work = Join-Path $SitlDir $Vehicle
 New-Item -ItemType Directory -Force $work | Out-Null
 
-Write-Host "Starting $Vehicle SITL at $HomeLocation ..."
-Start-Process -FilePath $exe -WorkingDirectory $work -WindowStyle Minimized `
-    -ArgumentList "--model", $model, "--home", $HomeLocation, "--defaults", "`"$Defaults`"", "-I0"
+$sitlArgs = @("--model", $model, "--home", $HomeLocation, "--defaults", "`"$Defaults`"", "-I0")
+if ($Wipe) { $sitlArgs += "--wipe" }
+Write-Host "Starting $Vehicle SITL at $HomeLocation$(if ($Wipe) { ' with fresh parameters (--wipe)' }) ..."
+Start-Process -FilePath $exe -WorkingDirectory $work -WindowStyle Minimized -ArgumentList $sitlArgs
 Start-Sleep -Seconds 3
 
 # MAVProxy needs a real console window (it fails without one), so it gets its own.

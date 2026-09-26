@@ -1,12 +1,11 @@
 package com.kft.gcs.core.geoio
 
 import com.kft.gcs.core.geo.LatLon
-import com.kft.gcs.core.mavlink.VehicleKind
-import com.kft.gcs.core.vehicle.AltitudeFrame
-import com.kft.gcs.core.vehicle.Home
-import com.kft.gcs.core.vehicle.Mission
-import com.kft.gcs.core.vehicle.MissionCommand
-import com.kft.gcs.core.vehicle.MissionItem
+import com.kft.gcs.core.mission.AltitudeFrame
+import com.kft.gcs.core.mission.Home
+import com.kft.gcs.core.mission.Mission
+import com.kft.gcs.core.mission.MissionCommand
+import com.kft.gcs.core.mission.MissionItem
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -34,10 +33,10 @@ data class MissionImport(val mission: Mission, val skipped: Int)
 
 /**
  * A QGC `.plan` holding [mission]'s items as plain SimpleItems. QGC needs a planned home; without one the first
- * positioned item stands in (QGC then moves home to the vehicle's on connect). [kind] sets QGC's vehicle type, so QGC
- * shows copter or plane editing options; firmware type 3 is ArduPilot (MAV_AUTOPILOT_ARDUPILOTMEGA).
+ * positioned item stands in (QGC then moves home to the vehicle's on connect). [plane] sets QGC's vehicle type, so
+ * QGC shows plane or copter editing options; firmware type 3 is ArduPilot (MAV_AUTOPILOT_ARDUPILOTMEGA).
  */
-fun encodeQgcPlan(mission: Mission, kind: VehicleKind?): String {
+fun encodeQgcPlan(mission: Mission, plane: Boolean): String {
     val home = mission.home ?: mission.items.firstNotNullOfOrNull { it.position }?.let { Home(it, 0.0) }
     val plan = buildJsonObject {
         put("fileType", "Plan")
@@ -46,7 +45,7 @@ fun encodeQgcPlan(mission: Mission, kind: VehicleKind?): String {
         putJsonObject("mission") {
             put("version", 2)
             put("firmwareType", 3)
-            put("vehicleType", if (kind == VehicleKind.PLANE) 1 else 2) // MAV_TYPE: 1 fixed wing, 2 quadrotor
+            put("vehicleType", if (plane) 1 else 2) // MAV_TYPE: 1 fixed wing, 2 quadrotor
             put("cruiseSpeed", 15)
             put("hoverSpeed", 5)
             putJsonArray("plannedHomePosition") {

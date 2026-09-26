@@ -3,9 +3,9 @@ package com.kft.gcs.feature.plan
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.EntryCorner
-import com.kft.gcs.core.vehicle.AltitudeFrame
-import com.kft.gcs.core.vehicle.MissionCommand
-import com.kft.gcs.core.vehicle.MissionItem
+import com.kft.gcs.core.mission.AltitudeFrame
+import com.kft.gcs.core.mission.MissionCommand
+import com.kft.gcs.core.mission.MissionItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith

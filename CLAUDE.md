@@ -28,10 +28,11 @@ If a task seems to need one of these changed, stop and say so in the pass summar
 |---|---|---|
 | `core:geo` | Pure geodesy value types (`LatLon`, distances, bearings, local projections) | nothing |
 | `core:planning` | **Pure** planning geometry: survey grid, corridor, stats | `core:geo` |
+| `core:mission` | Plain mission values: `MissionItem`, `Mission`, `Home` (no MAVLink types) | `core:geo` |
 | `core:mavlink` | Transports, framing, connection manager, `MavTxGateway` | mavlink-kotlin, coroutines |
-| `core:vehicle` | Vehicle state, telemetry Flows, command and mission protocols | `core:mavlink`, `core:geo` |
+| `core:vehicle` | Vehicle state, telemetry Flows, command and mission protocols | `core:mavlink`, `core:geo`, `core:mission` |
 | `core:terrain` | DEM, elevation queries (P1) | `core:geo` |
-| `core:geo-io` | Import/export parsing (`.plan`, `.waypoints`, camera lists, KML, …) | `core:geo`, `core:planning`, `core:vehicle` (for `MissionItem`) |
+| `core:geo-io` | Import/export parsing (`.plan`, `.waypoints`, camera lists, KML, …) | `core:geo`, `core:planning`, `core:mission` |
 | `ui:map` | `MapView` abstraction + engine adapters | `core:geo`, Compose |
 | `feature:*` | Screens + ViewModels (connections, fly, plan, settings) | `core:*`, `ui:*` — **never another `feature:*`** |
 | `app:shared` | `App()` root, navigation, Koin graph | everything above |

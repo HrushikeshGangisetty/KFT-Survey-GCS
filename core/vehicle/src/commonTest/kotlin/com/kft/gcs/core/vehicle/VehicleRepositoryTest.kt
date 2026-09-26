@@ -1,5 +1,6 @@
 package com.kft.gcs.core.vehicle
 
+import com.kft.gcs.core.mission.Home
 import com.divpundir.mavlink.api.MavMessage
 import com.divpundir.mavlink.definitions.common.CommandLong
 import com.divpundir.mavlink.definitions.common.HomePosition

@@ -1545,7 +1545,7 @@ Screenshots:
 - **Test the prediction, not just the code.** Every unit test passed with the old camera-off point, because the tests checked the formula we chose. Only the real autopilot showed that the formula sat on a knife-edge. The planner's job is to predict what ArduPilot *will* do, so the switch-off now sits in the middle of the safe zone rather than on its edge.
 - **Measure before fixing.** `photo_check.py` turned "some photos are missing" into "the 18th photo on lines 1–6, due 1 m before switch-off", and the emulator's −7 into "an old APK" (its camera-off waypoint was exactly at the edge). Without the per-line numbers, both would have looked like the same random loss.
 - **CAMERA_FEEDBACK is the right count** (S10, `AP_Camera_Backend.cpp`, master 2026-09). Without a feedback pin, ArduPilot sends it for every photo it takes, with the AHRS position at that moment. It is `ardupilotmega.xml` #180, and it's parsed only from the autopilot's own system/component id, like all telemetry.
-- **Windows SITL quirk:** `CAM1_TYPE` in a defaults file is ignored, even on a fresh `eeprom.bin`, while `SERVO9_FUNCTION` from the same file works. The camera's parameters are created after the defaults are read. So it's set once per vehicle with `param set CAM1_TYPE 1` and a restart (written in `camera.parm` and the `start-sitl.ps1` header).
+- **SITL parameters:** ~~`CAM1_TYPE` in a defaults file is ignored, even on a fresh `eeprom.bin`~~ *Corrected in Pass 17:* a value saved in the vehicle's `eeprom.bin` wins over the defaults files. Neither eeprom was fresh here: they dated from Passes 10–11. `start-sitl.ps1 -Wipe` starts with fresh parameters, and then `camera.parm` applies (Pass 17 control test).
 - **The exact-limit warning:** at 5 m/s with a 10 m trigger and a 2.0 s camera, the maths gives 1.999… s. That produced the warning "2.0 s apart, but the camera needs 2.0 s", which is noise. Found in the first desktop run; fixed with a 1e-9 s tolerance and a test.
 
 **Ponytail review:** lean already. `photo_check.py` (≈ 70 lines) is what makes "no photos in the turns" a number. `log_photos` is ≈ 20 lines in the existing pilot script. The camera-off point is one pure function plus a two-line minimum in `planSurvey`. `MAX_PHOTOS` carries a `ponytail:` note. Deleted the `__pycache__` my analysis left behind.
@@ -1578,7 +1578,7 @@ Screenshots:
 - `./gradlew check` and `:app:android:assembleDebug` pass, with no warnings.
 
 ### Your checklist: run the exit check yourself
-1. Once per vehicle: `start-sitl.ps1 -Vehicle copter`, then type `param set CAM1_TYPE 1` in MAVProxy, close SITL, and start it again.
+1. Once per vehicle: `start-sitl.ps1 -Vehicle copter -Wipe` (fresh parameters, so `camera.parm` applies; corrected in Pass 17).
 2. `gradlew.bat :app:desktop:run` → Links → your SITL profile → Plan → + Survey → click 4 corners → set the speed so there's no interval warning → Upload → check the preview → Upload → "On vehicle".
 3. Plan → Export → Mission Planner .waypoints (for step 5). Then Fly → Clear track.
 4. In MAVProxy: `mode guided`, `arm throttle`, `takeoff 20`, `mode auto`. Watch "Photos n / planned" and the dots. Or run `py -3.9 tools/sitl/sitl_pilot.py tcp:127.0.0.1:5763 --photos photos.csv` for the same sequence plus the log.
@@ -1592,6 +1592,73 @@ Screenshots:
 
   Your call which.
 - Photo count on a lossy radio link: the count is CAMERA_FEEDBACK messages received, so a lost packet undercounts. `img_idx` / `completed_captures` could be used to fill gaps. `ponytail:` `MAX_PHOTOS` caps the stored list at 10 000.
-- `CAM1_TYPE` from a defaults file not applying on Windows SITL may be a SITL-build quirk: worth checking on a Linux SITL build before calling it an ArduPilot bug.
+- ~~`CAM1_TYPE` from a defaults file not applying on Windows SITL may be a SITL-build quirk~~ Resolved in Pass 17: it was the saved `eeprom.bin`, and `-Wipe` fixes it.
 - **The rapid prototype (spec §4, weeks 4–5) is met in SITL:** draw polygon → grid → upload → SITL flies it → photos triggered and counted, on desktop (Copter, Plane) and on Android (Copter). A real FC with a camera is the next proof.
 - **Suggested next pass:** a real-hardware check with a KFT FC and a camera on the servo trigger (needs `KFT_APP_SECRET`, Pass 12), or the spec §4 weeks 6–8 list (crosshatch, corridor, KML import).
+
+---
+
+## Pass 17 — Clean-up after the rapid prototype (2026-09-26)
+
+### What changed
+- **`core/planning/SurveyGrid.kt`**: `Turnaround.Plane.firstLeadInM` = max(lead-in, 2 × turn diameter = 4r), used for the first survey line only.
+- **`core/mission`** (new module): `MissionItem`, `AltitudeFrame`, `MissionCommand`, `Mission` and `Home`, moved unchanged from `core:vehicle` (package `com.kft.gcs.core.mission`).
+  - `core:vehicle` keeps the MAVLink wire conversion and exposes the module with `api`.
+  - `core:geo-io` now depends on `core:mission` instead of `core:vehicle`.
+  - `encodeQgcPlan` takes `plane: Boolean`, so `geo-io` no longer needs `VehicleKind` either.
+  - CLAUDE.md §2 table updated: a new `core:mission` row, and the `vehicle` and `geo-io` rows.
+- **`tools/sitl/start-sitl.ps1`**: `-Wipe` passes SITL's `--wipe` (fresh parameters).
+  - `camera.parm` and the script header now say why: a value saved in `eeprom.bin` wins over the defaults files.
+  - The Pass 16 log lines that blamed "Windows SITL" are corrected in place.
+- **`docs/checklists/bench-session-1.md`** (new): the bench checklist.
+- Imports updated in 22 files for the moved types (no behaviour change).
+- **Tests**:
+  - `SurveyGridTest.firstLineLeadInIsTwoTurnDiameters` (new).
+  - Updated hand values: `planeFliesEveryThirdLineSoNoTurnNeedsALoop` (3222.4778 m) and `planeSurveyHasNoTakeoff` (30 items).
+
+### How it works
+- **First line:** Pass 16's worst photo (34 m off the line) was on the first line, after the approach from home at an angle. The other lines' worst was 18 m. The plane comes to line 1 from anywhere, and to lines 2… from a planned U-turn, so only line 1 gets the long run-up.
+  - Hand example (`firstLineLeadInIsTwoTurnDiameters`): r = 50 m, lead-in 30 m → max(30, 200) = 200 m. The first pass starts at y = −200; the second keeps 30 m (entry at y = 230, southbound). With r = 5 m: max(30, 20) = 30, unchanged. A copter has no such rule.
+  - The worked example's Plane distance grows by exactly the extra 170 m (3052.4778 → 3222.4778 m). The legs between passes don't change, because they start at each pass's exit.
+- **Parameters in SITL:** SITL reads the defaults files at boot but keeps any value already saved in `eeprom.bin`. `-Wipe` removes the saved values, so the defaults (including `camera.parm`) apply.
+
+### Engineering learnings
+- **You were right about the cause, and the control test shows it.** Plane SITL, same files, three starts:
+  1. `CAM1_TYPE` saved as 0 → read 0.
+  2. Restart without `-Wipe` → 0: the saved value won over `camera.parm`.
+  3. Restart with `-Wipe` → 1: the defaults applied.
+
+  Copter with `-Wipe` → 1, and one test photo produced a CAMERA_FEEDBACK with a real position.
+  My Pass 16 claim, "even on a fresh eeprom.bin", was wrong. Neither eeprom was fresh: they came from Passes 10–11. I only knew that from the folder dates after you questioned it, and I hadn't run a control. The lesson: when a parameter "doesn't apply", test "saved beats default" before blaming the platform.
+- **A model module is the dependency fix, not a re-export.** `geo-io` needed four data classes, but depending on `core:vehicle` pulled mavlink-kotlin and the whole protocol layer in with them. Now plain values live in the smallest module that can hold them (`core:geo` only). Both the protocol code and the file formats depend on that, and neither depends on the other.
+- **`encodeQgcPlan(plane: Boolean)`:** the file format needs one bit ("show plane options in QGC"), so it takes one bit. A shared enum would have dragged `core:mavlink` back in.
+- **NAVL1 tuning is left to the real aircraft.** `NAVL1_PERIOD` (and `NAVL1_DAMPING`) set how fast ArduPlane converges onto a line: lower is tighter but can oscillate. It depends on the airframe, so it belongs to the aircraft's tuning, not the GCS. The planner's job is lead-in lengths that give the aircraft room to settle.
+  - What Pass 16 measured in SITL (`NAVL1_PERIOD 15`, 18 m/s): roll back to 0° about 110 m after a U-turn, and up to 18 m sideways for the first 1–3 photos of a line.
+  - When the real plane is tuned, re-run `photo_check.py` on a field survey. If the sideways offset is still large, the lead-in default (120 m) and this first-line rule are the knobs.
+
+**Ponytail review:** lean already.
+- `firstLeadInM` is a one-line named property. It keeps the rule and its reason in one KDoc instead of repeating them at each use.
+- `core:mission` is five small types with no functions.
+- `-Wipe` is 3 lines.
+
+### Safety
+- No allowlist or transmission change. The mission types moved unchanged, and `missionToWire` / `missionFromWire` (seq 0 = home, S11) are untouched, as are their tests (`MissionTest`).
+- The bench checklist asks for nothing the GCS would transmit beyond Pass 16. Arming and the camera switch are on the RC, props off. Parameters are set in Mission Planner (the GCS still has no parameter writes).
+- The only SITL-side transmissions in this pass were test snippets on the tool port (5763, system id 254): PARAM_SET of `CAM1_TYPE`, and one `DO_SET_CAM_TRIGG_DIST` to confirm CAMERA_FEEDBACK. None came from the GCS.
+
+### What to look at
+1. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/SurveyGrid.kt:51`: the rule, and `:154` where the grid applies it.
+2. `core/mission/src/commonMain/kotlin/com/kft/gcs/core/mission/MissionModel.kt`: the whole shared model.
+3. `docs/checklists/bench-session-1.md`: the bench session.
+
+### Tests
+- `SurveyGridTest.firstLineLeadInIsTwoTurnDiameters`: 200 m first lead-in (r = 50), 30 m on the second pass, unchanged for r = 5 and for a copter.
+- `planeFliesEveryThirdLineSoNoTurnNeedsALoop`: pass 0 entry at y = −200, total 3222.4778 m (by hand: 3052.4778 + 170).
+- `MissionGroupsTest.planeSurveyHasNoTakeoff`: 30 items (+1 first-line lead-in waypoint; r = 70.6 m at 20 m/s gives 282.6 m).
+- `./gradlew check` and `:app:android:assembleDebug` pass with no warnings. `geo-io` builds without `core:vehicle` or `core:mavlink` on its classpath.
+- SITL: the `-Wipe` control test above (Plane: 0 / 0 / 1; Copter with `-Wipe`: 1, plus a CAMERA_FEEDBACK).
+
+### Open questions / next
+- **Bench session 1** (the checklist): the KFT login on a real FC, radios on both platforms, mission sync, and the camera trigger. It needs your hardware and key.
+- Not re-flown in SITL: the first-line lead-in adds straight flight only, and the camera items are unchanged. Your next Plane SITL or field survey will show the first line's offset with it (use `photo_check.py`).
+- Still open from before: GS-5 (a verified camera for KFT's payload), and whether to plan Plane turns with the aircraft's real turn radius instead of 30° bank.

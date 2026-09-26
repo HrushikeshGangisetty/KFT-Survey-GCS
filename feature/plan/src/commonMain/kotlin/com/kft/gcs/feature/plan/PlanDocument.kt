@@ -6,8 +6,8 @@ import com.kft.gcs.core.geoio.CameraEntry
 import com.kft.gcs.core.geoio.toEntry
 import com.kft.gcs.core.planning.CameraOrientation
 import com.kft.gcs.core.planning.EntryCorner
-import com.kft.gcs.core.vehicle.AltitudeFrame
-import com.kft.gcs.core.vehicle.MissionItem
+import com.kft.gcs.core.mission.AltitudeFrame
+import com.kft.gcs.core.mission.MissionItem
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json

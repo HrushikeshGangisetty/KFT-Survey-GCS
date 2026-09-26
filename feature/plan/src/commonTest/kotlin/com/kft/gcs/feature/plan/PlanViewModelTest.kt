@@ -4,10 +4,10 @@ import app.cash.turbine.test
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.altitudeForGsdM
-import com.kft.gcs.core.vehicle.Home
-import com.kft.gcs.core.vehicle.Mission
-import com.kft.gcs.core.vehicle.MissionCommand
-import com.kft.gcs.core.vehicle.MissionItem
+import com.kft.gcs.core.mission.Home
+import com.kft.gcs.core.mission.Mission
+import com.kft.gcs.core.mission.MissionCommand
+import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.MissionRepository
 import com.kft.gcs.core.vehicle.MissionSync

@@ -14,8 +14,8 @@ import com.kft.gcs.core.mavlink.TxResult
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.vehicle.GpsFix
-import com.kft.gcs.core.vehicle.MissionCommand
-import com.kft.gcs.core.vehicle.MissionItem
+import com.kft.gcs.core.mission.MissionCommand
+import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleRepository

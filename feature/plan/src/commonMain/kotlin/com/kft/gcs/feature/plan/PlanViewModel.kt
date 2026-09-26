@@ -7,12 +7,13 @@ import com.kft.gcs.core.geoio.decodeQgcPlan
 import com.kft.gcs.core.geoio.decodeWaypoints
 import com.kft.gcs.core.geoio.encodeQgcPlan
 import com.kft.gcs.core.geoio.encodeWaypoints
+import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.CameraOrientation
 import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.planning.altitudeForGsdM
 import com.kft.gcs.core.planning.gsdM
-import com.kft.gcs.core.vehicle.Mission
+import com.kft.gcs.core.mission.Mission
 import com.kft.gcs.core.vehicle.MissionRepository
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleState
@@ -282,7 +283,7 @@ class PlanViewModel(
         viewModelScope.launch {
             val mission = Mission(vehicle.value.home, currentFlat().items)
             val text = when (format) {
-                ExportFormat.QGC_PLAN -> encodeQgcPlan(mission, vehicle.value.vehicleKind)
+                ExportFormat.QGC_PLAN -> encodeQgcPlan(mission, plane = vehicle.value.vehicleKind == VehicleKind.PLANE)
                 ExportFormat.WAYPOINTS -> encodeWaypoints(mission)
             }
             val name = files.save("mission.${format.extension}", text) ?: return@launch

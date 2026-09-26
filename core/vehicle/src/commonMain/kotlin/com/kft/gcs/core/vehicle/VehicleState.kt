@@ -1,5 +1,6 @@
 package com.kft.gcs.core.vehicle
 
+import com.kft.gcs.core.mission.Home
 import com.divpundir.mavlink.api.MavMessage
 import com.divpundir.mavlink.definitions.ardupilotmega.CameraFeedback
 import com.divpundir.mavlink.definitions.ardupilotmega.CopterMode
@@ -71,9 +72,6 @@ const val MAX_PHOTOS = 10_000
  * @property lastReached the last item the vehicle reported reaching (MISSION_ITEM_REACHED), if any.
  */
 data class MissionProgress(val current: Int, val total: Int?, val lastReached: Int?, val complete: Boolean)
-
-/** The vehicle's home. [altitudeMslM] is above mean sea level, which is what mission seq 0 carries. */
-data class Home(val position: LatLon, val altitudeMslM: Double)
 
 /** GPS fix quality, from GPS_RAW_INT.fix_type. Survey work wants at least 3D, ideally RTK. */
 enum class GpsFix(val label: String) {

@@ -63,6 +63,7 @@ kotlin {
             dependencies {
                 api(project(":core:mavlink"))
                 api(project(":core:geo"))
+                api(project(":core:mission")) // MissionItem, Mission, Home: part of this module's public API
                 implementation(project.dependencies.platform(libs.koin.bom))
                 implementation(libs.koin.core)
             }

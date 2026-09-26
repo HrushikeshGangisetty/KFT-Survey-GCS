@@ -28,6 +28,7 @@ rootProject.name = "kft-gcs"
 // ---- core: no UI. core/geo and core/planning are pure Kotlin (no I/O). ----
 include(":core:geo")
 include(":core:planning")
+include(":core:mission")
 include(":core:mavlink")
 include(":core:vehicle")
 include(":core:terrain")

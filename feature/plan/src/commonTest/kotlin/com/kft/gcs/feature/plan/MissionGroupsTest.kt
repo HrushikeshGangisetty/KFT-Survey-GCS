@@ -4,7 +4,7 @@ import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.SurveyLimits
-import com.kft.gcs.core.vehicle.MissionCommand
+import com.kft.gcs.core.mission.MissionCommand
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -57,13 +57,14 @@ class MissionGroupsTest {
 
     /**
      * Plane: no takeoff (the pilot takes off on the RC), no RTL here, 0 m lead-in: 1 + 7 × 4 = 29 items (the lead-out
-     * is the 10 m the camera needs, ending at the camera-off point).
+     * is the 10 m the camera needs, ending at the camera-off point), plus the first line's lead-in waypoint: that line
+     * always gets 2 turn diameters (at 20 m/s and 30° bank, r = 70.6 m), so 30 items.
      */
     @Test
     fun planeSurveyHasNoTakeoff() {
         val plane = survey.copy(turnaroundM = 0.0, returnHome = false, speedMs = 20.0)
         val items = flatten(listOf(SurveyGroup("S", plane)), VehicleKind.PLANE, SurveyLimits()).items
-        assertEquals(29, items.size)
+        assertEquals(30, items.size)
         assertEquals(MissionCommand.DO_CHANGE_SPEED, items[0].command)
     }
 

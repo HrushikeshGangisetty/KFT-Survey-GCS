@@ -6,11 +6,9 @@
 # SERVO9_FUNCTION 10 = CameraTrigger: output 9 is free on both the quad and the plane model.
 # Everything else stays at its default: CAM1_INTRVAL_MIN 0 (no minimum), CAM_AUTO_ONLY 0, CAM_MAX_ROLL 0.
 #
-# CAUTION (seen in Pass 16 with the Windows SITL 4.8.0-dev builds): CAM1_TYPE from this file does NOT take effect,
-# even on a fresh eeprom.bin, while SERVO9_FUNCTION does. The camera driver's parameters are only created at boot,
-# after the defaults files are read. Once per vehicle, in the MAVProxy window:
-#     param set CAM1_TYPE 1
-# then close SITL and run start-sitl.ps1 again. It's saved in that vehicle's eeprom.bin from then on.
-# Check: "param show CAM1_TYPE" prints 1.
+# Defaults files only fill in parameters that aren't saved yet: a value stored in the vehicle's eeprom.bin wins.
+# If CAM1_TYPE reads 0 ("param show CAM1_TYPE" in MAVProxy), start once with fresh parameters:
+#     start-sitl.ps1 -Vehicle copter -Wipe
+# (Pass 17 check: saved 0 + no -Wipe → 0; -Wipe → 1, on both Copter and Plane.)
 CAM1_TYPE 1
 SERVO9_FUNCTION 10

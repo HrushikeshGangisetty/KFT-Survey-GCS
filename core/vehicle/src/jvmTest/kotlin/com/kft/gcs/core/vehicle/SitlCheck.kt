@@ -1,5 +1,7 @@
 package com.kft.gcs.core.vehicle
 
+import com.kft.gcs.core.mission.MissionItem
+import com.kft.gcs.core.mission.MissionCommand
 import com.kft.gcs.core.mavlink.ConnectionManager
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.PodStatus

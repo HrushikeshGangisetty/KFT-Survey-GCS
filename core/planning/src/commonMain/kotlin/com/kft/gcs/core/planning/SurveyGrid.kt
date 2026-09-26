@@ -39,9 +39,16 @@ sealed interface Turnaround {
     /**
      * A plane can't stop: it flies [leadInM] straight on the line before the area (to settle after the turn) and
      * [leadOutM] after it, then turns with [turnRadiusM] (see [planeTurnRadiusM]) onto the next line.
+     *
+     * The first line's lead-in is at least 2 turn diameters (4r), see [firstLeadInM]: the plane arrives there from
+     * home or a previous group at any angle, which is the hardest line to settle onto (Pass 16 SITL: the first line's
+     * first photo was 34 m off the line with a 50 m lead-in; the other lines' worst was 18 m).
      */
     data class Plane(val turnRadiusM: Double, val leadInM: Double, val leadOutM: Double) : Turnaround {
         init { require(turnRadiusM > 0 && leadInM >= 0 && leadOutM >= 0) { "turn radius must be positive, lead-in/out not negative" } }
+
+        /** The first line's lead-in: max(lead-in, 2 × turn diameter). */
+        val firstLeadInM: Double get() = max(leadInM, 4 * turnRadiusM)
     }
 }
 
@@ -144,6 +151,7 @@ fun buildSurveyGrid(spec: GridSpec): SurveyGrid {
         is Turnaround.Copter -> t.extensionM to t.extensionM
         is Turnaround.Plane -> t.leadInM to t.leadOutM
     }
+    val firstRunIn = (spec.turnaround as? Turnaround.Plane)?.firstLeadInM ?: runIn
 
     // 4–6. Clip, order, extend. `up` = flying in the +along direction on this line.
     val passes = mutableListOf<GridPass>()
@@ -155,7 +163,7 @@ fun buildSurveyGrid(spec: GridSpec): SurveyGrid {
         val dir = if (up) 1.0 else -1.0
         val inFlightOrder = if (up) inside else inside.reversed().map { (a, b) -> b to a }
         inFlightOrder.forEachIndexed { k, (start, end) ->
-            val inM = if (k == 0) runIn else 0.0
+            val inM = if (k != 0) 0.0 else if (flownLines == 0) firstRunIn else runIn
             val outM = if (k == inFlightOrder.lastIndex) runOut else 0.0
             passes += GridPass(flownLines, across, start - dir * inM, start, end, end + dir * outM, inM, outM)
         }
