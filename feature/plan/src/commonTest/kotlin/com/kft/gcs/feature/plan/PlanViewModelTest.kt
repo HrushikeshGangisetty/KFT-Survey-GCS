@@ -15,6 +15,7 @@ import com.kft.gcs.core.vehicle.MissionTransferException
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.ui.map.MapOverlay
 import com.kft.gcs.ui.map.MarkerStyle
+import com.kft.gcs.ui.map.RouteStyle
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -68,7 +69,11 @@ class PlanViewModelTest {
         assertEquals(listOf("H", "2", "3"), m.map { it.label }, "home is a marker, never a waypoint (S11)")
         assertEquals(MarkerStyle.SELECTED, m.last().style, "the newest waypoint is selected for editing")
         assertFalse(m.first().draggable, "home can't be dragged")
-        assertEquals(listOf(home.position, a, b), s.overlays.filterIsInstance<MapOverlay.Route>().single().points)
+        assertEquals(
+            listOf(MapOverlay.Route(listOf(home.position, a), RouteStyle.TRANSIT), MapOverlay.Route(listOf(a, b), RouteStyle.PLAN)),
+            s.overlays.filterIsInstance<MapOverlay.Route>(),
+            "from home is transit (dashed), between waypoints a plain leg",
+        )
     }
 
     @Test
@@ -246,8 +251,23 @@ class PlanViewModelTest {
         val panel = s.survey!!
         assertNull(panel.error)
         assertTrue(panel.stats.any { it.first == "Photos" }, "${panel.stats}")
-        val route = s.overlays.filterIsInstance<MapOverlay.Route>().single().points
-        assertTrue(route.size > 10, "the grid preview is in the route: ${route.size} points")
+        // The route, by what the vehicle does on each piece: dashed transit from home, then photo lines (camera on)
+        // with faded turns between them, and the Return-to-launch leg dashed back to home.
+        val routes = s.overlays.filterIsInstance<MapOverlay.Route>()
+        val lines = panel.stats.first { it.first == "Lines" }.second.substringBefore(',').toInt()
+        assertEquals(RouteStyle.TRANSIT, routes.first().style)
+        assertEquals(home.position, routes.first().points.first())
+        assertEquals(RouteStyle.TRANSIT, routes.last().style)
+        assertEquals(home.position, routes.last().points.last(), "RTL returns home")
+        val photo = routes.filter { it.style == RouteStyle.PHOTO }
+        assertEquals(lines, photo.size, "one camera-on piece per survey line")
+        assertTrue(photo.all { it.points.size == 2 }, "photoStart → camera-off, straight")
+        val middle = routes.drop(1).dropLast(1).map { it.style }
+        assertEquals(middle.indices.map { if (it % 2 == 0) RouteStyle.TURN else RouteStyle.PHOTO }.dropLast(1) + RouteStyle.TURN, middle,
+            "turn, photo, turn, photo, …, turn: never two photo lines back to back")
+        val labels = markers(vm).filter { it.style == MarkerStyle.START || it.style == MarkerStyle.END }
+        assertEquals(listOf("S", "E"), labels.map { it.label })
+        assertEquals(routes[1].points.first(), labels[0].position, "S where the survey's first run-in starts")
 
         val before = panel.stats
         vm.onMarkerDragged(cornerId(1, 1), LatLon(-35.3620, 149.1700))

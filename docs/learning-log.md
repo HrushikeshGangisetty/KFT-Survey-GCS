@@ -2171,3 +2171,140 @@ Map (ui:map) ──▶ MapColors, the same in every theme: bright fill + dark ca
 - **19b next** (after your OK): the Plan panel in collapsible sections with the start-corner diagram, the survey line
   styling, and the Links and Params restyle. It's also when the remaining literal dp values in the Plan panel go.
 - `PlanViewModel.kt:398` warning (pre-existing, one character).
+
+## Pass 19b — Design system on every screen: Plan panel, survey drawing, Links, Params (2026-09-26)
+
+Second pass of the UI batch, after Hrushikesh approved 19a as it was.
+
+### Before / after
+"Before" is the app at `5bea295`, the last commit before this batch, built in a temporary git worktree and run
+against the same SITL. "After" is this pass. All in `docs/design/`.
+
+| Screen | Before | After (desktop, dark) | After (desktop, light) | After (tablet 1280×800 dp, light) |
+|---|---|---|---|---|
+| Fly | `before-desktop-fly.png` | `19b-desktop-fly-dark.png`, `19b-desktop-fly-dark-satellite.jpg` | `19a-desktop-fly-light.png` | `19b-tablet-fly-light.png` |
+| Plan | `before-desktop-plan.png` | `19b-desktop-plan-dark.png` | `19b-desktop-plan-light.png` | `19b-tablet-plan-light.png` |
+| Params | `before-desktop-params.png` | `19b-desktop-params-dark.png` | `19b-desktop-params-light.png` | `19b-tablet-params-light.png` |
+| Links | `before-desktop-links.png` | `19b-desktop-links-dark.png` | `19b-desktop-links-light.png` | `19b-tablet-links-light.png` |
+
+The Fly screen was finished in 19a (HUD card of stat tiles, ArduPilot mode names, status chips, vertical map-button
+stack). 19b changes what it draws on the map, so its new screenshots show the new survey drawing.
+
+### What changed
+- **`ui/map/MapModel.kt`**:
+  - `MapOverlay.Route` has a `style` (`RouteStyle`: PLAN, PHOTO, TURN, TRANSIT).
+  - `MarkerStyle` has START and END.
+- **`ui/map/MapView.kt`**:
+  - One source and layer per route style: turns 1.5 dp at 55 % opacity, transit 2.5 dp dashed, waypoint legs 3 dp
+    cased, photo lines 4 dp cased.
+  - Direction arrows along photo lines (a line-placed symbol every 140 dp).
+  - Area outlines are drawn after the route, so they're on top; the fills stay underneath.
+  - S/E markers are white label dots that can't be grabbed (they're excluded from the hit test).
+- **`feature/plan/PlanUiState.kt`**:
+  - `routeOverlays(home, flat)` classifies every leg by walking the items with the camera state.
+  - S and E markers at each survey's first and last position.
+- **`feature/plan/PlanScreen.kt`**: the side panel is rebuilt:
+  - Group rows use the icon family (rename = edit icon, delete = close icon) instead of the ✎ / ✕ text glyphs.
+  - Survey settings sit in collapsible sections: Camera, Altitude & GSD, Overlap & angle, Flight, Start corner, then
+    "Battery & limits" (collapsed at first).
+  - A pinned three-column stats footer.
+  - Warnings are shown with the warning icon, above the sections.
+  - The start corner is a small tappable diagram.
+  - Numbers use the shared `NumberField` with unit suffixes (%, m, m/s, °, cm/px, min).
+  - Panel 360 dp, 16 dp radius, tokens instead of literals.
+- **`feature/connections/ConnectionsScreen.kt`**:
+  - A "Links" title.
+  - The link status as an icon and headline, with the KFT login as a status chip.
+  - Profile rows: delete as an icon button with a tooltip, and "Active" as a chip.
+  - The link type as a segmented control.
+  - Surfaces and tokens throughout.
+- **`feature/params/ParamsScreen.kt`**:
+  - Title and status, and the same icon toolbar as Plan (download | open, save).
+  - The hint as a warning chip, and a search field with the search icon.
+  - The list on a surface, with rows at least 48 dp tall and a "modified" chip.
+  - An empty-list hint.
+- **`ui/design`**: three more Material Symbols (`edit`, `add`, `search`).
+- **Tests**: `PlanViewModelTest.clickingTheMapBuildsACopterPlan…` and `drawingASurveyOnTheMap` now check the route
+  styles and the S/E labels (below).
+- `docs/design/`: the before and after screenshots.
+
+### How it works
+```
+flatten(groups) ─▶ items in flight order ─▶ routeOverlays(home, flat)
+   at = home, cameraOn = false
+   DO_SET_CAM_TRIGG_DIST(d>0) ─▶ cameraOn = true      (it runs at the NAV item before it: the line's photoStart)
+   DO_SET_CAM_TRIGG_DIST(0)   ─▶ cameraOn = false     (at the camera-off point)
+   RETURN_TO_LAUNCH           ─▶ leg(at → home, TRANSIT)
+   NAV item at p              ─▶ leg(at → p, first leg from home ? TRANSIT : cameraOn ? PHOTO : in a survey ? TURN : PLAN)
+   same style as the previous leg and touching it ─▶ joined into one line
+      │
+      ▼
+MapView: route-turn (faded) → route-transit (dashed) → route-plan → route-photo (bright) → arrows → area outlines
+```
+
+### Engineering learnings
+- **Classify from the mission items, not from the planner's internals.** The camera state in the flat item list
+  is exactly what the vehicle will do (ArduPilot runs a DO_ item when it reaches the NAV item before it). So a
+  "photo line" on the map is, by construction, where photos will be taken. Using the grid's passes instead would
+  draw the plan's intent, and it could drift from the uploaded mission if `surveyItems` ever changes.
+- **Join legs of the same style.** A survey of 17 lines is about 70 legs. Joined, it's 17 photo lines, 16 turn
+  pieces and 2 transits. That keeps each GeoJSON source small, and the arrows run along a whole line rather than
+  restarting on every two-point piece.
+- **Arrows come from line order, with no heading maths.** MapLibre places a line symbol along the geometry in its
+  drawing order, and the chevron is drawn pointing along the image's x-axis. The alternating up/down arrows in the
+  screenshots are the lawnmower's real direction, because the GeoJSON keeps flight order.
+- **Why the outline goes on top but the fill stays underneath.** The brief asked for the polygon outline to stay
+  clear on top. The fill stays lowest, so it tints the ground without washing out the lines.
+- **Section open/closed state lives in the composable.** It's a view preference, not plan data, so it doesn't
+  belong in the ViewModel, the undo history or the saved plan.
+- **Stats are pinned, settings scroll.** The operator changes a setting, then looks at photos, time and batteries.
+  If the stats scrolled away, every change would need a scroll to check it. Three columns keep the footer to about
+  a quarter of the panel.
+- **The start-corner diagram is drawn in the grid's frame, not the map's.** It shows what the four choices mean
+  (first line from that corner, then back and forth), with "up" along the grid angle. That matches `EntryCorner`'s
+  own definition and stays true at any grid angle. Rotating it to the real map would need the polygon's bounding box
+  in the grid frame, which is too much for a picker.
+- **Links: a segmented control for the link type.** It clipped "UDP listen" at 420 dp once the selected check mark
+  was added; widening the form to 480 dp fixed it. The check mark stays, because it's the non-colour cue for the
+  selected option.
+- **Before screenshots from a worktree.** `git worktree add ../kft_before 5bea295` built the old app next to the new
+  one without touching this checkout, and it was removed afterwards. One snag: the tablet emulator's app was still
+  holding SITL's single TCP 5762 client slot ("0 msg/s"), so it had to be force-stopped first.
+- **Ponytail review:** nothing to cut. The panel rewrite came out net shorter on repeated styling (tokens and shared
+  components), while adding the diagram and the footer.
+
+### What to look at
+1. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanUiState.kt`: `routeOverlays`, the leg
+   classification.
+2. `ui/map/src/commonMain/kotlin/com/kft/gcs/ui/map/MapView.kt`: the route layers (turn → transit → plan → photo →
+   arrows → outlines).
+3. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanScreen.kt`: `SurveyEditor`, `Section`,
+   `StatsFooter`, `StartCornerPicker`.
+
+### Tests
+- `PlanViewModelTest.clickingTheMapBuildsACopterPlanWithHomeAndNumberedMarkers`: the route is exactly
+  [home→a TRANSIT, a→b PLAN].
+- `PlanViewModelTest.drawingASurveyOnTheMap` checks:
+  - The route starts with TRANSIT from home and ends with TRANSIT back to home (RTL).
+  - The number of PHOTO pieces equals the panel's "Lines" stat, an independent count from `surveyStats`.
+  - Every photo piece is a straight two-point line.
+  - The middle alternates turn, photo, …, turn.
+  - The labels are "S" then "E", and S is where the first run-in starts.
+- `gradlew.bat check` and `:app:android:installDebug` pass. The one compiler warning is still the old
+  `PlanViewModel.kt:398`.
+- **By hand, on Copter SITL** (desktop: computer-use; tablet: adb input), what I did and saw:
+  - A 4-corner survey draws: a dashed transit to S, bright photo lines with arrows alternating by line, faded
+    turns, a dashed return from E, and the outline on top. Checked on street and on satellite.
+  - Clicking the top-right corner of the picker redraws the diagram from there and re-plans the map. S moves to the
+    east line: the east edge slants, so that line is the short one near the south-east.
+  - The collapse chevrons work, and the footer stays in view while the settings scroll.
+  - Params: download of 1439 parameters, search "cam1", the list shown in both themes.
+  - Links: connect shows the status card and the "Active" chip.
+
+### Open questions / next
+- **Start-corner diagram is schematic** (the grid frame, not the map's orientation). Say if you want it rotated to
+  match the map.
+- **Survey line colour:** photo lines, turns and transit are all cyan, told apart by weight, opacity and dashes.
+  Say if you'd rather the photo lines were a second colour (for example yellow).
+- **Tooltips on the tablet** are long-press (M3). Checked on desktop only (hover).
+- Next: **Pass 20, parameter metadata.**

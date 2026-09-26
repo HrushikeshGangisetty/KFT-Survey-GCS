@@ -1,30 +1,33 @@
 package com.kft.gcs.feature.plan
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -41,8 +44,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kft.gcs.core.planning.Camera
@@ -52,10 +59,15 @@ import com.kft.gcs.ui.design.ConfirmDialog
 import com.kft.gcs.ui.design.KftIcons
 import com.kft.gcs.ui.design.KftTheme
 import com.kft.gcs.ui.design.KftToolbar
+import com.kft.gcs.ui.design.MinTouchTarget
+import com.kft.gcs.ui.design.NumberField
+import com.kft.gcs.ui.design.SectionHeader
+import com.kft.gcs.ui.design.SegmentedChoice
 import com.kft.gcs.ui.design.Spacing
 import com.kft.gcs.ui.design.Status
 import com.kft.gcs.ui.design.StatusChip
 import com.kft.gcs.ui.design.ToolbarEntry
+import com.kft.gcs.ui.design.TooltipIconButton
 import kotlin.math.roundToLong
 
 /**
@@ -115,32 +127,45 @@ fun PlanRoute(viewModel: PlanViewModel) {
  * Stateless, map-first: a floating toolbar top-left and the mission panel on the right, over the map `App()` draws
  * underneath. The rest of the screen is empty, so clicks reach the map. The same layout serves desktop and tablet
  * (a phone layout is P1). No flight-action buttons (spec S9).
+ *
+ * The panel scrolls, except a survey's stats, which are pinned to its bottom: they're what the operator checks after
+ * every change (photos, time, batteries), so they must stay in view while the settings above scroll.
  */
 @Composable
 fun PlanScreen(state: PlanUiState, actions: PlanActions) {
     var confirmClear by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
-        Toolbar(state, actions, onClear = { confirmClear = true }, Modifier.align(Alignment.TopStart).padding(12.dp).padding(end = 372.dp))
+        Toolbar(
+            state, actions, onClear = { confirmClear = true },
+            Modifier.align(Alignment.TopStart).padding(Spacing.m).padding(end = PANEL_WIDTH + Spacing.xl),
+        )
         // A Surface, not a plain background: M3 Surface blocks pointer events, so a click on the panel can't fall
         // through to the map underneath and add a waypoint or a corner there.
         Surface(
-            Modifier.align(Alignment.TopEnd).padding(12.dp).width(348.dp).fillMaxHeight(),
-            shape = RoundedCornerShape(12.dp),
+            Modifier.align(Alignment.TopEnd).padding(Spacing.m).width(PANEL_WIDTH).fillMaxHeight(),
+            shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surfaceContainer,
+            shadowElevation = 4.dp,
         ) {
-            Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Mission", style = MaterialTheme.typography.titleMedium)
-                Text(state.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                state.transfer?.let { progress ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(progress, Modifier.weight(1f), color = MaterialTheme.colorScheme.primary)
-                        TextButton(onClick = actions::onCancelTransferClicked) { Text("Cancel") }
+            Column {
+                Column(
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(Spacing.m),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.s),
+                ) {
+                    Text("Mission", style = MaterialTheme.typography.titleMedium)
+                    Text(state.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    state.transfer?.let { progress ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(progress, Modifier.weight(1f), color = MaterialTheme.colorScheme.primary)
+                            TextButton(onClick = actions::onCancelTransferClicked) { Text("Cancel") }
+                        }
                     }
+                    GroupList(state.groups, actions)
+                    HorizontalDivider()
+                    state.survey?.let { SurveyEditor(it, state.groups.firstOrNull { g -> g.selected }?.index ?: 0, actions) }
+                        ?: WaypointEditor(state, actions)
                 }
-                GroupList(state.groups, actions)
-                HorizontalDivider()
-                state.survey?.let { SurveyEditor(it, state.groups.firstOrNull { g -> g.selected }?.index ?: 0, actions) }
-                    ?: WaypointEditor(state, actions)
+                state.survey?.stats?.takeIf { it.isNotEmpty() }?.let { StatsFooter(it) }
             }
         }
     }
@@ -202,17 +227,16 @@ private fun GroupList(groups: List<GroupHeader>, actions: PlanActions) {
     var renaming by remember { mutableStateOf<GroupHeader?>(null) }
     groups.forEach { g ->
         Row(
-            Modifier.fillMaxWidth().clickable { actions.onGroupSelected(g.index) }
-                .selectedRow(g.selected)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().selectedRow(g.selected).clickable { actions.onGroupSelected(g.index) }
+                .padding(start = Spacing.s),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(g.name, fontWeight = FontWeight.Bold)
+                Text(g.name, style = MaterialTheme.typography.titleSmall)
                 Text("${g.kind} · ${g.summary}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             }
-            TextButton(onClick = { renaming = g }) { Text("✎") }
-            TextButton(onClick = { actions.onGroupDeleted(g.index) }) { Text("✕") }
+            TooltipIconButton(KftIcons.Edit, "Rename", { renaming = g })
+            TooltipIconButton(KftIcons.Close, "Delete group", { actions.onGroupDeleted(g.index) })
         }
     }
     renaming?.let { g ->
@@ -232,44 +256,86 @@ private fun GroupList(groups: List<GroupHeader>, actions: PlanActions) {
 private fun WaypointEditor(state: PlanUiState, actions: PlanActions) {
     state.rows.forEach { row ->
         Row(
-            Modifier.fillMaxWidth().clickable { actions.onRowSelected(row.index) }
-                .selectedRow(row.selected)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().selectedRow(row.selected).clickable { actions.onRowSelected(row.index) }.padding(start = Spacing.s),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
                 Text("${row.seq}  ${row.title}", style = MaterialTheme.typography.bodyMedium)
                 Text(row.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             }
-            TextButton(onClick = { actions.onDeleteClicked(row.index) }) { Text("✕") }
+            TooltipIconButton(KftIcons.Close, "Delete item", { actions.onDeleteClicked(row.index) })
         }
     }
     state.form?.let { form ->
-        Text("${form.title} (item ${state.rows.getOrNull(form.index)?.seq ?: ""})")
-        OutlinedTextField(
-            value = form.altitude, onValueChange = actions::onAltitudeChanged, singleLine = true,
-            label = { Text("Altitude above home (m)") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        )
-        OutlinedTextField(
-            value = form.speed, onValueChange = actions::onSpeedChanged, singleLine = true,
-            label = { Text("Speed from here (m/s, blank = keep)") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        )
+        SectionHeader("${form.title} (item ${state.rows.getOrNull(form.index)?.seq ?: ""})")
+        NumberField("Altitude above home", form.altitude, actions::onAltitudeChanged, "m", Modifier.fillMaxWidth())
+        NumberField("Speed from here (blank = keep)", form.speed, actions::onSpeedChanged, "m/s", Modifier.fillMaxWidth())
         form.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
 }
 
-/** The survey panel: camera, height, overlaps, angle, entry, speed, turns, then live stats and warnings. */
+/**
+ * The survey panel, in collapsible sections in the order an operator decides things: camera, height, overlaps and
+ * angle, flight, start corner, then the rarely touched battery and GSD limits (collapsed at first). Problems come
+ * first, above the sections, so they're seen without scrolling. The stats are the panel's pinned footer.
+ */
 @Composable
 private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
     val s = panel.settings
+    panel.error?.let { WarningLine(it) }
+    panel.warnings.forEach { WarningLine(it) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("${panel.cornerCount} corners", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = actions::onDeleteCornerClicked, enabled = panel.cornerSelected) { Text("Delete selected corner") }
+    }
+
+    Section("Camera") { CameraSection(panel, actions) }
+    Section("Altitude & GSD") {
+        SegmentedChoice(listOf("Set altitude" to HeightMode.ALTITUDE, "Set GSD" to HeightMode.GSD), s.heightMode, actions::onHeightModeSelected, Modifier.fillMaxWidth())
+        if (s.heightMode == HeightMode.ALTITUDE) {
+            SurveyNumber("Altitude above home", "m", s.altitudeM, SurveyField.ALTITUDE, group, actions, Modifier.fillMaxWidth())
+            panel.gsdCm?.let { Readout("GSD", "${oneDecimalText(it)} cm/px") }
+        } else {
+            SurveyNumber("GSD", "cm/px", s.gsdCm, SurveyField.GSD, group, actions, Modifier.fillMaxWidth())
+            panel.altitudeM?.let { Readout("Altitude above home", "${oneDecimalText(it)} m") }
+        }
+    }
+    Section("Overlap & angle") {
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+            SurveyNumber("Side overlap", "%", s.sideOverlapPct, SurveyField.SIDE_OVERLAP, group, actions, Modifier.weight(1f))
+            SurveyNumber("Front overlap", "%", s.frontOverlapPct, SurveyField.FRONT_OVERLAP, group, actions, Modifier.weight(1f))
+        }
+        SurveyNumber("Grid angle", "°", s.gridAngleDeg, SurveyField.GRID_ANGLE, group, actions, Modifier.fillMaxWidth())
+    }
+    Section("Flight") {
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+            SurveyNumber("Speed", "m/s", s.speedMs, SurveyField.SPEED, group, actions, Modifier.weight(1f))
+            SurveyNumber(if (panel.isPlane) "Lead-in" else "Run-in / out", "m", s.turnaroundM, SurveyField.TURNAROUND, group, actions, Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth().heightIn(min = MinTouchTarget).clickable { actions.onReturnHomeChanged(!s.returnHome) }, verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(s.returnHome, actions::onReturnHomeChanged)
+            Text("Return to launch at the end (mission item)", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    Section("Start corner") {
+        StartCornerPicker(s.entry, actions::onEntrySelected, Modifier.align(Alignment.CenterHorizontally))
+    }
+    Section("Battery & limits (kept between runs)", startExpanded = false) {
+        OptionalNumberField(if (panel.isPlane) "Plane battery, usable" else "Copter battery, usable", "min", panel.batteryMinutes, actions::onBatteryMinutesChanged, Modifier.fillMaxWidth())
+        OptionalNumberField("Warn above GSD", "cm/px", panel.maxGsdCm, actions::onMaxGsdChanged, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun CameraSection(panel: SurveyPanel, actions: PlanActions) {
+    val s = panel.settings
     var cameraMenu by remember { mutableStateOf(false) }
     var addingCamera by remember { mutableStateOf(false) }
-
-    Text("Camera", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
     Box {
-        OutlinedButton(onClick = { cameraMenu = true }, Modifier.fillMaxWidth()) { Text("${s.camera.name.ifEmpty { "Camera" }} ▾") }
+        OutlinedButton(onClick = { cameraMenu = true }, Modifier.fillMaxWidth()) {
+            Text(s.camera.name.ifEmpty { "Camera" }, Modifier.weight(1f))
+            Icon(KftIcons.ExpandMore, contentDescription = "Choose camera")
+        }
         DropdownMenu(cameraMenu, onDismissRequest = { cameraMenu = false }) {
             panel.cameras.forEach { c ->
                 DropdownMenuItem(
@@ -277,70 +343,129 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
                     onClick = { cameraMenu = false; actions.onCameraSelected(c.name) },
                 )
             }
-            DropdownMenuItem(text = { Text("+ Custom camera…") }, onClick = { cameraMenu = false; addingCamera = true })
+            DropdownMenuItem(
+                text = { Text("Custom camera…") },
+                leadingIcon = { Icon(KftIcons.Add, contentDescription = null) },
+                onClick = { cameraMenu = false; addingCamera = true },
+            )
         }
     }
-    if (s.camera.unverified) Text("Preset not yet checked against the maker's spec sheet.", color = KftTheme.status.warn, style = MaterialTheme.typography.labelSmall)
+    if (s.camera.unverified) WarningLine("Preset not yet checked against the maker's spec sheet.")
     if (panel.cameras.any { it.custom && it.name == s.camera.name }) {
         TextButton(onClick = { actions.onCameraDeleted(s.camera.name) }) { Text("Delete this custom camera") }
     }
-    Chips(listOf("Landscape" to CameraOrientation.LANDSCAPE, "Portrait" to CameraOrientation.PORTRAIT), s.orientation, actions::onOrientationSelected)
-
-    Chips(listOf("Set altitude" to HeightMode.ALTITUDE, "Set GSD" to HeightMode.GSD), s.heightMode, actions::onHeightModeSelected)
-    if (s.heightMode == HeightMode.ALTITUDE) {
-        NumberField("Altitude above home (m)", s.altitudeM, SurveyField.ALTITUDE, group, actions)
-        panel.gsdCm?.let { Text("GSD ${oneDecimalText(it)} cm/px") }
-    } else {
-        NumberField("GSD (cm/px)", s.gsdCm, SurveyField.GSD, group, actions)
-        panel.altitudeM?.let { Text("Altitude ${oneDecimalText(it)} m above home") }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        NumberField("Side overlap %", s.sideOverlapPct, SurveyField.SIDE_OVERLAP, group, actions, Modifier.weight(1f))
-        NumberField("Front overlap %", s.frontOverlapPct, SurveyField.FRONT_OVERLAP, group, actions, Modifier.weight(1f))
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        NumberField("Grid angle °", s.gridAngleDeg, SurveyField.GRID_ANGLE, group, actions, Modifier.weight(1f))
-        NumberField("Speed m/s", s.speedMs, SurveyField.SPEED, group, actions, Modifier.weight(1f))
-    }
-    NumberField(if (panel.isPlane) "Lead-in (m)" else "Run-in / run-out (m)", s.turnaroundM, SurveyField.TURNAROUND, group, actions)
-    Text("Start corner", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
-    Chips(
-        listOf("↙" to EntryCorner.BOTTOM_LEFT, "↘" to EntryCorner.BOTTOM_RIGHT, "↖" to EntryCorner.TOP_LEFT, "↗" to EntryCorner.TOP_RIGHT),
-        s.entry, actions::onEntrySelected,
+    SegmentedChoice(
+        listOf("Landscape" to CameraOrientation.LANDSCAPE, "Portrait" to CameraOrientation.PORTRAIT),
+        s.orientation, actions::onOrientationSelected, Modifier.fillMaxWidth(),
     )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(s.returnHome, actions::onReturnHomeChanged)
-        Text("Return to launch at the end (mission item)", style = MaterialTheme.typography.bodySmall)
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("${panel.cornerCount} corners", Modifier.weight(1f))
-        TextButton(onClick = actions::onDeleteCornerClicked, enabled = panel.cornerSelected) { Text("Delete selected corner") }
-    }
-
-    panel.error?.let { Text(it, color = KftTheme.status.warn, style = MaterialTheme.typography.bodySmall) }
-    panel.warnings.forEach { Text("⚠ $it", color = KftTheme.status.warn, style = MaterialTheme.typography.bodySmall) }
-    panel.stats.forEach { (label, value) ->
-        Row {
-            Text(label, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-            Text(value, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-
-    HorizontalDivider()
-    Text("Settings (kept between runs)", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OptionalNumberField(if (panel.isPlane) "Plane battery, usable min" else "Copter battery, usable min", panel.batteryMinutes, actions::onBatteryMinutesChanged, Modifier.weight(1f))
-        OptionalNumberField("Warn above GSD cm/px", panel.maxGsdCm, actions::onMaxGsdChanged, Modifier.weight(1f))
-    }
-
     if (addingCamera) CustomCameraDialog(onSave = { addingCamera = false; actions.onCameraSaved(it) }, onDismiss = { addingCamera = false })
 }
 
+/**
+ * A collapsible panel section. Each keeps its own open/closed state for as long as the panel is shown; that's a
+ * view preference, not plan data, so it isn't in the ViewModel or the undo history.
+ */
 @Composable
-private fun <T> Chips(options: List<Pair<String, T>>, selected: T, onSelect: (T) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        options.forEach { (label, value) -> FilterChip(selected = value == selected, onClick = { onSelect(value) }, label = { Text(label) }) }
+private fun Section(title: String, startExpanded: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
+    var expanded by remember(title) { mutableStateOf(startExpanded) }
+    SectionHeader(title, expanded = expanded, onToggle = { expanded = !expanded })
+    if (expanded) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.s), content = content)
+    HorizontalDivider()
+}
+
+/** "GSD 1.4 cm/px": a value the plan computed, shown under the one the operator typed. */
+@Composable
+private fun Readout(label: String, value: String) {
+    Row {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
     }
+}
+
+/** A warning in the panel: the warning icon (not only the colour) and the text. */
+@Composable
+private fun WarningLine(text: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+        Icon(KftIcons.Warn, contentDescription = "Warning", Modifier.size(18.dp), tint = KftTheme.status.warn)
+        Text(text, color = KftTheme.status.warn, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** The survey's numbers, pinned under the scrolling settings: three columns of label over value, compact enough
+ * to leave the settings room. */
+@Composable
+private fun StatsFooter(stats: List<Pair<String, String>>) {
+    HorizontalDivider()
+    FlowRow(
+        Modifier.fillMaxWidth().padding(Spacing.m),
+        maxItemsInEachRow = 3,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+        verticalArrangement = Arrangement.spacedBy(Spacing.s),
+    ) {
+        stats.forEach { (label, value) ->
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(value, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/**
+ * The start corner as a picture of what it means: a small area with the flight pattern drawn from the chosen corner
+ * (first line up from it, then back and forth). Tap a corner to choose it. Schematic, in the grid's own frame: "up"
+ * is along the grid angle and "bottom left" is [EntryCorner.BOTTOM_LEFT] (the south-west corner at grid angle 0).
+ * Each corner is a 48 dp target.
+ */
+@Composable
+private fun StartCornerPicker(selected: EntryCorner, onSelect: (EntryCorner) -> Unit, modifier: Modifier = Modifier) {
+    val line = MaterialTheme.colorScheme.primary
+    val frame = MaterialTheme.colorScheme.outline
+    Box(modifier.size(width = 200.dp, height = 128.dp)) {
+        Canvas(Modifier.fillMaxSize().padding(MinTouchTarget / 2)) {
+            drawRect(frame, style = Stroke(1.dp.toPx()))
+            val left = selected == EntryCorner.BOTTOM_LEFT || selected == EntryCorner.TOP_LEFT
+            val bottom = selected == EntryCorner.BOTTOM_LEFT || selected == EntryCorner.BOTTOM_RIGHT
+            val columns = 5
+            val xs = List(columns) { size.width * (it + 0.5f) / columns }.let { if (left) it else it.reversed() }
+            val (startY, endY) = if (bottom) size.height to 0f else 0f to size.height
+            val path = Path().apply {
+                moveTo(xs[0], startY)
+                xs.forEachIndexed { i, x ->
+                    val (from, to) = if (i % 2 == 0) startY to endY else endY to startY
+                    if (i > 0) lineTo(x, from)
+                    lineTo(x, to)
+                }
+            }
+            drawPath(path, line, style = Stroke(2.dp.toPx()))
+            EntryCorner.entries.forEach { corner ->
+                val c = cornerOffset(corner, size.width, size.height)
+                if (corner == selected) drawCircle(line, radius = 7.dp.toPx(), center = c)
+                else drawCircle(frame, radius = 6.dp.toPx(), center = c, style = Stroke(1.5.dp.toPx()))
+            }
+        }
+        EntryCorner.entries.forEach { corner ->
+            Box(
+                Modifier.align(
+                    when (corner) {
+                        EntryCorner.BOTTOM_LEFT -> Alignment.BottomStart
+                        EntryCorner.BOTTOM_RIGHT -> Alignment.BottomEnd
+                        EntryCorner.TOP_LEFT -> Alignment.TopStart
+                        EntryCorner.TOP_RIGHT -> Alignment.TopEnd
+                    },
+                ).size(MinTouchTarget)
+                    .selectable(selected = corner == selected, role = Role.RadioButton, onClick = { onSelect(corner) })
+                    .semantics { contentDescription = "Start ${corner.name.lowercase().replace('_', ' ')}" },
+            )
+        }
+    }
+}
+
+private fun cornerOffset(corner: EntryCorner, w: Float, h: Float) = when (corner) {
+    EntryCorner.BOTTOM_LEFT -> Offset(0f, h)
+    EntryCorner.BOTTOM_RIGHT -> Offset(w, h)
+    EntryCorner.TOP_LEFT -> Offset(0f, 0f)
+    EntryCorner.TOP_RIGHT -> Offset(w, 0f)
 }
 
 /**
@@ -349,7 +474,7 @@ private fun <T> Chips(options: List<Pair<String, T>>, selected: T, onSelect: (T)
  * text follows, unless it already means that value.
  */
 @Composable
-private fun NumberField(label: String, value: Double, field: SurveyField, group: Int, actions: PlanActions, modifier: Modifier = Modifier) {
+private fun SurveyNumber(label: String, unit: String, value: Double, field: SurveyField, group: Int, actions: PlanActions, modifier: Modifier = Modifier) {
     var text by remember(group, field) { mutableStateOf(numberText(value)) }
     LaunchedEffect(value) { if (text.trim().toDoubleOrNull() != value) text = numberText(value) }
     val parsed = text.trim().toDoubleOrNull()
@@ -358,39 +483,32 @@ private fun NumberField(label: String, value: Double, field: SurveyField, group:
         parsed !in field.range -> "${numberText(field.range.start)} to ${numberText(field.range.endInclusive)}"
         else -> null
     }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { t -> text = t; t.trim().toDoubleOrNull()?.let { actions.onSurveyNumberChanged(field, it) } },
-        modifier = modifier,
-        label = { Text(label) },
-        isError = error != null,
-        supportingText = error?.let { { Text(it) } },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+    NumberField(
+        label, text, { t -> text = t; t.trim().toDoubleOrNull()?.let { actions.onSurveyNumberChanged(field, it) } },
+        unit, modifier, error,
     )
 }
 
 /** A setting that may be unset: blank = null. */
 @Composable
-private fun OptionalNumberField(label: String, value: Double?, onValue: (Double?) -> Unit, modifier: Modifier) {
+private fun OptionalNumberField(label: String, unit: String, value: Double?, onValue: (Double?) -> Unit, modifier: Modifier) {
     var text by remember { mutableStateOf(value?.let(::numberText) ?: "") }
     LaunchedEffect(value) { if (text.trim().toDoubleOrNull() != value) text = value?.let(::numberText) ?: "" }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { t ->
+    NumberField(
+        label, text,
+        { t ->
             text = t
             if (t.isBlank()) onValue(null) else t.trim().toDoubleOrNull()?.let(onValue)
         },
-        modifier = modifier,
-        label = { Text(label) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        unit, modifier,
     )
 }
 
 /** Whole numbers without ".0", others to two decimals: 70, 8.5, 2.74. */
 private fun numberText(v: Double): String =
     if (v == v.roundToLong().toDouble()) v.roundToLong().toString() else ((v * 100).roundToLong() / 100.0).toString()
+
+private val PANEL_WIDTH = 360.dp
 
 /** The fields a camera needs. Save is enabled only when all parse and the camera's own checks accept them. */
 @Composable
@@ -429,7 +547,7 @@ private fun UploadPreviewDialog(preview: UploadPreview, actions: PlanActions) {
         title = { Text("Upload ${preview.lines.size - 1} items?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                preview.warnings.forEach { Text("⚠ $it", color = KftTheme.status.warn) }
+                preview.warnings.forEach { WarningLine(it) }
                 LazyColumn(Modifier.heightIn(max = 320.dp)) {
                     items(preview.lines) { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }

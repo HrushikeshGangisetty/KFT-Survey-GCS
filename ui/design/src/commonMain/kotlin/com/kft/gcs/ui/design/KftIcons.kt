@@ -66,6 +66,9 @@ object KftIcons {
     // General
     val More: ImageVector @Composable get() = vectorResource(Res.drawable.ic_more_vert)
     val Close: ImageVector @Composable get() = vectorResource(Res.drawable.ic_close)
+    val Edit: ImageVector @Composable get() = vectorResource(Res.drawable.ic_edit)
+    val Add: ImageVector @Composable get() = vectorResource(Res.drawable.ic_add)
+    val Search: ImageVector @Composable get() = vectorResource(Res.drawable.ic_search)
     val ExpandMore: ImageVector @Composable get() = vectorResource(Res.drawable.ic_expand_more)
     val ExpandLess: ImageVector @Composable get() = vectorResource(Res.drawable.ic_expand_less)
     val Check: ImageVector @Composable get() = vectorResource(Res.drawable.ic_check)

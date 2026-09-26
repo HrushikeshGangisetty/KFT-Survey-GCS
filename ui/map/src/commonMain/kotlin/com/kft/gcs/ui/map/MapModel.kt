@@ -51,8 +51,12 @@ sealed interface MapOverlay {
     /** The path flown so far. */
     data class Track(val points: List<LatLon>) : MapOverlay
 
-    /** The planned path, waypoint to waypoint. Drawn in a different colour from [Track], the path already flown. */
-    data class Route(val points: List<LatLon>) : MapOverlay
+    /**
+     * A piece of the planned path, drawn in [style]. A plan is several of these: the transit from home, waypoint
+     * legs, a survey's photo lines and the turns between them. Drawn in a different colour from [Track], the path
+     * already flown.
+     */
+    data class Route(val points: List<LatLon>, val style: RouteStyle = RouteStyle.PLAN) : MapOverlay
 
     /**
      * An area, such as a survey polygon: outline plus a light fill. With fewer than 3 corners it's drawn as a line
@@ -76,8 +80,21 @@ sealed interface MapOverlay {
     ) : MapOverlay
 }
 
-/** How a [MapOverlay.Marker] looks. The map decides the colours, so every screen shows the same meaning the same way. */
-enum class MarkerStyle { HOME, WAYPOINT, SELECTED, CURRENT, CORNER }
+/**
+ * How a [MapOverlay.Route] looks, by what the vehicle does on it:
+ * - [PLAN]: a leg between hand-placed waypoints. Normal line.
+ * - [PHOTO]: a survey line with the camera on. The part that matters: thick and bright, with direction arrows.
+ * - [TURN]: survey flight with the camera off (run-in, run-out, lead-in, the turn to the next line). Thin and faded.
+ * - [TRANSIT]: to or from home. Dashed.
+ */
+enum class RouteStyle { PLAN, PHOTO, TURN, TRANSIT }
+
+/**
+ * How a [MapOverlay.Marker] looks. The map decides the colours, so every screen shows the same meaning the same way.
+ * [START] and [END] ("S", "E") mark where a survey begins and ends; they're labels only, so the map never lets them
+ * be clicked or dragged (a corner or a map click next to them must still work).
+ */
+enum class MarkerStyle { HOME, WAYPOINT, SELECTED, CURRENT, CORNER, START, END }
 
 /** "Move the camera here." A new [id] means a new request, even to the same place (e.g. "centre" pressed twice). */
 data class CameraRequest(val target: LatLon, val zoom: Double, val id: Long)

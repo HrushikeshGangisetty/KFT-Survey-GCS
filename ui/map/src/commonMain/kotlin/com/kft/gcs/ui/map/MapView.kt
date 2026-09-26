@@ -35,6 +35,7 @@ import org.maplibre.compose.expressions.dsl.image
 import org.maplibre.compose.expressions.value.IconRotationAlignment
 import org.maplibre.compose.expressions.value.LineCap
 import org.maplibre.compose.expressions.value.LineJoin
+import org.maplibre.compose.expressions.value.SymbolPlacement
 import org.maplibre.compose.interaction.ClickResult
 import org.maplibre.compose.interaction.MapInteractions
 import org.maplibre.compose.layers.CircleLayer
@@ -90,6 +91,9 @@ fun MapView(
     remember { configureRuntimeOnce }
     // The gesture code below is set up once per map, so it reads the latest markers and callbacks through these.
     val markers by rememberUpdatedState(overlays.filterIsInstance<MapOverlay.Marker>())
+    // What a press can grab: every marker except the S/E labels.
+    val grabbable by rememberUpdatedState(markers.filter { it.style != MarkerStyle.START && it.style != MarkerStyle.END })
+    val lineArrow = rememberVectorPainter(LineArrow)
     val mapClick by rememberUpdatedState(onMapClick)
     val markerClick by rememberUpdatedState(onMarkerClick)
     val markerDrag by rememberUpdatedState(onMarkerDrag)
@@ -116,18 +120,41 @@ fun MapView(
         // lowest, so the route and the markers inside them stay readable.
         // The area being edited is drawn stronger than the others: two sources, so each gets plain constant styles.
         val polygons = overlays.filterIsInstance<MapOverlay.Polygon>()
-        listOf(true, false).forEach { selected ->
-            val areas = rememberGeoJsonSource(GeoJsonData.JsonString(polygonsGeoJson(polygons.filter { it.selected == selected })))
-            FillLayer(id = "areas-fill-$selected", source = areas, color = const(MapColors.AREA), opacity = const(if (selected) 0.2f else 0.1f))
-            CasedLine("areas-outline-$selected", areas, MapColors.AREA, if (selected) 3.dp else 1.5.dp)
+        val areas = listOf(true, false).associateWith { selected ->
+            rememberGeoJsonSource(GeoJsonData.JsonString(polygonsGeoJson(polygons.filter { it.selected == selected })))
         }
-        // Under the track: once the vehicle flies the plan, the flown path must show on top of the planned one.
-        CasedLine(
-            "route",
-            rememberGeoJsonSource(GeoJsonData.JsonString(routeGeoJson(overlays.filterIsInstance<MapOverlay.Route>()))),
-            MapColors.ROUTE,
-            3.dp,
+        areas.forEach { (selected, source) ->
+            FillLayer(id = "areas-fill-$selected", source = source, color = const(MapColors.AREA), opacity = const(if (selected) 0.2f else 0.1f))
+        }
+        // The plan, faintest first, so a photo line is never under a turn. All under the track: once the vehicle flies
+        // the plan, the flown path must show on top of the planned one.
+        val routes = overlays.filterIsInstance<MapOverlay.Route>()
+        fun routeSource(style: RouteStyle) = GeoJsonData.JsonString(routeGeoJson(routes.filter { it.style == style }))
+        LineLayer(
+            id = "route-turn", source = rememberGeoJsonSource(routeSource(RouteStyle.TURN)), color = const(MapColors.ROUTE),
+            width = const(1.5.dp), opacity = const(0.55f), cap = const(LineCap.Round), join = const(LineJoin.Round),
         )
+        LineLayer(
+            id = "route-transit", source = rememberGeoJsonSource(routeSource(RouteStyle.TRANSIT)), color = const(MapColors.ROUTE),
+            width = const(2.5.dp), dasharray = const(listOf(2, 1.5)),
+        )
+        CasedLine("route-plan", rememberGeoJsonSource(routeSource(RouteStyle.PLAN)), MapColors.ROUTE, 3.dp)
+        val photoLines = rememberGeoJsonSource(routeSource(RouteStyle.PHOTO))
+        CasedLine("route-photo", photoLines, MapColors.ROUTE, 4.dp)
+        // Small arrows along each photo line, in the direction it's flown (GeoJSON lines keep the flight order).
+        SymbolLayer(
+            id = "route-photo-arrows",
+            source = photoLines,
+            placement = const(SymbolPlacement.Line),
+            spacing = const(140.dp),
+            iconSize = const(1.5f),
+            iconImage = image(lineArrow),
+            iconRotationAlignment = const(IconRotationAlignment.Map),
+            iconAllowOverlap = const(true),
+            iconIgnorePlacement = const(true),
+        )
+        // The area outlines on top of the plan, so the boundary the operator is editing always stays readable.
+        areas.forEach { (selected, source) -> CasedLine("areas-outline-$selected", source, MapColors.AREA, if (selected) 3.dp else 1.5.dp) }
         overlays.filterIsInstance<MapOverlay.Track>().forEachIndexed { i, track ->
             if (track.points.size >= 2) {
                 CasedLine("track-$i", rememberGeoJsonSource(GeoJsonData.JsonString(lineGeoJson(track.points))), MapColors.TRACK, 3.dp)
@@ -148,7 +175,13 @@ fun MapView(
                 id = "markers-$style",
                 source = source,
                 // Corners are handles, not numbered stops: smaller, so a dense polygon doesn't hide its own outline.
-                radius = const(if (style == MarkerStyle.CORNER) CORNER_RADIUS else MARKER_RADIUS),
+                radius = const(
+                    when (style) {
+                        MarkerStyle.CORNER -> CORNER_RADIUS
+                        MarkerStyle.START, MarkerStyle.END -> LABEL_RADIUS
+                        else -> MARKER_RADIUS
+                    },
+                ),
                 color = const(style.color),
                 strokeColor = const(MapColors.OUTLINE),
                 strokeWidth = const(1.5.dp),
@@ -193,7 +226,7 @@ fun MapView(
                 val click = markerClick
                 val drag = markerDrag
                 if (click == null && drag == null) return@awaitEachGesture
-                val candidates = markers
+                val candidates = grabbable
                 val onScreen = candidates.map { mapState.screenLocationFromPosition(it.position.toPosition()) }
                 val marker = hitMarker(toDp(down.position), onScreen, MARKER_HIT_RADIUS)?.let(candidates::get)
                     ?: return@awaitEachGesture // not on a marker: the map pans or reports a map click
@@ -235,6 +268,7 @@ fun MapView(
 private val MARKER_HIT_RADIUS = 24.dp
 private val MARKER_RADIUS = 11.dp
 private val CORNER_RADIUS = 7.dp
+private val LABEL_RADIUS = 9.dp
 
 /**
  * Overlay colours. The same in every app theme, because the map underneath doesn't change with the theme, and never
@@ -261,6 +295,7 @@ private val MarkerStyle.color
         MarkerStyle.SELECTED -> MapColors.SELECTED
         MarkerStyle.CURRENT -> MapColors.TRACK
         MarkerStyle.CORNER -> MapColors.AREA
+        MarkerStyle.START, MarkerStyle.END -> Color.White
     }
 
 /**
@@ -353,6 +388,21 @@ internal fun lineGeoJson(points: List<LatLon>) =
 private val VehicleArrow = ImageVector.Builder("vehicle-arrow", 24.dp, 24.dp, 24f, 24f)
     .path(stroke = SolidColor(MapColors.OUTLINE), strokeLineWidth = 3f, strokeLineJoin = StrokeJoin.Round) { arrow() }
     .path(fill = SolidColor(MapColors.VEHICLE), stroke = SolidColor(Color.White), strokeLineWidth = 1f, strokeLineJoin = StrokeJoin.Round) { arrow() }
+    .build()
+
+/**
+ * The direction chevron repeated along photo lines, 12 dp. Drawn pointing right: MapLibre lays a line-placed icon's
+ * x-axis along the line in its drawing direction, so "right" in the image is "forward" on the line. Dark-edged white,
+ * like the vehicle arrow, to read on the cyan line and any basemap.
+ */
+private val LineArrow = ImageVector.Builder("line-arrow", 12.dp, 12.dp, 12f, 12f)
+    .path(fill = SolidColor(Color.White), stroke = SolidColor(MapColors.OUTLINE), strokeLineWidth = 1f, strokeLineJoin = StrokeJoin.Round) {
+        moveTo(3f, 2f)
+        lineTo(10f, 6f)
+        lineTo(3f, 10f)
+        lineTo(5f, 6f)
+        close()
+    }
     .build()
 
 private fun PathBuilder.arrow() {

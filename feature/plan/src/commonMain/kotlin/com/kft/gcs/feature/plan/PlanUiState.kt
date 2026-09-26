@@ -1,6 +1,7 @@
 package com.kft.gcs.feature.plan
 
 import androidx.compose.runtime.Immutable
+import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.SurveyLimits
 import com.kft.gcs.core.planning.SurveyWarning
@@ -11,6 +12,7 @@ import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.sameMission
 import com.kft.gcs.ui.map.MapOverlay
 import com.kft.gcs.ui.map.MarkerStyle
+import com.kft.gcs.ui.map.RouteStyle
 import kotlin.math.roundToInt
 
 /** Everything the Plan screen draws, plus what it hands to the shared map. */
@@ -128,7 +130,7 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
     val armedIn = if (vehicle.connected && vehicle.armed) "Vehicle is ARMED in ${vehicle.flightMode?.uppercase() ?: "an unknown mode"}" else null
 
     val overlays = buildList<MapOverlay> {
-        add(MapOverlay.Route(listOfNotNull(home) + flat.items.mapNotNull { it.position }))
+        addAll(routeOverlays(home, flat))
         home?.let { add(MapOverlay.Marker(HOME_MARKER, it, "H", MarkerStyle.HOME)) }
         flat.groups.forEachIndexed { g, fg ->
             when (val group = fg.group) {
@@ -146,6 +148,11 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
                 }
                 is SurveyGroup -> {
                     add(MapOverlay.Polygon(group.survey.polygon, selected = g == e.selectedGroup))
+                    // Where the survey starts and ends: its first and last position (entry of the first line, exit
+                    // of the last). Labels only; the map doesn't let them be grabbed.
+                    val path = fg.items.mapNotNull { it.position }
+                    path.firstOrNull()?.let { add(MapOverlay.Marker("survey-start-$g", it, "S", MarkerStyle.START)) }
+                    path.lastOrNull()?.let { add(MapOverlay.Marker("survey-end-$g", it, "E", MarkerStyle.END)) }
                     // Corners are handles for the survey being edited only; others show just their outline.
                     if (g == e.selectedGroup) group.survey.polygon.forEachIndexed { i, at ->
                         val style = if (i == e.selectedItem) MarkerStyle.SELECTED else MarkerStyle.CORNER
@@ -199,6 +206,56 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
         canRedo = e.future.isNotEmpty(),
         preview = e.preview,
     )
+}
+
+/**
+ * The planned path as styled pieces ([RouteStyle]), walking the items in flight order and tracking the camera:
+ * - The first leg, from home, and the leg back to home for a RETURN_TO_LAUNCH item: TRANSIT.
+ * - A leg flown while DO_SET_CAM_TRIGG_DIST has the camera on (it runs at the NAV item before it, so the camera is
+ *   on from a line's photoStart to its camera-off point, see [surveyItems]): PHOTO.
+ * - Any other leg that ends at a survey item (run-in, run-out, lead-in, the turn to the next line): TURN.
+ * - Legs between hand-placed waypoints: PLAN.
+ * Neighbouring legs of the same style are joined into one line, so a survey is a few long lines rather than
+ * hundreds of two-point ones. Without a known home the path starts at the first item.
+ */
+internal fun routeOverlays(home: LatLon?, flat: FlatMission): List<MapOverlay.Route> {
+    val routes = mutableListOf<MapOverlay.Route>()
+    fun leg(from: LatLon, to: LatLon, style: RouteStyle) {
+        val last = routes.lastOrNull()
+        if (last != null && last.style == style && last.points.last() == from) routes[routes.lastIndex] = last.copy(points = last.points + to)
+        else routes += MapOverlay.Route(listOf(from, to), style)
+    }
+    var at = home
+    var firstLeg = true
+    var cameraOn = false
+    flat.groups.forEach { fg ->
+        val survey = fg.group is SurveyGroup
+        fg.items.forEach { item ->
+            when {
+                item.command == MissionCommand.DO_SET_CAM_TRIGG_DIST -> cameraOn = item.param1 > 0f
+                item.command == MissionCommand.RETURN_TO_LAUNCH -> {
+                    val from = at
+                    if (from != null && home != null) leg(from, home, RouteStyle.TRANSIT)
+                    at = home
+                }
+                else -> item.position?.let { to ->
+                    val from = at
+                    if (from != null) {
+                        val style = when {
+                            firstLeg && from == home -> RouteStyle.TRANSIT
+                            cameraOn -> RouteStyle.PHOTO
+                            survey -> RouteStyle.TURN
+                            else -> RouteStyle.PLAN
+                        }
+                        leg(from, to, style)
+                        firstLeg = false
+                    }
+                    at = to
+                }
+            }
+        }
+    }
+    return routes
 }
 
 /** The preview: every item with its seq, and the warnings (survey checks, armed vehicle, unknown home). */
