@@ -21,6 +21,7 @@ kotlin {
             implementation(project(":feature:connections"))
             implementation(project(":feature:fly"))
             implementation(project(":feature:plan"))
+            implementation(project(":feature:params"))
             implementation(project(":feature:settings"))
             implementation(project(":core:mavlink")) // for mavlinkModule and the IoDispatcher qualifier
             implementation(project(":core:vehicle"))

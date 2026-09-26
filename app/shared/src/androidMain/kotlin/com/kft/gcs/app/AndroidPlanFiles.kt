@@ -14,7 +14,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
 /**
- * Plan files on Android, through the system document picker (Storage Access Framework): the operator picks any
+ * Plan and parameter files on Android, through the system document picker (Storage Access Framework): the operator picks any
  * folder, Drive included, and the app needs no storage permission. The picker is an activity result, which only a
  * composable can launch, so [RegisterPlanFiles] connects the launchers while the UI is up.
  */

@@ -1662,3 +1662,239 @@ Screenshots:
 - **Bench session 1** (the checklist): the KFT login on a real FC, radios on both platforms, mission sync, and the camera trigger. It needs your hardware and key.
 - Not re-flown in SITL: the first-line lead-in adds straight flight only, and the camera items are unchanged. Your next Plane SITL or field survey will show the first line's offset with it (use `photo_check.py`).
 - Still open from before: GS-5 (a verified camera for KFT's payload), and whether to plan Plane turns with the aircraft's real turn radius instead of 30° bank.
+
+---
+
+## Pass 18 — Basic parameter editor (P1 item pulled forward) + Plane first-line re-check (2026-09-26)
+
+Why now: KFT firmware drops Mission Planner and QGC until the HMAC login, so this GCS is the only tool that can set
+parameters on our flight controllers. Two items, one commit each. This entry covers item 1; item 2 is appended below.
+
+### Item 1 — Parameter editor
+
+#### What changed
+- **`core/mavlink/TxPolicy.kt`**: PARAM_SET moves from `OPERATOR` (always allowed) to a new `PARAM_CHANGE_DISARMED`
+  category. It's refused while armed, and also when no vehicle is heard (armed state unknown). `OPERATOR` is gone:
+  PARAM_SET was its only member. PARAM_REQUEST_LIST / PARAM_REQUEST_READ stay `ALWAYS`.
+- **`core/vehicle`**:
+  - `Params.kt` (new): `Param`, `ParamType` (ArduPilot's four storage types), `valueText`, `parseParamInput` (whole
+    numbers only for integer types, range, no NaN), and `ParamSetResult` (Applied / NotApplied).
+  - `ParamProtocol.kt` (new): download all (list, then per-index reads for the gaps), and set with a check on the echo.
+  - `ParamRepository.kt` (new): the interface plus `DefaultParamRepository`, gated on the KFT login.
+  - `MissionRepository.kt`: the login gate is now two small shared functions (`loggedInTarget`, `notReadyReason`),
+    used by missions and parameters alike. Missions behave the same.
+  - `di/VehicleModule.kt`: binds `ParamRepository`.
+- **`core/geo-io/ParamFiles.kt`** (new): Mission Planner `.param` read/write (`NAME,VALUE`).
+- **`feature/params`** (new module): `ParamsUiState`, `ParamsViewModel` (with the `ParamFiles` dialog interface),
+  `ParamsScreen` + `ParamsRoute`, and `di/ParamsModule`.
+- **`app/shared`**:
+  - The "Params" tab in the rail.
+  - `paramsModule` in the graph.
+  - A 6-line `ParamFiles` adapter over the existing `PlanFiles` dialogs.
+  - The desktop dialog title is now "Open" instead of "Open a plan (…)".
+- **`settings.gradle.kts`**, **`CLAUDE.md` §2**: the new module.
+- **`tools/sitl/sitl_pilot.py`**: `--arm-only`, for the SITL armed-refusal check. This is the pilot's role; the GCS
+  never sends it.
+- **`docs/checklists/bench-session-1.md`**:
+  - New section 1b, the Params screen, including the locked-parameter check.
+  - Section 5 sets the camera through the GCS (one by one, or Load file…) and power-cycles, instead of using Mission
+    Planner.
+- **Tests**:
+  - New: `ParamProtocolTest` (17), `ParamsViewModelTest` (7), `ParamFilesTest` (3).
+  - `MavTxGatewayTest`: `paramSetOnlyWhileDisarmed`, `gatewayRejectsParamSetWhileArmedWithoutWriting`, and
+    PARAM_REQUEST_READ in the always-allowed list.
+  - `SitlCheck.paramsDownloadSetReadBackAndArmedRefusal`.
+
+#### How it works
+```
+Params screen ──onDownloadClicked──▶ ParamsViewModel ──downloadAll──▶ DefaultParamRepository
+                                                                        │ login gate (AUTHENTICATED / LEGACY / NO_KEY)
+                                                                        ▼
+                                             ParamProtocol ──PARAM_REQUEST_LIST──▶ gateway (ALWAYS) ──▶ FC
+   received[index] ◀── PARAM_VALUE(name, value, type, count, index) streamed ◀──────────────────────────┘
+   quiet 1.5 s ─▶ PARAM_REQUEST_READ(index) for ≤10 missing indices, ≤3 tries each ─▶ done or "k of N never arrived"
+
+Edit: row ─▶ dialog: type ─▶ Set (checks type/range, builds the question) ─▶ Confirm ─▶ repository.set
+   PARAM_SET(name, value) ─▶ gateway: armed? ─▶ refused, nothing written ("Not sent: … disarmed")
+                                      disarmed ─▶ FC ─▶ PARAM_VALUE(name, stored value, index 65535)
+   echo == value ─▶ Applied: the row takes it, bold + "modified"
+   echo != value ─▶ NotApplied "Locked or rejected by the vehicle: it kept X" (row note, no retry)
+   PARAM_ERROR  ─▶ NotApplied "Rejected by the vehicle (PERMISSION_DENIED)"
+   silence ─▶ resend, 3 tries, then "not confirmed. Download to check."
+
+Files: Save ─▶ encodeParamFile(name → valueText) ─▶ PlanFiles dialog (via the ParamFiles adapter)
+       Load ─▶ parseParamFile ─▶ compare with the downloaded list ─▶ "Write N parameters?" (only the differences,
+              plus what was skipped) ─▶ one set at a time, each checked as above
+```
+
+#### Engineering learnings
+- **S10, what ArduPilot actually does** (`libraries/GCS_MAVLink/GCS_Param.cpp`, `libraries/AP_Param/AP_Param.cpp`,
+  master 2026-09, read not copied):
+  - **Encoding is C cast, not bytewise.** `cast_to_float(type)` goes out; `set_float(value, type)` comes in, and adds
+    0.01 then truncates for integer types. So `3.0f` means 3, and an integer parameter never needs its bits
+    preserved.
+  - **The Pass 12 raw-bits lesson doesn't apply here, and I checked why rather than copying the workaround.** The NaN
+    problem came from the library canonicalising NaN payloads in COMMAND_LONG, where the KFT login packs raw bytes
+    into floats. Parameters carry real numbers, and ArduPilot refuses a NaN/inf PARAM_SET (PARAM_ERROR
+    VALUE_OUT_OF_RANGE on master). So PARAM_SET stays on the library encoder, and `parseParamInput` never produces
+    NaN. The Pass 12 `ponytail:` note ("extend BitExact… if another message carries bit patterns") still holds, and
+    PARAM_SET doesn't.
+  - **INT32 above 2^24 can't be sent exactly** as a float. Every GCS shares this limit. The input check stops at
+    ±16 777 216.
+  - **The list stream:** at most 30 % of the link's bandwidth, and 5 per update without flow control. It's ignored
+    until parameters are loaded at boot (`params_ready`), hence up to 5 list requests.
+  - **Reads by index:** they go into a **20-entry queue**, and the overflow is dropped silently. That's why the gaps
+    are asked for 10 at a time.
+  - **Sets:** a successful set is saved through the save queue, and the save sends PARAM_VALUE with the stored value
+    to every link, with index −1 (65535).
+  - **Read-only / not settable:** "Param write denied" STATUSTEXT + PARAM_ERROR PERMISSION_DENIED + PARAM_VALUE
+    with the **old** value.
+  - **Unknown name:** PARAM_ERROR DOES_NOT_EXIST on master, silence on older firmware.
+  - **`param_type` in PARAM_SET is ignored:** ArduPilot uses the type it has stored. We send the type it reported
+    anyway.
+- **Confirm by echo, and never retry an echo.**
+  - A set is "applied" only when a PARAM_VALUE for that name comes back holding exactly the value we sent.
+  - An echo with any other value is the vehicle's answer. That covers ArduPilot's read-only rule, and presumably
+    KFT's parameter locking. It's reported as "locked or rejected by the vehicle", and the set is not repeated.
+  - Only *silence* is retried (3 tries), because a lost packet and a lost echo look the same, and setting the same
+    value twice is harmless.
+  - That's how a locked parameter can't loop forever. `lockedParameterIsReportedNotRetried` pins it: one PARAM_SET,
+    0 ms.
+- **Why the list lives in the ViewModel, not a repository StateFlow.** The downloaded list is a snapshot the operator
+  asked for, and only this screen reads it. A shared cache would need rules about invalidating it: another GCS
+  changing a value, a reboot, a count change. None of that exists yet, so the screen holds what it downloaded and
+  shows what each set reported. If Fly ever needs a parameter (say CAM1_TYPE for a warning), that's when a
+  repository-level cache earns its place.
+- **A count change fails the download instead of merging.** Enabling a feature (CAM1_TYPE is an `AP_PARAM_FLAG_ENABLE`
+  parameter) adds parameters and shifts every index after them, so indices from before and after don't describe the
+  same list. "Download again" is honest; merging would be a guess.
+- **Two-step edit.** Set only validates and writes the question ("Change CAM1_TYPE from 0 to 1 on the vehicle?");
+  Confirm sends. An unchanged value is refused at Set ("That's the current value"). Part of the reason is that
+  ArduPilot's echo for an unchanged value depends on the save path, so we don't rely on it.
+- **"Modified" means changed since download.** Without ArduPilot's parameter metadata we don't know the defaults.
+  "Changed in this session" is what the operator needs on the bench anyway.
+- **Parameter metadata left out.** ArduPilot's `apm.pdef.xml` / `.json` (units, ranges, descriptions) is generated
+  from the ArduPilot source by `Tools/autotest/param_metadata`. The source is GPLv3, and I found no separate licence
+  for the generated files. That's "unclear" by your rule, and CLAUDE.md §6 forbids copying GPL code, so the screen
+  shows name, value and type only. If KFT gets a written answer from ArduPilot (or decides the GCS may be GPL), it
+  can be bundled later as a JSON asset in `core:geo-io`.
+- **`ParamFiles` adapter instead of moving `PlanFiles`.** Features can't import each other, so Params declares the two
+  functions it needs, and `app:shared`, which sees both features, adapts one to the other in 6 lines. Moving
+  `PlanFiles` into a shared module would have been a refactor of the Plan feature, which this pass has no reason to
+  touch.
+- **Shared login gate.** The Pass 12 gate was private to `DefaultMissionRepository`. It's now two internal functions,
+  so parameters wait for the same login states with the same wording ("… Parameter transfers wait for the login").
+- **Build environment note (not code):** in this session Gradle's launcher failed with "Unable to establish loopback
+  connection". It came from Windows AF_UNIX sockets under the default temp path. The fix was
+  `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:\Users\Hrushikesh\uds`. If you ever see that error, that's the
+  fix; nothing in the repo changed.
+
+**Ponytail review** (`/ponytail-review` on the diff), two shrinks applied:
+- `canWrite()` built the whole UiState to read one flag. It's now a shared `writable(m, v)` predicate.
+- The test fake's type table went MAV → domain → MAV. It's now one mapping.
+
+Kept:
+- All tests (§7).
+- The `ParamRepository` interface (swap/test seam).
+- The two-step confirm (requested).
+- The `ParamFiles` adapter (required by the feature-isolation rule).
+
+#### Safety
+- **Allowlist change:** PARAM_SET went from always allowed to **disarmed only**, failing closed when no vehicle is
+  heard. That's stricter than pod contract §3 ("operator commands … param set ✅ when no pod is active").
+  - Tests: `MavTxGatewayTest.paramSetOnlyWhileDisarmed` (armed → rejected, unknown → rejected, disarmed → allowed,
+    PARAM_REQUEST_READ allowed while armed).
+  - Test: `gatewayRejectsParamSetWhileArmedWithoutWriting` (the armed-time set never reaches the link).
+- **Not changed:** PARAM_SET is not tied to the pod lock state. The contract's rule is "when no pod is active", and
+  disarmed-only is already stricter in every state a pod can reach in flight. When the pod link exists, decide
+  whether a LOCKED pod on the ground should also block it (open item).
+- **Transmission order:** parameter traffic waits for the KFT login exactly like missions (S12).
+  `ParamProtocolTest.repositoryWaitsForTheKftLogin`: nothing is sent while LOGGING_IN / DENIED / FAILED.
+- **S9:** no flight action was added. Arming in the SITL check comes from `sitl_pilot.py --arm-only` on port 5763
+  (system id 254), the pilot's role, like every earlier SITL run. The GCS doesn't reboot the FC either:
+  MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN stays unlisted, and the checklist says to power-cycle.
+- A parameter write can still change how the aircraft flies once it's back in the air (gains, failsafes). The
+  disarmed rule, the confirm step and the "only the differences" file load are the guards. Values are applied at
+  once by ArduPilot and saved.
+
+#### What to look at
+1. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/ParamProtocol.kt:114`: `set`, the echo rule. Also the
+   class KDoc for the S10 facts, and `:71` for the download loop.
+2. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/TxPolicy.kt:87` and `:126`: the disarmed-only rule.
+3. `feature/params/src/commonMain/kotlin/com/kft/gcs/feature/params/ParamsViewModel.kt:175`: `write`, how the list
+   follows what the vehicle reported. `:129` is the file compare.
+
+#### Tests
+- **`ParamProtocolTest`** (17, virtual time, a fake that answers like GCS_Param.cpp):
+  - The whole list in index order, 0 ms waiting.
+  - Lost stream items re-read by index after one 1.5 s quiet period.
+  - Reads in batches of 10 (25 missing → 10 + 10 + 5, 4.5 s).
+  - An index that never arrives fails after 3 reads with "1 of 6 parameters never arrived".
+  - The list request repeated while the vehicle ignores it.
+  - A silent vehicle fails after 5 list requests.
+  - A count change fails with "Download again".
+  - Set confirmed by the echo, sent as INT8 for CAM1_TYPE.
+  - **Locked parameter: one PARAM_SET, "Locked or rejected … kept 0", at 0 ms.**
+  - PARAM_ERROR → "PERMISSION_DENIED".
+  - Silence → 3 sends then "not confirmed" at 4.5 s.
+  - A lost echo is recovered by the resend.
+  - An unrelated PARAM_VALUE doesn't confirm.
+  - An armed set is not sent.
+  - Login gate.
+  - Input checks: 2.5 for INT8 is refused, 128 for INT8, 2^24 + 1 for INT32, NaN.
+  - Value text: "3", "-1", "0.15", "100".
+- **`ParamsViewModelTest`** (7, Turbine):
+  - Download, search and status.
+  - Set → confirm question → nothing sent before Confirm → row bold/modified.
+  - Unchanged value refused.
+  - Locked row note, value unchanged, one set.
+  - No editing while armed or before the login.
+  - Save writes `CAM1_TYPE,0\nSERVO9_FUNCTION,0\nWPNAV_SPEED,1000\n`.
+  - Load file lists only the 2 real changes, reports "1 not on this vehicle; unreadable lines 6", writes on confirm,
+    and reports "1 of 2 written, 1 not applied".
+- **`ParamFilesTest`** (3):
+  - A Mission Planner file with a `#NOTE` header, CRLF, space/tab/`=` separators and `@READONLY`.
+  - Bad lines reported (lower case, a 17+ character name, a non-number, 3 fields, nan), and the later line wins.
+  - Sorted output that reads back.
+- **SITL, ArduCopter 4.8.0-dev**, started with `start-sitl.ps1 -Vehicle copter -Wipe`, then
+  `KFT_SITL=127.0.0.1:5762 gradlew.bat :core:vehicle:jvmTest --tests "*SitlCheck*"`. 3 of 3 passed:
+  - `paramsDownloadSetReadBackAndArmedRefusal` (110 s: three full downloads plus arming and auto-disarm):
+    - **1439 parameters**, every index once.
+    - `CAM1_TYPE = 1 (INT8)` from camera.parm.
+    - Set 1 → 2: `Applied(CAM1_TYPE = 2.0, INT8, index 46)`. A fresh download reads 2. Restored to 1.
+    - `sitl_pilot.py --arm-only` armed it (GUIDED → ARMED). Set while armed → `NotApplied("Not sent: parameters can
+      only be changed while the vehicle is disarmed.")`.
+    - After the auto-disarm, a fresh download still reads 1.
+  - The Pass 7 / Pass 12 checks still pass (LEGACY_FIRMWARE login, mission 6/6 upload + read-back + clear).
+- `gradlew.bat check` and `:app:android:assembleDebug` pass. One compiler warning is printed, and it's not from this
+  pass: `PlanViewModel.kt:398` "Unnecessary non-null assertion" (file untouched here). I left it and suggest a
+  one-character fix in a clean-up pass.
+- **Not done by me: clicking through the screen.** The desktop app started fine against SITL (Koin 18 definitions,
+  MapLibre up), but the computer-use tool couldn't attach to the Java window ("KFT GCS"), so I have no screenshot.
+  The screen's logic is covered by the ViewModel tests, and the layout by `check`. Please do checklist section 1b
+  once on SITL (below).
+
+#### Your checklist: the Params screen on SITL (5 minutes)
+1. `start-sitl.ps1 -Vehicle copter -Wipe`, then `gradlew.bat :app:desktop:run` → Links → your SITL profile → Connect.
+2. Params → Download.
+   - Expected: "Downloading k / 1439", then "1439 parameters · 0 modified".
+3. Search `cam1`, click CAM1_TYPE, type 2 → Set → "Change CAM1_TYPE from 1 to 2 on the vehicle?" → Confirm.
+   - Expected: "CAM1_TYPE set to 2", and the row bold with "modified". Put it back to 1.
+4. Save file… → `sitl.param`. Open it in Notepad: `NAME,VALUE` lines, sorted.
+5. In MAVProxy: `mode guided`, `arm throttle`.
+   - Expected: the rows can't be clicked, and "Disarm to change parameters" shows. It disarms by itself after about
+     10 s.
+
+#### Open questions / next (item 1)
+- **KFT parameter locking:** I built it on the assumption that a locked parameter answers like ArduPilot's read-only
+  parameters: an echo of the old value, and maybe PARAM_ERROR or a STATUSTEXT. The UI then says "locked or rejected
+  by the vehicle" once.
+  - If KFT's lock is silent instead, the operator sees "No answer from the vehicle after 3 tries: … not confirmed"
+    after 4.5 s. That's still bounded, but less clear.
+  - Bench step 1b.4 tells us which. Send me the locking details if it's the silent kind, and I'll make that message
+    specific.
+- Parameter metadata (units/range/description): not bundled, licence unclear (above).
+- PARAM_SET vs the pod lock state: decide when the pod link exists (Safety, above).
+- A value changed by another GCS or by the FC itself isn't picked up until the next Download. PARAM_VALUEs that
+  arrive outside a transfer are ignored.
+- `PlanViewModel.kt:398` warning (pre-existing).

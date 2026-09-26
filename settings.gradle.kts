@@ -41,6 +41,7 @@ include(":ui:map")
 include(":feature:connections")
 include(":feature:fly")
 include(":feature:plan")
+include(":feature:params")
 include(":feature:settings")
 
 // ---- apps ----

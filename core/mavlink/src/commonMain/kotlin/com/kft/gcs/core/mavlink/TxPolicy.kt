@@ -48,7 +48,7 @@ data class PodStatus(val lock: PodLockState = PodLockState.NONE, val aiEnableHig
  * anything that makes the aircraft move or change mode. Under S9 the GCS sends none of them, in any pod state, so
  * the GUIDED and safe-direction rules are covered by a stricter one (see open item GS-8 in the spec).
  */
-internal enum class TxCategory { ALWAYS, OPERATOR, MISSION_CHANGE, MISSION_CHANGE_DISARMED, PILOT_ONLY, NEVER, UNLISTED }
+internal enum class TxCategory { ALWAYS, PARAM_CHANGE_DISARMED, MISSION_CHANGE, MISSION_CHANGE_DISARMED, PILOT_ONLY, NEVER, UNLISTED }
 
 /** A message's category plus a human-readable name for logs and rejection reasons. */
 internal data class TxClassification(val category: TxCategory, val label: String)
@@ -80,7 +80,11 @@ internal object TxPolicy {
         is MissionRequestInt -> always("MISSION_REQUEST_INT")     // mission download
         is MissionAck -> always("MISSION_ACK")                     // ends a mission download
 
-        is ParamSet -> TxClassification(TxCategory.OPERATOR, "PARAM_SET")
+        // PARAM_SET (common.xml #23) changes how the vehicle flies: gains, failsafes, the camera. The pod contract lists
+        // it under "operator commands"; this GCS is stricter and only sends it on the ground, because a wrong value
+        // in the air can't be taken back before it matters. ArduPilot applies it at once and saves it to storage
+        // (GCS_Param.cpp handle_param_set). Reading (PARAM_REQUEST_*) stays ALWAYS: it changes nothing.
+        is ParamSet -> TxClassification(TxCategory.PARAM_CHANGE_DISARMED, "PARAM_SET")
 
         // Anything that changes the mission on the vehicle.
         is MissionCount -> missionChange("MISSION_COUNT")
@@ -118,7 +122,8 @@ internal object TxPolicy {
      *   counts as armed for [TxCategory.MISSION_CHANGE_DISARMED]: fail closed.
      */
     fun check(category: TxCategory, pod: PodStatus, armed: Boolean?): String? = when (category) {
-        TxCategory.ALWAYS, TxCategory.OPERATOR -> null
+        TxCategory.ALWAYS -> null
+        TxCategory.PARAM_CHANGE_DISARMED -> if (armed != false) "parameters can only be changed while the vehicle is disarmed" else null
         TxCategory.MISSION_CHANGE -> missionLockout(pod)
         TxCategory.MISSION_CHANGE_DISARMED -> missionLockout(pod)
             ?: if (armed != false) "only allowed while the vehicle is disarmed (spec S9)" else null

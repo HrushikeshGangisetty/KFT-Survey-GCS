@@ -32,7 +32,10 @@ class SitlCheck {
     private val target = System.getenv("KFT_SITL")
 
     /** Connects, waits for the vehicle and the startup data, runs [block], and always closes the link. */
-    private fun withSitl(block: suspend (ConnectionManager, VehicleRepository, MissionRepository) -> Unit) {
+    private fun withSitl(block: suspend (ConnectionManager, VehicleRepository, MissionRepository) -> Unit) =
+        withSitlParams { manager, vehicles, missions, _ -> block(manager, vehicles, missions) }
+
+    private fun withSitlParams(block: suspend (ConnectionManager, VehicleRepository, MissionRepository, ParamRepository) -> Unit) {
         val (host, port) = target?.split(":") ?: return println("KFT_SITL not set: SITL check skipped")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), SerialPorts())
@@ -41,12 +44,13 @@ class SitlCheck {
         val key = parseKftKey(KFT_APP_SECRET_HEX) ?: ByteArray(Kft.KEY_BYTES)
         val vehicles = VehicleRepository(scope, manager.frames, manager.state, manager.gateway, key)
         val missions = DefaultMissionRepository(manager.frames, manager.state, vehicles.state, manager.gateway)
+        val params = DefaultParamRepository(manager.frames, manager.state, vehicles.state, manager.gateway)
         try {
             runBlocking {
                 manager.connect(LinkConfig.TcpClient(host, port.toInt()))
                 // SITL sets home ~20 s after boot, once its EKF has a GPS origin.
                 withTimeout(60.seconds) { vehicles.state.first { it.connected && it.home != null && it.firmwareVersion != null } }
-                block(manager, vehicles, missions)
+                block(manager, vehicles, missions, params)
             }
         } finally {
             manager.disconnect()
@@ -94,5 +98,42 @@ class SitlCheck {
 
         missions.clear().getOrThrow()
         assertEquals(emptyList(), missions.download().getOrThrow().items)
+    }
+
+    /**
+     * Pass 18 acceptance: download every parameter, set CAM1_TYPE, read it back with a fresh download, then see the
+     * gateway refuse a set while the vehicle is armed. Arming is the pilot's (S9): `sitl_pilot.py --arm-only` does it
+     * on SITL port 5763, as MAVProxy would. Copter only (Plane arms too, but its check isn't needed twice).
+     */
+    @Test
+    fun paramsDownloadSetReadBackAndArmedRefusal() = withSitlParams { _, vehicles, _, params ->
+        var lastPrint = 0
+        val all = params.downloadAll { done, total -> if (done - lastPrint >= 200 || done == total) { lastPrint = done; println("params $done/$total") } }.getOrThrow()
+        println("downloaded ${all.size} parameters")
+        assertTrue(all.size > 500, "a real parameter list, not a handful")
+        assertEquals((0 until all.size).toList(), all.map { it.index }, "every index, none twice")
+        val cam = all.single { it.name == "CAM1_TYPE" }
+        println("CAM1_TYPE = ${cam.valueText} (${cam.type})")
+
+        // Any value but the current one; 0 disables the camera, so toggle between Servo (1) and Relay (2).
+        val newValue = if (cam.value == 1f) 2f else 1f
+        val set = params.set(cam, newValue)
+        println("set CAM1_TYPE ${cam.valueText} -> ${formatParamValue(newValue, cam.type)}: $set")
+        assertTrue(set is ParamSetResult.Applied, "$set")
+        assertEquals(newValue, params.downloadAll().getOrThrow().single { it.name == "CAM1_TYPE" }.value, "read back")
+        assertTrue(params.set(cam.copy(value = newValue), cam.value) is ParamSetResult.Applied, "restored")
+
+        val root = generateSequence(java.io.File("").absoluteFile) { it.parentFile }.first { java.io.File(it, "tools/sitl").isDirectory }
+        val host = this.target!!.substringBefore(':')
+        val pilot = ProcessBuilder("py", "-3.9", java.io.File(root, "tools/sitl/sitl_pilot.py").path, "tcp:$host:5763", "--arm-only")
+            .inheritIO().start()
+        withTimeout(60.seconds) { vehicles.state.first { it.armed } }
+        val refused = params.set(cam, newValue)
+        println("while armed: $refused")
+        assertTrue(refused is ParamSetResult.NotApplied && refused.reason.contains("disarmed"), "$refused")
+        pilot.waitFor()
+        // Copter disarms itself on the ground (DISARM_DELAY); wait so the next check starts disarmed.
+        withTimeout(30.seconds) { vehicles.state.first { !it.armed } }
+        assertEquals(cam.value, params.downloadAll().getOrThrow().single { it.name == "CAM1_TYPE" }.value, "unchanged by the refused set")
     }
 }

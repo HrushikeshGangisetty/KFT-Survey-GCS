@@ -8,6 +8,9 @@ climbs out along the runway heading to TKOFF_ALT and works on every ArduPlane ve
 
     py -3.9 tools/sitl/sitl_pilot.py tcp:127.0.0.1:5763 --alt 20
 
+With --arm-only it stops once armed (Copter in GUIDED, on the ground): the params SITL check (Pass 18) uses that to
+see the GCS refuse PARAM_SET while armed. Copter disarms by itself about 10 s later (DISARM_DELAY).
+
 With --photos photos.csv it then stays connected and writes one line per CAMERA_FEEDBACK (the photos the GCS counts)
 until the vehicle leaves AUTO, disarms or finishes the mission, for tools/sitl/photo_check.py.
 
@@ -33,6 +36,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("link", help="e.g. tcp:127.0.0.1:5763")
     parser.add_argument("--alt", type=float, default=20)
+    parser.add_argument("--arm-only", action="store_true", help="arm, then exit (no takeoff)")
     parser.add_argument("--photos", help="CSV file for the photo positions (CAMERA_FEEDBACK) until the mission ends")
     args = parser.parse_args()
 
@@ -56,6 +60,8 @@ def main():
     else:
         raise SystemExit("arming refused (see STATUSTEXT in the GCS)")
     print("ARMED")
+    if args.arm_only:
+        return
 
     if plane:
         master.set_mode("TAKEOFF")                   # MAVProxy: mode takeoff

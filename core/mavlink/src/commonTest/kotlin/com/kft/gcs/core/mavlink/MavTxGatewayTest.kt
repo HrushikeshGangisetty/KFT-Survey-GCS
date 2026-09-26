@@ -15,6 +15,7 @@ import com.divpundir.mavlink.definitions.common.MissionItemInt
 import com.divpundir.mavlink.definitions.common.MissionRequestList
 import com.divpundir.mavlink.definitions.common.MissionSetCurrent
 import com.divpundir.mavlink.definitions.common.ParamRequestList
+import com.divpundir.mavlink.definitions.common.ParamRequestRead
 import com.divpundir.mavlink.definitions.common.ParamSet
 import com.divpundir.mavlink.definitions.common.RcChannelsOverride
 import com.divpundir.mavlink.definitions.common.SetAttitudeTarget
@@ -50,7 +51,7 @@ class MavTxGatewayTest {
     @Test
     fun alwaysAllowedEvenWithPodLockedAndAiEnableHigh() {
         val worstCase = PodStatus(PodLockState.ENGAGE, aiEnableHigh = true)
-        listOf(copterHeartbeat(), ParamRequestList(), MissionRequestList(), command(MavCmd.SET_MESSAGE_INTERVAL), commandInt(MavCmd.REQUEST_MESSAGE))
+        listOf(copterHeartbeat(), ParamRequestList(), ParamRequestRead(), MissionRequestList(), command(MavCmd.SET_MESSAGE_INTERVAL), commandInt(MavCmd.REQUEST_MESSAGE))
             .forEach { assertNull(verdict(it, worstCase), "$it should always be allowed") }
     }
 
@@ -68,9 +69,30 @@ class MavTxGatewayTest {
         assertTrue(verdict(command(MavCmd.USER_3))!!.contains("allowlist"))
     }
 
+    /**
+     * Pass 18: PARAM_SET only on the ground. Unknown armed state (no vehicle heard) fails closed, like
+     * MISSION_SET_CURRENT. Reading parameters stays allowed while armed (see alwaysAllowed…).
+     */
     @Test
-    fun paramSetAllowedWithoutPod() {
-        assertNull(verdict(ParamSet()))
+    fun paramSetOnlyWhileDisarmed() {
+        assertEquals(TxCategory.PARAM_CHANGE_DISARMED, TxPolicy.classify(ParamSet()).category)
+        assertNull(verdict(ParamSet(), armed = false), "allowed on the ground")
+        assertTrue(verdict(ParamSet(), armed = true)!!.contains("disarmed"), "rejected while armed")
+        assertTrue(verdict(ParamSet(), armed = null)!!.contains("disarmed"), "rejected with no vehicle heard")
+        assertNull(verdict(ParamRequestRead(), armed = true), "reading is fine in the air")
+    }
+
+    @Test
+    fun gatewayRejectsParamSetWhileArmedWithoutWriting() = runTest {
+        var armed: Boolean? = false
+        val link = FakeMavConnection()
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { armed }
+        gateway.attach(link)
+        assertEquals(TxResult.Sent, gateway.send(ParamSet(paramId = "CAM1_TYPE", paramValue = 1f)))
+        armed = true
+        val rejected = assertIs<TxResult.Rejected>(gateway.send(ParamSet(paramId = "CAM1_TYPE", paramValue = 0f)))
+        assertEquals("PARAM_SET", rejected.message)
+        assertEquals(1, link.sent.size, "the armed-time set must not reach the link")
     }
 
     @Test

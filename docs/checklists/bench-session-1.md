@@ -2,7 +2,7 @@
 
 For Hrushikesh to run on the bench, **props off**. Each step has what to do and what you should see. Tick the box when
 it matches. If it doesn't, note what you saw next to it and stop that section. Everything here was checked in SITL
-(Passes 10–16) except the parts that need real hardware.
+(Passes 10–18) except the parts that need real hardware.
 
 **Safety:** props off for the whole session. The GCS never arms, changes mode or takes off (spec S9). Nothing in this
 list asks it to. The trigger tests use the RC switch or the mission, not a GCS button.
@@ -12,7 +12,8 @@ list asks it to. The trigger tests use the RC switch or the mission, not a GCS b
 - [ ] A telemetry radio pair (SiK or similar, 57600 baud) plus its USB lead. Also a USB-OTG adapter for the tablet.
 - [ ] Your RC transmitter bound to the FC, with a spare 2-position switch.
 - [ ] Optional: a camera, or just an LED or servo tester on the trigger output, so you can see the pulse.
-- [ ] Mission Planner (or KFT Configurator) for setting parameters. The GCS has no parameter editor yet.
+- [ ] Nothing else: parameters are set in the GCS's **Params** screen (Pass 18). KFT firmware blocks Mission Planner
+  and QGC until the HMAC login, so they can't be used here.
 - [ ] This repo at the latest commit, and `gradlew.bat check` green.
 
 ## 1. KFT login (spec S12)
@@ -32,6 +33,24 @@ list asks it to. The trigger tests use the RC switch or the mission, not a GCS b
    3. [ ] `gradlew.bat :core:vehicle:jvmTest --tests "*KftAndroidReferenceTest*"`
       - Expected: 2 tests, both passed. The golden one runs because your key is configured (on CI it returns early).
    4. [ ] Commit the test change (a challenge/response pair doesn't reveal the key). Never commit `local.properties`.
+
+## 1b. Parameters (Params screen, Pass 18)
+Disarmed for all of this: the GCS refuses PARAM_SET while the vehicle is armed.
+1. [ ] Params → **Download**.
+   - Expected: "Downloading k / N", then "N parameters · 0 modified" (about 1300–1450 on Copter). Over USB this takes
+     a few seconds; over the 57600 radio (section 2) about 30 s.
+2. [ ] **Save file…** → `bench-before.param`. This is your backup: Load file… puts it back later.
+3. [ ] Search `SERIAL1_BAUD`, click it and press Set without changing the value: it says "That's the current value" and sends nothing.
+   Then pick a harmless parameter you can change back (e.g. `LOG_BITMASK`), type a new value → **Set** → read the
+   question → **Confirm**.
+   - Expected: "LOG_BITMASK set to …", the row in bold with **modified**. Download again: the new value is still there.
+   - Put the old value back the same way.
+4. [ ] **Locked parameter** (our firmware's parameter locking): change one that you know is locked.
+   - Expected: one try, then the row says **"Locked or rejected by the vehicle: it kept …"** in red, and the value is
+     unchanged. It must not retry or hang. If instead it says "No answer from the vehicle after 3 tries", note it:
+     the lock is silent rather than echoing the old value, and I need the locking details.
+5. [ ] Arm on the RC (props off), then try to click a parameter.
+   - Expected: the list can't be edited and the hint says "Disarm to change parameters". Disarm.
 
 ## 2. Telemetry radio: desktop serial
 1. [ ] Air radio on the FC's TELEM1 (SERIAL1, 57600 baud: `SERIAL1_BAUD 57`). Ground radio on the laptop's USB.
@@ -70,8 +89,10 @@ list asks it to. The trigger tests use the RC switch or the mission, not a GCS b
      flying." Cancel, then disarm.
 
 ## 5. Camera trigger → CAMERA_FEEDBACK in the GCS
-Parameters are set in Mission Planner (or KFT Configurator), then the FC is **rebooted**: the camera driver only reads
-`CAM1_TYPE` at boot. Checked against ArduPilot master 2026-09: AP_Camera_Params.cpp, AP_Relay_Params.cpp,
+Parameters are set in the GCS: Params → click the parameter → type the value → Set → Confirm, one by one. Or put the
+lines below in a text file (`NAME,VALUE` per line) and use **Load file…**, which lists only the values that differ
+and writes them after one confirmation. Then **power-cycle** the FC (the GCS doesn't reboot it): the camera driver only
+reads `CAM1_TYPE` at boot. After the reboot, Download again and check the values stuck. Checked against ArduPilot master 2026-09: AP_Camera_Params.cpp, AP_Relay_Params.cpp,
 RC_Channel.cpp and SRV_Channel.h.
 
 **The RC switch**, used by both variants:
@@ -80,7 +101,8 @@ RC_Channel.cpp and SRV_Channel.h.
 
 **Variant A: servo trigger** (a camera with a PWM shutter input, or a servo tester or LED to see the pulse):
 2. [ ] `CAM1_TYPE 1` (Servo). `SERVO9_FUNCTION 10` (CameraTrigger), on an output with a free connector (AUX1 on a
-   board with an IOMCU). `CAM1_SERVO_ON 1900`, `CAM1_SERVO_OFF 1100`, `CAM1_DURATION 0.1`. Reboot.
+   board with an IOMCU). `CAM1_SERVO_ON 1900`, `CAM1_SERVO_OFF 1100`, `CAM1_DURATION 0.1`. Power-cycle.
+   - Enabling `CAM1_TYPE` adds the other `CAM1_*` parameters, so set it first, power-cycle, Download, then set the rest.
 3. [ ] GCS connected, on Fly → Clear track.
 4. [ ] Flip the switch high, then low. Do it 5 times.
    - Expected: the output pulses (the LED blinks or the servo twitches), the Fly HUD shows **"Photos 5"**, and 5 green dots
@@ -89,7 +111,7 @@ RC_Channel.cpp and SRV_Channel.h.
 
 **Variant B: relay trigger** (a camera with a contact-closure shutter input):
 5. [ ] `CAM1_TYPE 2` (Relay). `RELAY1_FUNCTION 4` (Camera). `RELAY1_PIN` = the output wired to the camera
-   (50–55 = AUXOUT1–6, 101–108 = MainOut1–8). `CAM1_DURATION 0.1`. Reboot.
+   (50–55 = AUXOUT1–6, 101–108 = MainOut1–8). `CAM1_DURATION 0.1`. Power-cycle.
 6. [ ] Repeat steps 3–4. Expected: the relay clicks (or the camera fires), plus the same count and dots as variant A.
 
 **In a mission** (props off, or only after the bench items pass):
@@ -102,3 +124,4 @@ RC_Channel.cpp and SRV_Channel.h.
 - [ ] Note the FC board, firmware version (under the Fly HUD title) and radio model here: ______________________
 - [ ] Anything that didn't match: which step, and what you saw instead.
 - [ ] Send me the golden vector (section 1.4) if you didn't commit it yourself.
+- [ ] Params → Save file… → `bench-after.param`, and keep it with `bench-before.param` from section 1b.

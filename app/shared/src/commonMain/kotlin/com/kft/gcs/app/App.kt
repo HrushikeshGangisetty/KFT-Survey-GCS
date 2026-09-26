@@ -34,6 +34,7 @@ import com.kft.gcs.app.di.allModules
 import com.kft.gcs.feature.connections.ConnectionsRoute
 import com.kft.gcs.feature.fly.FlyRoute
 import com.kft.gcs.feature.fly.FlyViewModel
+import com.kft.gcs.feature.params.ParamsRoute
 import com.kft.gcs.feature.plan.PlanRoute
 import com.kft.gcs.feature.plan.PlanViewModel
 import com.kft.gcs.ui.map.MapView
@@ -103,6 +104,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             composable(Destination.PLAN.route) { PlanRoute(plan) }
             // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
+            composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute() } }
         }
     }
 }
@@ -136,6 +138,7 @@ internal enum class Destination(val route: String, val label: String) {
     FLY("fly", "Fly"),
     PLAN("plan", "Plan"),
     CONNECTIONS("connections", "Links"),
+    PARAMS("params", "Params"),
 }
 
 /** The Fly view first, like every GCS: the map is what you want to see when the app opens. */

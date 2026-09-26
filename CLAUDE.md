@@ -34,7 +34,7 @@ If a task seems to need one of these changed, stop and say so in the pass summar
 | `core:terrain` | DEM, elevation queries (P1) | `core:geo` |
 | `core:geo-io` | Import/export parsing (`.plan`, `.waypoints`, camera lists, KML, …) | `core:geo`, `core:planning`, `core:mission` |
 | `ui:map` | `MapView` abstraction + engine adapters | `core:geo`, Compose |
-| `feature:*` | Screens + ViewModels (connections, fly, plan, settings) | `core:*`, `ui:*` — **never another `feature:*`** |
+| `feature:*` | Screens + ViewModels (connections, fly, plan, params, settings) | `core:*`, `ui:*` — **never another `feature:*`** |
 | `app:shared` | `App()` root, navigation, Koin graph | everything above |
 | `app:android`, `app:desktop` | Platform shells only | `app:shared` |
 

@@ -54,16 +54,21 @@ class DefaultMissionRepository(
         return protocol.clear(target)
     }
 
-    /**
-     * The vehicle to talk to, or null. Mission traffic waits for the KFT login (spec S12): a KFT flight controller
-     * drops it until the login succeeds, so starting early would only end in "no answer".
-     */
-    private fun target() = (link.value as? LinkState.Connected)?.vehicle
-        ?.takeIf { vehicle.value.login?.allowsTraffic != false }
-        ?.let { MissionProtocol.Target(it.systemId, it.componentId) }
+    private fun target() = loggedInTarget(link.value, vehicle.value)
 
-    private fun <T> noVehicle(): Result<T> {
-        val login = vehicle.value.login?.takeIf { !it.allowsTraffic && link.value is LinkState.Connected }
-        return Result.failure(MissionTransferException(login?.let { "${it.label}. Mission transfers wait for the login." } ?: "No vehicle connected."))
-    }
+    private fun <T> noVehicle(): Result<T> = Result.failure(MissionTransferException(notReadyReason(link.value, vehicle.value, "Mission transfers")))
+}
+
+/**
+ * The vehicle to talk to, or null. Mission and parameter traffic wait for the KFT login (spec S12): a KFT flight
+ * controller drops it until the login succeeds, so starting early would only end in "no answer".
+ */
+internal fun loggedInTarget(link: LinkState, vehicle: VehicleState) = (link as? LinkState.Connected)?.vehicle
+    ?.takeIf { vehicle.login?.allowsTraffic != false }
+    ?.let { MissionProtocol.Target(it.systemId, it.componentId) }
+
+/** Why [loggedInTarget] is null, for the operator. [what] names the traffic that waits, e.g. "Mission transfers". */
+internal fun notReadyReason(link: LinkState, vehicle: VehicleState, what: String): String {
+    val login = vehicle.login?.takeIf { !it.allowsTraffic && link is LinkState.Connected }
+    return login?.let { "${it.label}. $what wait for the login." } ?: "No vehicle connected."
 }

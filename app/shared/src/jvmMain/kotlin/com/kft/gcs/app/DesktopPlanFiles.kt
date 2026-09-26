@@ -9,7 +9,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
 /**
- * Plan files on desktop, through AWT's `FileDialog`, which is the operating system's own dialog (the Windows one on
+ * Plan and parameter files on desktop, through AWT's `FileDialog`, which is the operating system's own dialog (the Windows one on
  * Windows). It's modal and must run on the UI thread; the ViewModel calls from `viewModelScope`, which is that thread.
  * The dialog runs its own event loop, so the window keeps painting while it's open. Reading and writing go to [io].
  */
@@ -27,7 +27,7 @@ class DesktopPlanFiles(private val io: CoroutineDispatcher) : PlanFiles {
     }
 
     private fun choose(mode: Int, name: String?): File? {
-        val dialog = FileDialog(null as Frame?, if (mode == FileDialog.SAVE) "Save" else "Open a plan (.kftplan, .plan, .waypoints)", mode)
+        val dialog = FileDialog(null as Frame?, if (mode == FileDialog.SAVE) "Save" else "Open", mode)
         name?.let { dialog.file = it }
         dialog.isVisible = true
         return dialog.file?.let { File(dialog.directory, it) }
