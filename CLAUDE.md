@@ -31,7 +31,7 @@ If a task seems to need one of these changed, stop and say so in the pass summar
 | `core:mavlink` | Transports, framing, connection manager, `MavTxGateway` | mavlink-kotlin, coroutines |
 | `core:vehicle` | Vehicle state, telemetry Flows, command and mission protocols | `core:mavlink`, `core:geo` |
 | `core:terrain` | DEM, elevation queries (P1) | `core:geo` |
-| `core:geo-io` | Import/export parsing (`.plan`, KML, …) | `core:geo`, `core:planning` |
+| `core:geo-io` | Import/export parsing (`.plan`, `.waypoints`, camera lists, KML, …) | `core:geo`, `core:planning`, `core:vehicle` (for `MissionItem`) |
 | `ui:map` | `MapView` abstraction + engine adapters | `core:geo`, Compose |
 | `feature:*` | Screens + ViewModels (connections, fly, plan, settings) | `core:*`, `ui:*` — **never another `feature:*`** |
 | `app:shared` | `App()` root, navigation, Koin graph | everything above |

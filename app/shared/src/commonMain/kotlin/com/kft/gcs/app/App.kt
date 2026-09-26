@@ -13,7 +13,16 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
@@ -40,7 +49,7 @@ import org.koin.dsl.koinConfiguration
  * Routes live here, not in features, because features must never import each other (CLAUDE.md §2).
  */
 @Composable
-fun App(platformModule: Module) {
+fun App(platformModule: Module, shortcuts: KeyShortcuts = KeyShortcuts()) {
     KoinApplication(configuration = koinConfiguration { modules(allModules + platformModule) }) {
         MaterialTheme(colorScheme = KftColors.dark) {
             Surface(Modifier.fillMaxSize()) {
@@ -48,7 +57,7 @@ fun App(platformModule: Module) {
                 // safeDrawing: Android 15 draws edge-to-edge, so without this the UI sits under the status bar (ADR-001 F3).
                 Row(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     AppRail(nav)
-                    Box(Modifier.weight(1f)) { MapAndScreens(nav) }
+                    MapAndScreens(nav, shortcuts, Modifier.weight(1f))
                 }
             }
         }
@@ -67,7 +76,7 @@ fun App(platformModule: Module) {
  * the same instance. The plan's route and markers show on the Fly view too, but only the Plan tab can edit them.
  */
 @Composable
-private fun MapAndScreens(nav: NavHostController) {
+private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modifier: Modifier) {
     val fly: FlyViewModel = koinViewModel()
     val plan: PlanViewModel = koinViewModel()
     val flyState by fly.state.collectAsStateWithLifecycle()
@@ -75,22 +84,51 @@ private fun MapAndScreens(nav: NavHostController) {
     val current by nav.currentBackStackEntryAsState()
     val planning = current?.destination?.route == Destination.PLAN.route
 
-    MapView(
-        Modifier.fillMaxSize(),
-        basemap = flyState.selectedBasemap,
-        overlays = planState.overlays + flyState.overlays,
-        cameraRequest = flyState.cameraRequest,
-        onMapClick = if (planning) plan::onMapClick else null,
-        onMarkerClick = if (planning) plan::onMarkerClick else null,
-        onMarkerDrag = if (planning) plan::onMarkerDragged else null,
-    )
-    NavHost(nav, startDestination = START.route) {
-        // Fly and Plan draw only their panels; where they draw nothing, input falls through to the map.
-        composable(Destination.FLY.route) { FlyRoute(fly) }
-        composable(Destination.PLAN.route) { PlanRoute(plan) }
-        // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
-        composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
+    // The Plan tab's undo/redo keys; the desktop window calls this for every key press (see KeyShortcuts).
+    SideEffect { shortcuts.handler = { planning && planShortcut(it, plan) } }
+    Box(modifier) {
+        MapView(
+            Modifier.fillMaxSize(),
+            basemap = flyState.selectedBasemap,
+            overlays = planState.overlays + flyState.overlays,
+            cameraRequest = flyState.cameraRequest,
+            onMapClick = if (planning) plan::onMapClick else null,
+            onMarkerClick = if (planning) plan::onMarkerClick else null,
+            onMarkerDrag = if (planning) plan::onMarkerDragged else null,
+            onMarkerDragEnd = if (planning) { _ -> plan.onMarkerDragFinished() } else null,
+        )
+        NavHost(nav, startDestination = START.route) {
+            // Fly and Plan draw only their panels; where they draw nothing, input falls through to the map.
+            composable(Destination.FLY.route) { FlyRoute(fly) }
+            composable(Destination.PLAN.route) { PlanRoute(plan) }
+            // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
+            composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
+        }
     }
+}
+
+/**
+ * Keyboard shortcuts, handed from `App()` to the desktop window. The window's `onPreviewKeyEvent` sees every key
+ * before any composable, whatever has focus. A handler inside the UI only hears keys while something in it is
+ * focused, and a button that gets disabled (Read, during the transfer) drops the focus to the window: the first SITL
+ * run lost Ctrl+Z that way. On the tablet the Undo/Redo buttons do the same job, so Android doesn't wire this up.
+ */
+class KeyShortcuts {
+    internal var handler: (KeyEvent) -> Boolean = { false }
+
+    /** True when the key was a shortcut and has been handled. */
+    fun onKey(event: KeyEvent): Boolean = handler(event)
+}
+
+/** Ctrl+Z undo, Ctrl+Shift+Z or Ctrl+Y redo (Cmd on a Mac keyboard). True = handled. */
+private fun planShortcut(event: KeyEvent, plan: PlanViewModel): Boolean {
+    if (event.type != KeyEventType.KeyDown || !(event.isCtrlPressed || event.isMetaPressed)) return false
+    when {
+        event.key == Key.Z && !event.isShiftPressed -> plan.onUndoClicked()
+        event.key == Key.Z || event.key == Key.Y -> plan.onRedoClicked()
+        else -> return false
+    }
+    return true
 }
 
 /** Top-level destinations. A navigation rail suits tablets and desktop, the P0 screens (spec §2.5). */

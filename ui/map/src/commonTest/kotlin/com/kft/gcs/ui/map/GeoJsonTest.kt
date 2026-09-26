@@ -26,6 +26,15 @@ class GeoJsonTest {
         assertEquals("""{"type":"FeatureCollection","features":[]}""", routeGeoJson(listOf(MapOverlay.Route(listOf(home)))))
     }
 
+    /** A GeoJSON polygon ring must be closed (RFC 7946 §3.1.6): the first corner is repeated at the end. */
+    @Test
+    fun polygonsAreClosedRingsAndTwoCornersAreALine() {
+        val a = LatLon(0.0, 0.0); val b = LatLon(0.0, 1.0); val c = LatLon(1.0, 1.0)
+        assertTrue(polygonsGeoJson(listOf(MapOverlay.Polygon(listOf(a, b, c), true))).contains("[[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,0.0]]]"))
+        assertTrue(polygonsGeoJson(listOf(MapOverlay.Polygon(listOf(a, b), true))).contains("\"LineString\""))
+        assertEquals("""{"type":"FeatureCollection","features":[]}""", polygonsGeoJson(listOf(MapOverlay.Polygon(listOf(a), true))))
+    }
+
     @Test
     fun hitMarkerPicksTheNearestWithinTheRadius() {
         // Touch at (100, 100). Marker 0 is 30 dp away (3-4-5 triangle x6: 18, 24), marker 1 is 5 dp away,

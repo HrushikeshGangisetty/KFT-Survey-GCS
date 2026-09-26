@@ -34,6 +34,13 @@ object MissionCommand {
     const val LAND = 21
     const val TAKEOFF = 22
     const val DO_CHANGE_SPEED = 178
+
+    /**
+     * DO_SET_CAM_TRIGG_DIST (common.xml 206): param1 distance in metres (0 = stop), param3 1 = also take one photo
+     * now. ArduPilot (AP_Mission, master 2026-09) stores param1, param3 and param4 (camera instance, 0 = all) and
+     * drops param2, so we always send param2 = 0 and a read-back compares equal.
+     */
+    const val DO_SET_CAM_TRIGG_DIST = 206
 }
 
 /** A mission as read from the vehicle: home (seq 0) kept apart from the items the user planned (seq 1…). */

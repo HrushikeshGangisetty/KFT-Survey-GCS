@@ -36,6 +36,7 @@ import org.maplibre.compose.expressions.value.LineJoin
 import org.maplibre.compose.interaction.ClickResult
 import org.maplibre.compose.interaction.MapInteractions
 import org.maplibre.compose.layers.CircleLayer
+import org.maplibre.compose.layers.FillLayer
 import org.maplibre.compose.layers.LineLayer
 import org.maplibre.compose.layers.RasterLayer
 import org.maplibre.compose.layers.SymbolLayer
@@ -80,6 +81,7 @@ fun MapView(
     onMapClick: ((LatLon) -> Unit)? = null,
     onMarkerClick: ((String) -> Unit)? = null,
     onMarkerDrag: ((id: String, to: LatLon) -> Unit)? = null,
+    onMarkerDragEnd: ((id: String) -> Unit)? = null,
 ) {
     remember { configureRuntimeOnce }
     // The gesture code below is set up once per map, so it reads the latest markers and callbacks through these.
@@ -87,6 +89,7 @@ fun MapView(
     val mapClick by rememberUpdatedState(onMapClick)
     val markerClick by rememberUpdatedState(onMarkerClick)
     val markerDrag by rememberUpdatedState(onMarkerDrag)
+    val markerDragEnd by rememberUpdatedState(onMarkerDragEnd)
     val vehicleArrow = rememberVectorPainter(VehicleArrow)
 
     val mapState = rememberMapState(
@@ -105,8 +108,16 @@ fun MapView(
                 ),
             )
         }
-        // Always declared, even when empty, so the layer list (and each remembered source) keeps its place. Under the
-        // track: once the vehicle flies the plan, the flown path must show on top of the planned one.
+        // Always declared, even when empty, so the layer list (and each remembered source) keeps its place. Areas go
+        // lowest, so the route and the markers inside them stay readable.
+        // The area being edited is drawn stronger than the others: two sources, so each gets plain constant styles.
+        val polygons = overlays.filterIsInstance<MapOverlay.Polygon>()
+        listOf(true, false).forEach { selected ->
+            val areas = rememberGeoJsonSource(GeoJsonData.JsonString(polygonsGeoJson(polygons.filter { it.selected == selected })))
+            FillLayer(id = "areas-fill-$selected", source = areas, color = const(AREA_COLOR), opacity = const(if (selected) 0.2f else 0.1f))
+            LineLayer(id = "areas-outline-$selected", source = areas, color = const(AREA_COLOR), width = const(if (selected) 3.dp else 1.5.dp))
+        }
+        // Under the track: once the vehicle flies the plan, the flown path must show on top of the planned one.
         LineLayer(
             id = "route",
             source = rememberGeoJsonSource(GeoJsonData.JsonString(routeGeoJson(overlays.filterIsInstance<MapOverlay.Route>()))),
@@ -125,12 +136,22 @@ fun MapView(
                 )
             }
         }
+        // Photo dots under the markers: there can be hundreds, and a waypoint must never hide behind them.
+        CircleLayer(
+            id = "photos",
+            source = rememberGeoJsonSource(GeoJsonData.JsonString(pointsGeoJson(overlays.filterIsInstance<MapOverlay.Photos>().flatMap { it.points }))),
+            radius = const(4.dp),
+            color = const(Color(0xFF76FF03)),
+            strokeColor = const(Color.Black),
+            strokeWidth = const(1.dp),
+        )
         MarkerStyle.entries.forEach { style ->
             val source = rememberGeoJsonSource(GeoJsonData.JsonString(markersGeoJson(markers.filter { it.style == style })))
             CircleLayer(
                 id = "markers-$style",
                 source = source,
-                radius = const(MARKER_RADIUS),
+                // Corners are handles, not numbered stops: smaller, so a dense polygon doesn't hide its own outline.
+                radius = const(if (style == MarkerStyle.CORNER) CORNER_RADIUS else MARKER_RADIUS),
                 color = const(style.color),
                 strokeColor = const(Color.White),
                 strokeWidth = const(2.dp),
@@ -192,7 +213,7 @@ fun MapView(
                     val to = mapState.positionFromScreenLocation(toDp(change.position)) ?: continue
                     drag(marker.id, LatLon(to.latitude, to.longitude))
                 }
-                if (!dragging) click?.invoke(marker.id)
+                if (dragging) markerDragEnd?.invoke(marker.id) else click?.invoke(marker.id)
             }
         },
         state = mapState,
@@ -216,6 +237,8 @@ fun MapView(
 /** How close (on screen) a press must be to a marker to grab it. 24 dp is a fingertip, per the spike (ADR-001 M3). */
 private val MARKER_HIT_RADIUS = 24.dp
 private val MARKER_RADIUS = 11.dp
+private val CORNER_RADIUS = 7.dp
+private val AREA_COLOR = Color(0xFFFFA726)
 
 private val MarkerStyle.color
     get() = when (this) {
@@ -223,6 +246,7 @@ private val MarkerStyle.color
         MarkerStyle.WAYPOINT -> Color(0xFF4FC3F7)
         MarkerStyle.SELECTED -> Color(0xFFFFC107)
         MarkerStyle.CURRENT -> Color(0xFFE040FB)
+        MarkerStyle.CORNER -> AREA_COLOR
     }
 
 /**
@@ -272,6 +296,25 @@ internal fun markersGeoJson(markers: List<MapOverlay.Marker>) = featureCollectio
 /** Routes with fewer than two points aren't lines, so they're left out rather than sent as invalid GeoJSON. */
 internal fun routeGeoJson(routes: List<MapOverlay.Route>) =
     featureCollection(routes.filter { it.points.size >= 2 }.map { lineGeoJson(it.points) })
+
+/** Plain points (photo positions) as a FeatureCollection. */
+internal fun pointsGeoJson(points: List<LatLon>) = featureCollection(points.map { pointGeoJson(it) })
+
+/**
+ * Areas as a FeatureCollection. GeoJSON polygons repeat the first corner at the end ("closed ring"); fewer than 3
+ * corners isn't an area yet, so 2 are sent as a line and 1 as nothing (its corner marker already shows it).
+ */
+internal fun polygonsGeoJson(polygons: List<MapOverlay.Polygon>) = featureCollection(
+    polygons.mapNotNull { p ->
+        val ring = (p.corners + p.corners.take(1)).joinToString(",") { "[${it.longitude},${it.latitude}]" }
+        val geometry = when {
+            p.corners.size >= 3 -> """{"type":"Polygon","coordinates":[[$ring]]}"""
+            p.corners.size == 2 -> """{"type":"LineString","coordinates":[${p.corners.joinToString(",") { "[${it.longitude},${it.latitude}]" }}]}"""
+            else -> return@mapNotNull null
+        }
+        """{"type":"Feature","properties":{},"geometry":$geometry}"""
+    },
+)
 
 private fun featureCollection(features: List<String>) = """{"type":"FeatureCollection","features":[${features.joinToString(",")}]}"""
 

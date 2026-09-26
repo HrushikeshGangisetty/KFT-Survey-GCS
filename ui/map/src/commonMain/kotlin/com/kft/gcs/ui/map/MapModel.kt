@@ -55,6 +55,15 @@ sealed interface MapOverlay {
     data class Route(val points: List<LatLon>) : MapOverlay
 
     /**
+     * An area, such as a survey polygon: outline plus a light fill. With fewer than 3 corners it's drawn as a line
+     * (still being drawn). [selected] draws it brighter, for the one being edited.
+     */
+    data class Polygon(val corners: List<LatLon>, val selected: Boolean) : MapOverlay
+
+    /** Where photos were taken: small dots, one per photo. */
+    data class Photos(val points: List<LatLon>) : MapOverlay
+
+    /**
      * A labelled point (home, a waypoint). [id] is what click and drag callbacks report back. Only [draggable]
      * markers can be dragged; any marker can be clicked when the map has a click callback.
      */
@@ -68,7 +77,7 @@ sealed interface MapOverlay {
 }
 
 /** How a [MapOverlay.Marker] looks. The map decides the colours, so every screen shows the same meaning the same way. */
-enum class MarkerStyle { HOME, WAYPOINT, SELECTED, CURRENT }
+enum class MarkerStyle { HOME, WAYPOINT, SELECTED, CURRENT, CORNER }
 
 /** "Move the camera here." A new [id] means a new request, even to the same place (e.g. "centre" pressed twice). */
 data class CameraRequest(val target: LatLon, val zoom: Double, val id: Long)

@@ -33,5 +33,8 @@ kotlin {
             implementation(libs.koin.compose)
             implementation(libs.koin.compose.viewmodel)
         }
+        androidMain.dependencies {
+            implementation(libs.androidx.activity.compose) // the document picker for plan files
+        }
     }
 }

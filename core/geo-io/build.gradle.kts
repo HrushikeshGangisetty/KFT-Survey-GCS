@@ -10,6 +10,8 @@ kotlin {
         commonMain.dependencies {
             api(project(":core:geo"))
             api(project(":core:planning"))
+            // Mission files are lists of MissionItem (plain values, no MAVLink types in their API).
+            api(project(":core:vehicle"))
             implementation(libs.kotlinx.serialization.json)
         }
     }

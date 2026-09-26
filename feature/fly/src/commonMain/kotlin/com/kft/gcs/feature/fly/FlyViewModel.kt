@@ -3,6 +3,8 @@ package com.kft.gcs.feature.fly
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kft.gcs.core.geo.LatLon
+import com.kft.gcs.core.vehicle.MissionSync
+import com.kft.gcs.core.vehicle.MissionSyncState
 import com.kft.gcs.core.vehicle.VehicleRepository
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.ui.map.CameraRequest
@@ -21,10 +23,12 @@ import kotlinx.coroutines.launch
  * off, changes mode and lands on the RC, never from the GCS (spec S9), so this screen has no flight-action buttons.
  *
  * @param basemaps what this build can show; passed in (not read from the platform here) so tests are deterministic.
+ * @param sync the Plan tab's plan next to what the vehicle holds, for the "≠ plan" warning.
  */
 class FlyViewModel(
     private val vehicles: VehicleRepository,
     private val basemaps: List<TileSourceConfig>,
+    private val sync: MissionSync,
 ) : ViewModel() {
 
     /** Screen-only state: which basemap, the track drawn so far, and the last camera move asked for. */
@@ -37,8 +41,8 @@ class FlyViewModel(
 
     private val local = MutableStateFlow(Local(basemaps.first()))
 
-    val state: StateFlow<FlyUiState> = combine(vehicles.state, local) { v, l -> build(v, l) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), build(VehicleState(), local.value))
+    val state: StateFlow<FlyUiState> = combine(vehicles.state, local, sync.state, ::build)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), build(VehicleState(), local.value, sync.state.value))
 
     init {
         // The track and the first auto-centre follow the vehicle even while the screen is hidden, so returning to
@@ -70,12 +74,13 @@ class FlyViewModel(
 
     fun onClearTrackClicked() = local.update { it.copy(track = emptyList()) }
 
-    private fun build(v: VehicleState, l: Local) = FlyUiState(
+    private fun build(v: VehicleState, l: Local, s: MissionSyncState) = FlyUiState(
         connected = v.connected,
         firmware = v.firmwareVersion?.let { "ArduPilot $it" },
         login = v.login?.let { LoginUi(it.label, it.warning) },
         hud = hudItems(v),
         message = v.lastMessage?.let { MessageUi(it.text, it.severity) },
+        missionWarning = if (v.connected && s.differsFrom(v.mission?.total)) "Vehicle mission ≠ plan" else null,
         overlays = listOfNotNull(
             MapOverlay.Track(l.track),
             v.position?.let { MapOverlay.Vehicle(it, v.headingDeg) },

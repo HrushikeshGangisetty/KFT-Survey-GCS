@@ -23,6 +23,11 @@ data class FlyUiState(
     /** The HUD strip: "Mode Loiter", "Alt 12.3 m", … Always the same items in the same order, so nothing jumps. */
     val hud: List<HudItem>,
     val message: MessageUi?,
+    /**
+     * "Vehicle mission ≠ plan" when the vehicle is known to hold something other than the Plan tab's plan. A warning
+     * only: the GCS can't start or change the flight (spec S9), so the operator re-uploads from Plan if needed.
+     */
+    val missionWarning: String?,
     val overlays: List<MapOverlay>,
     val basemaps: List<TileSourceConfig>,
     val selectedBasemap: TileSourceConfig,

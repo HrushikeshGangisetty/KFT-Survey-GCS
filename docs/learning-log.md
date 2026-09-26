@@ -1325,3 +1325,152 @@ SurveyParams ──planSurvey()──▶ height: Altitude(h) → GSD = camera.gs
 - "Per-vehicle" battery time is per vehicle *kind* (Copter / Plane). Per airframe (by system id or name) is possible later if one fleet has very different batteries.
 - The Plane turn radius comes from speed and bank (`planeTurnRadiusM`). Real ArduPlane turns (`NAVL1_PERIOD`, wind) are wider, so the Pass 16 SITL run will show how much margin k needs.
 - **Next: Pass 15**, the survey on the Plan screen.
+
+---
+
+## Pass 15 — Survey on the Plan screen (2026-09-26)
+
+### What changed
+- **`feature/plan`** (most of the pass):
+  - `MissionGroups.kt` (new): the mission as ordered groups.
+    - `WaypointGroup` (the Pass 8 editor) and `SurveyGroup` (keeps its `SurveySettings`).
+    - `flatten()`: the only place the flat item list is made (upload, export, preview, map route).
+    - `surveyItems()`, `defaultSurvey()`, and the group header line.
+  - `PlanDocument.kt` (new):
+    - Our own `.kftplan` JSON: groups plus survey parameters, with its own file DTOs.
+    - `insertCorner()`: where a clicked corner goes.
+  - `PlanFiles.kt` (new): the platform's open/save dialogs as an interface.
+  - `PlanUiState.kt` (rewritten):
+    - Group headers, the survey panel, the sync label, undo/redo flags and the upload preview.
+    - `PlanEdit`: the editor's single immutable state, including the history.
+    - `buildPlanUiState` stays pure.
+  - `PlanViewModel.kt` (rewritten):
+    - Groups, corners, survey fields, height mode, cameras, settings.
+    - Undo/redo, upload preview → confirm, read and clear.
+    - Save, open (all three formats) and export.
+  - `PlanScreen.kt` (rewritten):
+    - `PlanActions` (the events), a floating toolbar, the group list, the waypoint editor and the survey panel.
+    - Custom-camera, rename, clear and upload-preview dialogs.
+    - Our own line icons: a disk for files, arrows for the vehicle.
+  - `PlanItems.kt`: `addWaypoint(startsMission)` (only the first group gets the automatic copter takeoff) and a shared `speedItem`.
+  - `di/PlanModule.kt`: `PlanSettingsRepository` and the new ViewModel dependencies.
+- **`core/vehicle`**:
+  - `MissionSync.kt` (new): the plan and what the vehicle holds, shared by Plan (writes) and Fly (reads), with `sameMission()`.
+  - `Mission.kt`: `DO_SET_CAM_TRIGG_DIST = 206`.
+  - Koin: `single { MissionSync() }`.
+- **`core/geo-io`**:
+  - `MissionFiles.kt` (new): QGC `.plan` and Mission Planner `.waypoints`, encode and decode, as plain items with home.
+  - It now depends on `core:vehicle` for `MissionItem` (see Decisions).
+- **`ui/map`**:
+  - `MapOverlay.Polygon` (fill plus outline, the selected one stronger), `MapOverlay.Photos` (for Pass 16), and `MarkerStyle.CORNER` (smaller handles).
+  - `onMarkerDragEnd`, so one drag is one undo step.
+- **`feature/fly`**: "Vehicle mission ≠ plan" under the HUD title, from `MissionSync`.
+- **`app`**:
+  - `FileProfileStore` → `FileTextStore`: one class for both text stores, and a second file, `plan-settings.json`.
+  - `DesktopPlanFiles` (AWT `FileDialog`) and `AndroidPlanFiles` (the system document picker, no storage permission).
+  - `KeyShortcuts`: the desktop window passes Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y to the Plan tab.
+  - `activity-compose` added to `app:shared` androidMain. It was already in the version catalog, so no version change.
+- **`CLAUDE.md` §2**: the `core:geo-io` row now lists `core:vehicle`.
+
+### How it works
+```
+map click / drag / panel field ──▶ PlanViewModel ──▶ PlanEdit (groups, selection, past/future) ──┐
+                                                       one edit = old groups pushed on `past`       │
+                                                       same key (a drag, one field) = same step     │
+vehicle, settings, MissionSync ────────────────────────────────────────────────────────────────────┤
+                                                                                                    ▼
+                           buildPlanUiState: flatten(groups) ─▶ items + seq numbers + SurveyPlans
+                             ├─ overlays: route (home + every item), polygons, corners, numbered markers ─▶ one MapView
+                             ├─ panel: group headers "1.7 km · 3 min 34 s · 1.4 cm/px", survey fields, stats, warnings
+                             └─ sync: sameMission(flat items, what the vehicle holds) ─▶ "Not uploaded" / "On vehicle"
+Upload ─▶ uploadPreview (0 = home, 1…n, warnings) ─▶ Upload ─▶ MissionRepository (home = seq 0, S11)
+        ─▶ MissionSync.vehicleHolds(items) ─▶ Fly: warns "Vehicle mission ≠ plan" after any later edit
+```
+**A survey's items** (`surveyItems`, checked against ArduPilot `AP_Mission`): `[TAKEOFF]` (copter, first in the mission), `DO_CHANGE_SPEED`, then per pass `WAYPOINT entry` → `WAYPOINT photoStart` → `CAM_TRIGG_DIST(d, shoot now)` → `WAYPOINT photoEnd` → `CAM_TRIGG_DIST(0)` → `WAYPOINT exit`, then `[RETURN_TO_LAUNCH]`.
+- A DO_ command runs when the NAV item before it is reached, so the camera runs from edge to edge and is off in the turns.
+- For the 300 × 200 m example: 2 + 7 × 6 + 1 = 45 items (`copterSurveyItems`).
+
+### Engineering learnings
+- **Groups are the document; items are a view of it.** A survey stores its settings, not its waypoints, so changing the overlap regenerates every line. Upload, export, the map route and the preview all call the one `flatten()`, so they can't disagree about seq numbers.
+- **Undo on an immutable state.** The whole plan is one immutable value (`List<MissionGroup>`), so an undo step is a reference to the old list, not a diff to replay. Two decisions make it feel right:
+  - Coalescing: a key joins repeats of the same edit into one step. That's the one drag, or typing "12.5" into one field.
+  - Drag end: the map reports when a drag ends. That ends the step, so two separate drags of the same corner are two undos. The first test run caught this: selecting a row after each move had been resetting the key, so every mouse-move was its own step.
+- **Shortcuts at the window, not in the UI tree.** My first version listened for keys on a focused box in `App()`. In SITL, Ctrl+Z stopped working after pressing Read: the focused button was disabled during the transfer and Compose moved focus to the window root, outside the box. The desktop `Window`'s own `onPreviewKeyEvent` sees every key whatever has focus, so `KeyShortcuts` hands it the Plan handler. The tablet has the Undo/Redo buttons.
+- **"Not uploaded" is a comparison, not a flag.** A flag would need clearing on every code path that edits. Instead the screen compares the flat items with what the vehicle is known to hold.
+  - `sameMission` compares in the wire's precision: positions in 1e-7° steps, altitudes and params as Float, and the frame only for items with a position (ArduPilot reads DO_ items back as AMSL).
+  - That's why an undo back to the uploaded plan shows "On vehicle" again, and why a Read of our own upload compares equal. SITL confirmed both.
+  - It also catches MAVProxy changing the mission behind our back, through MISSION_CURRENT's total.
+- **`DO_SET_CAM_TRIGG_DIST` param2 = 0 on purpose.** ArduPilot stores only param1, param3 and param4 (`AP_Mission.cpp`). Sending anything in param2 would make every read-back "differ".
+- **Files are told apart by content.** A `.plan` renamed to `.txt` still opens, and a QGC Survey (a "ComplexItem" only QGC can expand) is counted and reported rather than silently dropped.
+- **A platform dialog behind a suspend function.**
+  - Desktop: AWT's `FileDialog` is modal and runs its own event loop, so calling it on the UI thread (`viewModelScope`) is correct.
+  - Android: the document picker is an activity result, which only composition can launch. `RegisterPlanFiles` wires the launchers, and `save()` / `open()` just await a `CompletableDeferred`.
+- **Layout (ideas from ArduDeck's screenshots, nothing copied):** map-first, a floating toolbar with file and vehicle actions visibly apart, a right-hand panel whose group headers carry distance, time and GSD, and a sync label that turns orange on edit.
+
+**Ponytail review:** one cut. `MissionSyncState.uploaded` only fed tests; the screens use `sameMission` / `differsFrom` (−2 lines). Kept:
+- `PlanActions`: it keeps `PlanScreen` stateless and previewable (§3).
+- `PlanFiles` and `SettingsStore`: platform seams.
+- `KeyShortcuts`: 5 lines, and the only way to reach the window's keys.
+- The file DTOs: the format stays separate from editor types.
+
+### Decisions you should know about
+- **`core:geo-io` → `core:vehicle`** (CLAUDE.md §2 table updated). A mission file *is* a list of `MissionItem`s, and `geo-io` is where §2 puts `.plan` parsing. The alternative, parsing in `feature:plan`, would have left the file formats untestable without Compose.
+  - The cost: `geo-io` pulls mavlink-kotlin in transitively (the public API is still plain values).
+  - To undo it later, move `MissionItem` into a pure module.
+- **Takeoff:** only the group that starts the mission gets an automatic copter NAV_TAKEOFF. A second waypoint group or a later survey doesn't.
+- **Ctrl+Z also undoes plan edits while a text field has focus.** It's the plan undo, not the field's own. That matches QGC, and the field value is part of the plan anyway.
+
+### What to look at
+1. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/MissionGroups.kt:123`: `flatten`, and `:157` `surveyItems`.
+2. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanViewModel.kt:382`: `changed()`, the whole undo mechanism in 10 lines.
+3. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/MissionSync.kt:55`: `sameMission`, and `:42` `differsFrom`.
+
+### Tests
+- `MissionGroupsTest` (4):
+  - The copter survey items for the worked example: 45 items, first line (15, −10) → (15, 0) → on(20 m, now) → (15, 200) → off → (15, 210), all at 100 m, RTL last, 77 planned photos.
+  - Plane: no takeoff, 29 items.
+  - Seq numbers across groups: the survey starts at 4, with no second takeoff.
+  - An unfinished survey says why.
+- `PlanDocumentTest` (3):
+  - The own format round-trips every row kind (passthrough with NaN included) and a GSD-first survey.
+  - Other files are refused.
+  - Corner insertion goes into the nearest edge (hand example).
+- `MissionFilesTest` (5):
+  - `.plan` and `.waypoints` round trips, NaN yaw included.
+  - A hand-written QGC plan in QGC's documented layout: home, null yaw → NaN, 1 ComplexItem skipped.
+  - A hand-written MP file: line 0 = home, frame 2 → relative.
+  - Wrong files name the format.
+- `MissionSyncTest` (3):
+  - Unknown → uploaded → edited.
+  - A read-back in wire form equals what was sent, and a waypoint's frame still matters.
+  - A different count reported by the vehicle is caught.
+- `PlanViewModelTest` (16):
+  - The Pass 8 cases, carried over to groups.
+  - Upload preview → confirm → progress.
+  - The armed warning in the preview.
+  - Plan vs vehicle ("Not uploaded" / "On vehicle" / "changed elsewhere").
+  - Read → "On vehicle".
+  - Drawing a survey (polygon, corners, route, stats, live re-plan on drag).
+  - Undo/redo (one drag = one step, two drags = two).
+  - GSD-first keeps the altitude.
+  - Opening a QGC plan.
+  - Save then open.
+- `FlyViewModelTest.hudWarnsWhenTheVehicleMissionIsNotThePlan` and `GeoJsonTest.polygonsAreClosedRingsAndTwoCornersAreALine`.
+- **Desktop against ArduCopter 4.8.0-dev SITL (TCP 5762)**, screenshot `docs/decisions/assets/pass15-survey-plan.png`:
+  - Plan → + Survey → 4 clicks → a 9-line grid with 10 m run-ins drawn live.
+  - Panel: GSD 1.4 cm/px, 2.9 ha, 22.5 m spacing, a photo every 10 m (1.2 s), 144 photos, 1.7 km, 3 min 34 s, 1.2 GB.
+  - Warning: "photos would be 1.2 s apart, but the camera needs 2.0 s. Fly at most 5.0 m/s…" (P4P preset).
+  - Dragging a corner: 11 lines and 170 photos, live. Ctrl+Z reverts the whole drag, Ctrl+Shift+Z redoes it.
+  - Upload → preview "Upload 57 items?" (0 Home, 1 Takeoff 50 m, 2 speed 8 m/s, then waypoint / camera every 10 m / … / stop) → Upload → **"On vehicle"**.
+  - Read → a "From vehicle" group with the speed folded back into row 3, still **"On vehicle"**: the read-back equals the upload.
+  - Edit → Fly shows **"Vehicle mission ≠ plan"** and "Mission 0 / 57".
+  - Save → the Windows dialog → `survey1.kftplan` (readable JSON with the survey parameters). Delete the group → Open → the survey is back.
+- `./gradlew check` and `:app:android:assembleDebug` pass, with no warnings.
+
+### Open questions / next
+- **Android:** built, but not clicked through on the emulator in this pass. The Pass 16 exit check covers the Copter survey there.
+- The start-corner chips (↙ ↘ ↖ ↗) are small on desktop. They could become a little diagram if they confuse.
+- Group reordering isn't built: add a group in the order you want to fly it, or delete and re-add. Up/down buttons are a small addition when needed.
+- `ponytail:` `PLANE_BANK_DEG` is a constant 30°. Make it a setting if a KFT plane flies with a lower roll limit.
+- Autosave (ArduDeck, spec P1) isn't built: Save is explicit.
+- **Next: Pass 16**, photos in SITL and the rapid-prototype exit check.

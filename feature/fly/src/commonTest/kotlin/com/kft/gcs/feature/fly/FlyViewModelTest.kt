@@ -13,7 +13,10 @@ import com.kft.gcs.core.mavlink.TxResult
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.vehicle.GpsFix
+import com.kft.gcs.core.vehicle.MissionCommand
+import com.kft.gcs.core.vehicle.MissionItem
 import com.kft.gcs.core.vehicle.MissionProgress
+import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleRepository
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.ui.map.MapOverlay
@@ -26,6 +29,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.resetMain
@@ -39,6 +43,7 @@ class FlyViewModelTest {
     private val frames = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = 16)
     private val copter = VehicleInfo(1u, 1u, VehicleKind.COPTER, armed = false, customMode = 5u)
     private val home = LatLon(-35.363261, 149.165230)
+    private val sync = MissionSync()
 
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterTest fun tearDown() = Dispatchers.resetMain()
@@ -46,7 +51,7 @@ class FlyViewModelTest {
     /** A real VehicleRepository, driven by scripted link state and frames instead of a socket. */
     private fun TestScope.viewModel(): FlyViewModel {
         val repo = VehicleRepository(backgroundScope, frames, link, SilentSender, loginKey = null, testScheduler.timeSource)
-        return FlyViewModel(repo, listOf(TileSources.Street, TileSources.Satellite)).also {
+        return FlyViewModel(repo, listOf(TileSources.Street, TileSources.Satellite), sync).also {
             link.value = LinkState.Connected(LinkConfig.UdpListen(), copter, LinkStats())
             runCurrent()
         }
@@ -140,6 +145,23 @@ class FlyViewModelTest {
         assertEquals("12.6 V · 15%", hud.getValue("Battery").value)
         assertTrue(hud.getValue("Battery").warning, "below 20% warns")
         assertTrue(hud.getValue("State").warning, "armed is highlighted")
+    }
+
+    /** The HUD warns when the vehicle holds something other than the plan, and only when that's known. */
+    @Test
+    fun hudWarnsWhenTheVehicleMissionIsNotThePlan() = runTest(dispatcher) {
+        val vm = viewModel()
+        backgroundScope.launch { vm.state.collect {} }
+        val wp = MissionItem(MissionCommand.WAYPOINT, home, 30.0)
+        sync.planChanged(listOf(wp), 0)
+        runCurrent()
+        assertEquals(null, vm.state.value.missionWarning, "nothing uploaded yet: unknown, no warning")
+        sync.vehicleHolds(listOf(wp))
+        runCurrent()
+        assertEquals(null, vm.state.value.missionWarning)
+        sync.planChanged(listOf(wp, wp.copy(altitudeM = 40.0)), 0)
+        runCurrent()
+        assertEquals("Vehicle mission ≠ plan", vm.state.value.missionWarning)
     }
 
     @Test

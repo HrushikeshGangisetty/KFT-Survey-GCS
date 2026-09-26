@@ -34,13 +34,14 @@ fun defaultAltitudeM(kind: VehicleKind?): Double = if (kind == VehicleKind.PLANE
 
 /**
  * Adds a waypoint at [at]. It takes the altitude of the last editable item, so a survey block stays level while you
- * click. On a Copter, the first click also puts a NAV_TAKEOFF in front (item 1): without it, AUTO on the ground
- * doesn't climb. Planes get no automatic takeoff, because an ArduPlane takeoff needs pitch and a runway heading the
- * editor can't guess; the pilot takes off on the RC and switches to AUTO in the air.
+ * click. On a Copter, the first click of the mission ([startsMission]: no earlier group has items) also puts a
+ * NAV_TAKEOFF in front (item 1): without it, AUTO on the ground doesn't climb. Planes get no automatic takeoff,
+ * because an ArduPlane takeoff needs pitch and a runway heading the editor can't guess; the pilot takes off on the RC
+ * and switches to AUTO in the air.
  */
-fun List<PlanItem>.addWaypoint(at: LatLon, kind: VehicleKind?): List<PlanItem> {
+fun List<PlanItem>.addWaypoint(at: LatLon, kind: VehicleKind?, startsMission: Boolean = true): List<PlanItem> {
     val altitude = lastOrNull { it.editable }?.altitudeM ?: defaultAltitudeM(kind)
-    val takeoff = if (isEmpty() && kind != VehicleKind.PLANE) listOf(PlanItem.takeoff(altitude)) else emptyList()
+    val takeoff = if (isEmpty() && startsMission && kind != VehicleKind.PLANE) listOf(PlanItem.takeoff(altitude)) else emptyList()
     return this + takeoff + PlanItem.waypoint(at, altitude)
 }
 
@@ -68,7 +69,7 @@ fun seqNumbers(items: List<PlanItem>): List<Int> {
 fun toMissionItems(items: List<PlanItem>): List<MissionItem> = items.flatMap { item ->
     val passthrough = item.passthrough
     if (passthrough != null) return@flatMap listOf(passthrough)
-    val speed = item.speedMs?.let { MissionItem(MissionCommand.DO_CHANGE_SPEED, param1 = SPEED_TYPE, param2 = it.toFloat(), param3 = -1f) }
+    val speed = item.speedMs?.let(::speedItem)
     listOfNotNull(speed, MissionItem(item.command, item.position, item.altitudeM, AltitudeFrame.RELATIVE))
 }
 
@@ -95,6 +96,9 @@ fun fromMissionItems(items: List<MissionItem>): List<PlanItem> {
     pendingSpeed?.let { rows += PlanItem(it.command, passthrough = it) }
     return rows
 }
+
+/** DO_CHANGE_SPEED as we write it: speed type 0 (see [toMissionItems]), [speedMs], throttle unchanged. */
+internal fun speedItem(speedMs: Double) = MissionItem(MissionCommand.DO_CHANGE_SPEED, param1 = SPEED_TYPE, param2 = speedMs.toFloat(), param3 = -1f)
 
 private const val SPEED_TYPE = 0f
 private val EDITABLE = setOf(MissionCommand.TAKEOFF, MissionCommand.WAYPOINT)

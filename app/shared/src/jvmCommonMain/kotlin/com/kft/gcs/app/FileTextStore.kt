@@ -1,15 +1,17 @@
 package com.kft.gcs.app
 
 import com.kft.gcs.feature.connections.ProfileStore
+import com.kft.gcs.feature.plan.SettingsStore
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 /**
- * Saved connection profiles in one UTF-8 file. Each shell picks the folder: `%APPDATA%\KFT-GCS` on desktop, the
- * app's private files directory on Android.
+ * One UTF-8 text file: the saved connection profiles, or the plan settings (one instance per file). Each shell picks
+ * the folder: `%APPDATA%\KFT-GCS` on desktop, the app's private files directory on Android. Both store interfaces
+ * are "read the text, write the text", so one class serves both.
  */
-class FileProfileStore(private val file: File) : ProfileStore {
+class FileTextStore(private val file: File) : ProfileStore, SettingsStore {
 
     override fun read(): String? = file.takeIf { it.exists() }?.readText()
 

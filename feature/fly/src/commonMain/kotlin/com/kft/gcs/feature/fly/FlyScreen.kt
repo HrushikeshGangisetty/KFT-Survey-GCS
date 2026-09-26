@@ -58,6 +58,7 @@ fun FlyScreen(
                     color = if (it.warning) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.7f),
                 )
             }
+            state.missionWarning?.let { Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 state.hud.forEach { item ->
                     Column {

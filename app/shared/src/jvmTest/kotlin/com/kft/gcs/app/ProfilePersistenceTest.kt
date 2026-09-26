@@ -19,7 +19,7 @@ class ProfilePersistenceTest {
     private val scope = TestScope()
 
     /** What the app builds at startup. A new instance = a restart; only the file carries over. */
-    private fun startApp(store: FileProfileStore) = DefaultConnectionsRepository(
+    private fun startApp(store: FileTextStore) = DefaultConnectionsRepository(
         ConnectionManager(scope, StandardTestDispatcher(scope.testScheduler), MutableStateFlow(PodStatus.NoPod), SerialPorts()),
         SerialPorts(),
         store,
@@ -29,13 +29,13 @@ class ProfilePersistenceTest {
     @Test
     fun profilesSurviveARestart() {
         val file = Files.createTempDirectory("kft-profiles").resolve("sub/connection-profiles.json").toFile()
-        val first = startApp(FileProfileStore(file))
+        val first = startApp(FileTextStore(file))
         assertEquals(listOf("SITL (UDP 14550)", "SITL (TCP 5760)"), first.profiles.value.map { it.name }, "first run: defaults")
 
         first.addProfile("Radio", LinkConfig.Serial("COM7", 57600))
         first.deleteProfile(first.profiles.value.first().id)
 
-        val second = startApp(FileProfileStore(file))
+        val second = startApp(FileTextStore(file))
         assertEquals(
             listOf("SITL (TCP 5760)" to LinkConfig.TcpClient("127.0.0.1", 5760), "Radio" to LinkConfig.Serial("COM7", 57600)),
             second.profiles.value.map { it.name to it.config },
@@ -45,6 +45,6 @@ class ProfilePersistenceTest {
     @Test
     fun aCorruptFileFallsBackToDefaults() {
         val file = Files.createTempFile("kft-profiles", ".json").toFile().apply { writeText("{ not json") }
-        assertEquals(2, startApp(FileProfileStore(file)).profiles.value.size)
+        assertEquals(2, startApp(FileTextStore(file)).profiles.value.size)
     }
 }
