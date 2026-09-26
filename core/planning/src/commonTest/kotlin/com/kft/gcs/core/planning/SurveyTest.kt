@@ -21,8 +21,11 @@ class SurveyTest {
         SurveyParams(rectangle, camera, height, speedMs = speed, turnaround = Turnaround.Copter())
 
     /**
-     * Altitude first, 100 m: GSD 0.027412 m, spacing 45 m, trigger 20 m, 77 photos, 1670 m, 167 s (Pass 13 table).
-     * - Batteries, 60 s usable each: ⌈167 / 60⌉ = ⌈2.78⌉ = 3.
+     * Altitude first, 100 m: GSD 0.027412 m, spacing 45 m, trigger 20 m, 77 photos (Pass 13 table).
+     * - The copter's run-in/out becomes d/2 = 10 m (the camera switches off 10 m after the last photo, see
+     *   [cameraOff]): 7 × (10 + 200 + 10) + 6 × 45 = 1540 + 270 = 1810 m, 181 s at 10 m/s. The hops stay 45 m:
+     *   a northbound line ends at y = 210 and the southbound one starts there.
+     * - Batteries, 60 s usable each: ⌈181 / 60⌉ = ⌈3.02⌉ = 4.
      * - Data: 77 × 8 MB = 616 MB.
      * - Photo interval: 20 m / 10 m/s = 2.0 s, below the camera's 2.5 s → warning; the fastest that works is
      *   20 / 2.5 = 8 m/s.
@@ -36,8 +39,9 @@ class SurveyTest {
         assertEquals(45.0, plan.lineSpacingM, 1e-9)
         assertEquals(20.0, plan.triggerDistanceM, 1e-9)
         assertEquals(77, plan.stats.photoCount)
-        assertEquals(167.0, plan.stats.flightTimeS, 1e-6)
-        assertEquals(3, plan.batteries)
+        assertEquals(1810.0, plan.stats.distanceM, 1e-3)
+        assertEquals(181.0, plan.stats.flightTimeS, 1e-4)
+        assertEquals(4, plan.batteries)
         assertEquals(616.0, plan.dataMb, 1e-9)
         val interval = plan.warnings.filterIsInstance<SurveyWarning.PhotoIntervalTooShort>().single()
         assertEquals(2.0, interval.intervalS, 1e-9)
@@ -62,10 +66,32 @@ class SurveyTest {
         assertEquals(null, plan.batteries, "no battery time set")
     }
 
-    /** 167 s on 83.5 s batteries is exactly 2, not 3. */
+    /**
+     * P4P at 50 m: footprint along = 8.8 × 50 / 8.8 = 50 m, trigger at 80 % = 10 m. At 5 m/s that's exactly 2.0 s,
+     * the camera's limit: no warning. At 5.1 m/s it's 1.96 s: warning.
+     */
+    @Test
+    fun exactlyAtTheCameraLimitIsFine() {
+        val p4p = camera.copy(minTriggerIntervalS = 2.0)
+        fun warnings(speed: Double) = planSurvey(params(SurveyHeight.Altitude(50.0), speed).copy(camera = p4p)).warnings
+        assertTrue(warnings(5.0).isEmpty(), "${warnings(5.0)}")
+        assertTrue(warnings(5.1).single() is SurveyWarning.PhotoIntervalTooShort)
+    }
+
+    /** 181 s on 90.5 s batteries is exactly 2, not 3. */
     @Test
     fun exactlyTwoBatteries() {
-        assertEquals(2, planSurvey(params(SurveyHeight.Altitude(100.0)), SurveyLimits(usableFlightTimeS = 83.5)).batteries)
+        assertEquals(2, planSurvey(params(SurveyHeight.Altitude(100.0)), SurveyLimits(usableFlightTimeS = 90.5)).batteries)
+    }
+
+    /** A longer run-out than d/2 is kept; a Plane gets d/2 of lead-out and keeps its lead-in. */
+    @Test
+    fun runOutIsAtLeastHalfATriggerDistance() {
+        val copter = planSurvey(params(SurveyHeight.Altitude(100.0)).copy(turnaround = Turnaround.Copter(25.0)))
+        assertEquals(25.0, copter.grid.passes[0].runOutM)
+        val plane = planSurvey(params(SurveyHeight.Altitude(100.0)).copy(turnaround = Turnaround.Plane(20.0, leadInM = 120.0, leadOutM = 0.0)))
+        assertEquals(120.0, plane.grid.passes[0].runInM)
+        assertEquals(10.0, plane.grid.passes[0].runOutM, 1e-9)
     }
 
     /** The Plane example of SurveyGridTest reports no loops; a 3-line strip reports its 2 as a warning. */

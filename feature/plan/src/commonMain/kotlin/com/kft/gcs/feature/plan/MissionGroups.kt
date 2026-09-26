@@ -11,6 +11,7 @@ import com.kft.gcs.core.planning.SurveyLimits
 import com.kft.gcs.core.planning.SurveyParams
 import com.kft.gcs.core.planning.SurveyPlan
 import com.kft.gcs.core.planning.Turnaround
+import com.kft.gcs.core.planning.cameraOff
 import com.kft.gcs.core.planning.gsdM
 import com.kft.gcs.core.planning.planSurvey
 import com.kft.gcs.core.planning.planeTurnRadiusM
@@ -43,8 +44,9 @@ enum class HeightMode { ALTITUDE, GSD }
 /**
  * A survey as the operator edits it: plain numbers in the units the panel shows (percent, cm/px). [toParams] turns
  * it into the planning module's [SurveyParams].
- * @property turnaroundM Copter: straight run-in/run-out outside the area. Plane: lead-in and lead-out (the same
- *   length each side keeps the panel to one number).
+ * @property turnaroundM Copter: straight run-in/run-out outside the area. Plane: the lead-in, straight flight on the
+ *   line before the area so the plane has finished its turn when the camera starts. The run-out / lead-out is at
+ *   least half a trigger distance, where the camera switches off ([com.kft.gcs.core.planning.cameraOff]).
  * @property returnHome end the survey with a Return-to-launch mission item (flown only when the pilot has put the
  *   vehicle in AUTO; it's a plan, not a command, spec S9).
  */
@@ -74,7 +76,8 @@ data class SurveySettings(
         entry = entry,
         speedMs = speedMs,
         turnaround = if (kind == VehicleKind.PLANE) {
-            Turnaround.Plane(planeTurnRadiusM(speedMs, PLANE_BANK_DEG), leadInM = turnaroundM, leadOutM = turnaroundM)
+            // Lead-out 0: planSurvey makes it the d/2 the camera needs; the plane turns straight after that.
+            Turnaround.Plane(planeTurnRadiusM(speedMs, PLANE_BANK_DEG), leadInM = turnaroundM, leadOutM = 0.0)
         } else {
             Turnaround.Copter(turnaroundM)
         },
@@ -90,7 +93,8 @@ const val PLANE_BANK_DEG = 30.0
 
 /**
  * A new survey's starting values. Copter: 50 m, 8 m/s, 10 m run-in. Plane: 100 m, 22 m/s (about ArduPlane's
- * default cruise airspeed), 50 m lead-in/out.
+ * default cruise airspeed), 120 m lead-in: in ArduPlane SITL (NAVL1_PERIOD 15, 18 m/s) the roll was back to 0° about
+ * 110 m after a U-turn, and with a 50 m lead-in the first photos of each line were taken still banked 22–25°.
  */
 fun defaultSurvey(kind: VehicleKind?, camera: Camera): SurveySettings {
     val plane = kind == VehicleKind.PLANE
@@ -100,7 +104,7 @@ fun defaultSurvey(kind: VehicleKind?, camera: Camera): SurveySettings {
         altitudeM = altitude,
         gsdCm = camera.gsdM(altitude) * 100,
         speedMs = if (plane) 22.0 else 8.0,
-        turnaroundM = if (plane) 50.0 else 10.0,
+        turnaroundM = if (plane) 120.0 else 10.0,
     )
 }
 
@@ -146,10 +150,11 @@ fun flatten(groups: List<MissionGroup>, kind: VehicleKind?, limits: SurveyLimits
  * A survey's mission items. Per pass:
  * ```
  * WAYPOINT entry (run-in start, if any) → WAYPOINT photoStart → CAM_TRIGG_DIST(d, shoot now)
- *   → WAYPOINT photoEnd → CAM_TRIGG_DIST(0 = stop) → WAYPOINT exit (run-out end, if any)
+ *   → WAYPOINT camera-off point → CAM_TRIGG_DIST(0 = stop) → WAYPOINT exit (run-out end, if further on)
  * ```
  * A DO_ command runs when the vehicle reaches the NAV item before it (ArduPilot AP_Mission), so the camera starts on
- * the area's edge and stops at the far edge: no photos in the turns. ArduPilot takes the first photo at once (param3
+ * the area's edge and stops half a trigger distance after the last photo ([cameraOff], within d/2 of the far edge):
+ * no photos in the turns. ArduPilot takes the first photo at once (param3
  * = 1) and then one every d metres, which is the ⌊L / d⌋ + 1 per pass that [com.kft.gcs.core.planning.surveyStats]
  * counts. Before the passes: an optional NAV_TAKEOFF (copter, first in the mission) and the survey speed; after them,
  * an optional RETURN_TO_LAUNCH item. All altitudes are relative to home.
@@ -166,9 +171,10 @@ internal fun surveyItems(plan: SurveyPlan, survey: SurveySettings, takeoff: Bool
         if (p.runInM > 0) waypoint(p.entry)
         waypoint(p.photoStart)
         trigger(plan.triggerDistanceM, shootNow = true)
-        waypoint(p.photoEnd)
+        val off = p.cameraOff(plan.triggerDistanceM)
+        waypoint(off)
         trigger(0.0, shootNow = false)
-        if (p.runOutM > 0) waypoint(p.exit)
+        if (Geodesy.distanceMeters(off, p.exit) > 0.01) waypoint(p.exit)
     }
     if (survey.returnHome) add(MissionItem(MissionCommand.RETURN_TO_LAUNCH))
 }

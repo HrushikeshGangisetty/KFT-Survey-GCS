@@ -1,6 +1,7 @@
 package com.kft.gcs.core.vehicle
 
 import com.divpundir.mavlink.api.MavEnumValue
+import com.divpundir.mavlink.definitions.ardupilotmega.CameraFeedback
 import com.divpundir.mavlink.definitions.common.Attitude
 import com.divpundir.mavlink.definitions.common.GpsFixType
 import com.divpundir.mavlink.definitions.common.GpsRawInt
@@ -20,6 +21,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class VehicleStateTest {
+
+    /** Each CAMERA_FEEDBACK adds its position (degrees × 1e7, as GLOBAL_POSITION_INT); 0,0 (no position) adds nothing. */
+    @Test
+    fun cameraFeedbackAddsAPhoto() {
+        val s = VehicleState()
+            .reduce(CameraFeedback(lat = -353632610, lng = 1491652300, imgIdx = 1u))
+            .reduce(CameraFeedback(lat = 0, lng = 0, imgIdx = 2u))
+            .reduce(CameraFeedback(lat = -353630000, lng = 1491650000, imgIdx = 3u))
+        assertEquals(listOf(LatLon(-35.363261, 149.16523), LatLon(-35.363, 149.165)), s.photos)
+    }
 
     @Test
     fun globalPositionIntUnits() {

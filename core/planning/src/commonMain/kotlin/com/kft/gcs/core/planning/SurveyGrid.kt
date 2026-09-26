@@ -11,6 +11,7 @@ import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.tan
 
@@ -249,6 +250,26 @@ fun surveyStats(spec: GridSpec, grid: SurveyGrid, triggerDistanceM: Double, spee
         // logs show how far off it is.
         flightTimeS = distance / speedMs,
     )
+}
+
+/**
+ * Where to switch the distance trigger off on this pass: half a trigger distance after the last photo the pass should
+ * take, (⌊L/d⌋ + ½)·d from [Pass.photoStart], on the line. That's never more than d/2 past the far edge.
+ *
+ * Why not at the edge itself (Pass 16, ArduPlane SITL): ArduPilot takes each distance-triggered photo a little late
+ * (it checks the distance 50 times a second, so at 18 m/s up to 0.36 m past the mark) and counts a waypoint as reached
+ * slightly early. On 408.9 m lines with a 24 m trigger, the 18th photo was due 1 m before the edge, and 6 of 7 lines
+ * lost it. With the switch-off d/2 after the last photo, that photo has d/2 of margin, and the next (unplanned) one
+ * d/2 the other way, so [surveyStats]' ⌊L/d⌋ + 1 is what the vehicle does.
+ *
+ * It lies on the pass's run-out, which [planSurvey] makes at least d/2 long. Where the run-out is shorter (the inner
+ * pieces of a concave line have none), it's capped at the end of the run-out.
+ */
+fun Pass.cameraOff(triggerDistanceM: Double): LatLon {
+    val along = (floor(photoLengthM / triggerDistanceM + 1e-9) + 0.5) * triggerDistanceM
+    // photoStart → exit is one straight line on the flat local map, and over a survey field lat/lon are linear on it.
+    val f = min(along, photoLengthM + runOutM) / (photoLengthM + runOutM)
+    return LatLon(photoStart.latitude + f * (exit.latitude - photoStart.latitude), photoStart.longitude + f * (exit.longitude - photoStart.longitude))
 }
 
 /** Polygon area in m², by the shoelace formula on the local flat map. */

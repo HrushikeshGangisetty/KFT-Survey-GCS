@@ -15,6 +15,9 @@
     UDP 14550      MAVProxy forwards here: the GCS's "SITL (UDP 14550)" profile. For the emulator, run
                    `adb emu redir add udp:14550:14550` with the desktop GCS closed (only one can listen).
 
+  Survey camera (Pass 16): camera.parm is loaded too. The first time for each vehicle, also type
+  `param set CAM1_TYPE 1` in MAVProxy and restart this script (see camera.parm for why).
+
   The pilot (you) types into the MAVProxy window, e.g.
     Copter: mode guided -> arm throttle -> takeoff 20 -> mode auto
     Plane:  mode guided -> arm throttle -> takeoff 20 -> mode auto   (needs ArduPlane 4.5+ for GUIDED takeoff;
@@ -37,6 +40,8 @@ $exe = Join-Path $SitlDir $(if ($Vehicle -eq "plane") { "ArduPlane.exe" } else {
 if (-not (Test-Path $exe)) { throw "$exe not found. For Plane, start Plane SITL once from Mission Planner so it downloads it." }
 if (-not $Defaults) { $Defaults = Join-Path $SitlDir "default_params\$Vehicle.parm" }
 if (-not (Test-Path $Defaults)) { throw "Default parameters not found: $Defaults (pass -Defaults <path to $Vehicle.parm>)" }
+# The survey camera (Pass 16): SITL reads a comma-separated list, later files winning.
+$Defaults = "$Defaults," + (Join-Path $PSScriptRoot "camera.parm")
 $model = if ($Vehicle -eq "plane") { "plane" } else { "quad" }
 
 # SITL keeps its parameters in eeprom.bin in the working folder. One folder per vehicle, so Plane never boots with

@@ -59,6 +59,12 @@ fun hudItems(v: VehicleState): List<HudItem> = listOf(
     HudItem("Mission", missionText(v.mission)),
 )
 
+/**
+ * "Photos 12 / 144": taken (CAMERA_FEEDBACK since the last Clear track) out of what the plan expects. Without a
+ * planned count (no survey in the plan) just the number taken.
+ */
+internal fun photosItem(taken: Int, planned: Int) = HudItem("Photos", if (planned > 0) "$taken / $planned" else "$taken")
+
 /** "3 / 5" while flying the mission, "Done" at the end. Item numbers are the vehicle's: 1 is the first after home. */
 internal fun missionText(m: MissionProgress?): String = when {
     m == null -> DASH

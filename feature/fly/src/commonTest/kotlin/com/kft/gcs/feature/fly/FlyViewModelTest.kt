@@ -3,6 +3,7 @@ package com.kft.gcs.feature.fly
 import app.cash.turbine.test
 import com.divpundir.mavlink.api.MavFrame
 import com.divpundir.mavlink.api.MavMessage
+import com.divpundir.mavlink.definitions.ardupilotmega.CameraFeedback
 import com.divpundir.mavlink.definitions.standard.GlobalPositionInt
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.LinkConfig
@@ -162,6 +163,28 @@ class FlyViewModelTest {
         sync.planChanged(listOf(wp, wp.copy(altitudeM = 40.0)), 0)
         runCurrent()
         assertEquals("Vehicle mission ≠ plan", vm.state.value.missionWarning)
+    }
+
+    /**
+     * Two CAMERA_FEEDBACKs out of 11 planned: "Photos 2 / 11" and two dots on the map. Clear track starts the count
+     * again from 0 for the next flight, and a third photo counts as 1.
+     */
+    @Test
+    fun photosTakenOutOfPlanned() = runTest(dispatcher) {
+        val vm = viewModel()
+        backgroundScope.launch { vm.state.collect {} }
+        sync.planChanged(emptyList(), plannedPhotos = 11)
+        fun photo(i: Int) = check(frames.tryEmit(Frame(CameraFeedback(lat = home.latE7 + i * 100, lng = home.lonE7, imgIdx = i.toUShort()))))
+        photo(1); photo(2)
+        runCurrent()
+        fun photos() = vm.state.value.hud.single { it.label == "Photos" }.value
+        assertEquals("2 / 11", photos())
+        assertEquals(2, vm.state.value.overlays.filterIsInstance<MapOverlay.Photos>().single().points.size)
+        vm.onClearTrackClicked()
+        photo(3)
+        runCurrent()
+        assertEquals("1 / 11", photos())
+        assertEquals("1", photosItem(1, 0).value, "no survey planned: just the count")
     }
 
     @Test

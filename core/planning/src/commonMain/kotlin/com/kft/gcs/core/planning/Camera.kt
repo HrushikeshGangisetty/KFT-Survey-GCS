@@ -10,7 +10,8 @@ package com.kft.gcs.core.planning
  *
  * The last four fields don't change the geometry:
  * - [minTriggerIntervalS]: the fastest the camera can take photo after photo (0 = no limit known). ArduPilot has the
- *   same idea in `CAM1_INTERVAL_MIN`, and skips a photo that comes too soon, so a survey flown too fast has gaps.
+ *   same idea in `CAM1_INTRVAL_MIN`, and holds back a photo that comes too soon until the interval has passed, so
+ *   a survey flown too fast gets its photos further apart than the overlap needs.
  * - [mbPerPhoto]: the size of one saved photo, for the data-size estimate.
  * - [name]: what the camera list shows.
  * - [unverified]: true for bundled presets whose numbers haven't been checked against the maker's spec sheet yet.

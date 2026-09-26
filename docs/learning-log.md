@@ -1291,7 +1291,7 @@ SurveyParams ──planSurvey()──▶ height: Altitude(h) → GSD = camera.gs
   - At exactly 2k lines no order can start at line 0: two lines have a single allowed partner, so they must be the two ends. Then the grid flies in order and **reports** the loops, as a warning rather than silently.
 - **One pure entry point.** `planSurvey` is the only function the Plan screen calls. The screen never chains camera, spacing, grid and stats itself, so there's one place where GSD-first and altitude-first can't disagree.
 - **Warnings, not errors.**
-  - Too short an interval: ArduPilot (`AP_Camera_Backend::take_picture`, master 2026-09) *skips* a photo requested sooner than `CAM1_INTERVAL_MIN` after the last one. That's a coverage gap, not a crash, so it's a warning with the fix in it (the fastest speed that works).
+  - Too short an interval: ArduPilot (`AP_Camera_Backend::take_picture`, master 2026-09) *holds back* a photo requested sooner than `CAM1_INTRVAL_MIN` after the last one and takes it once the interval has passed (corrected in Pass 16; this said "skips"), so the photos end up further apart than the overlap needs. That's a coverage gap, not a crash, so it's a warning with the fix in it (the fastest speed that works).
   - GSD above the limit and leftover plane loops are warnings too: the plan is still flyable.
 - **Presets as JSON in a Kotlin string**, not a resource file. KMP Android libraries have no common resource loader without adding Compose resources. A `const val` is bundled, needs no I/O, and still reads as plain JSON for whoever checks the numbers. It lives in `core:geo-io`, so `core:planning` stays pure.
 - **Battery rounding:** the distance comes through the map projection, so 1670 m is 1670.000 00x m. `⌈167 / 83.5⌉` came out as 3 until the slack went from 1e-9 to 1e-6 of a battery. The first test run caught it.
@@ -1474,3 +1474,124 @@ Upload ─▶ uploadPreview (0 = home, 1…n, warnings) ─▶ Upload ─▶ Mis
 - `ponytail:` `PLANE_BANK_DEG` is a constant 30°. Make it a setting if a KFT plane flies with a lower roll limit.
 - Autosave (ArduDeck, spec P1) isn't built: Save is explicit.
 - **Next: Pass 16**, photos in SITL and the rapid-prototype exit check.
+
+---
+
+## Pass 16 — Photos in SITL: the rapid-prototype exit check (2026-09-26)
+
+### What changed
+- **`core/vehicle/VehicleState.kt`**: `photos`, the position of every CAMERA_FEEDBACK (ardupilotmega.xml #180) since the link came up, capped at `MAX_PHOTOS`.
+- **`feature/fly`**:
+  - "Photos taken / planned" in the HUD (`photosItem`; planned from `MissionSync`).
+  - Photo dots on the map (`MapOverlay.Photos`, added in Pass 15).
+  - Clear track also starts the photo count again from 0.
+- **`core/planning`**, from the exit check:
+  - `Pass.cameraOff()`: the camera switches off half a trigger distance after the last planned photo, not at the edge.
+  - `planSurvey` makes the run-out / lead-out at least d/2.
+  - No interval warning at exactly the camera's limit.
+  - Corrected KDoc: ArduPilot *holds back* a too-early photo; it doesn't skip it. The parameter is `CAM1_INTRVAL_MIN`. (The Pass 14 log line is corrected too.)
+- **`feature/plan`**:
+  - The survey items use the camera-off point.
+  - The Plane default lead-in is 120 m, the lead-out is automatic (d/2), and the panel says "Lead-in (m)" for Plane.
+- **`tools/sitl`**:
+  - `camera.parm` (new): CAM1_TYPE 1, SERVO9_FUNCTION 10, and the caution below.
+  - `start-sitl.ps1` loads `camera.parm`.
+  - `sitl_pilot.py --photos` logs CAMERA_FEEDBACK to CSV until the mission ends.
+  - `photo_check.py` (new): photos vs planned, and each photo's distance from its camera-on line, using the GCS's own `.waypoints` export.
+- **Tests**:
+  - `VehicleStateTest.cameraFeedbackAddsAPhoto`, `FlyViewModelTest.photosTakenOutOfPlanned`.
+  - `SurveyGridTest.cameraSwitchesOffHalfATriggerDistanceAfterTheLastPhoto`.
+  - `SurveyTest.exactlyAtTheCameraLimitIsFine` and `runOutIsAtLeastHalfATriggerDistance`.
+  - Updated hand values in `SurveyTest` and `MissionGroupsTest`.
+- **Screenshots**: `docs/decisions/assets/pass16-*.png`.
+
+### How it works
+```
+Plan: survey ─▶ items: … WP photoStart ─▶ CAM_TRIGG_DIST(d, shoot now) ─▶ WP camera-off = start + (⌊L/d⌋ + ½)·d ─▶ CAM_TRIGG_DIST(0) …
+                              │                                           (d/2 after the last planned photo)
+SITL (CAM1_TYPE 1): each photo ─▶ AP_Camera_Backend::log_picture ─▶ CAMERA_FEEDBACK(lat, lng, img_idx) on every link
+GCS: VehicleRepository ─▶ VehicleState.photos ─▶ Fly: dots on the map + "Photos n / planned" (planned via MissionSync)
+Check: sitl_pilot.py --photos (SITL port 5763) ─▶ photos.csv ─▶ photo_check.py + the GCS's .waypoints export
+```
+
+### The exit check, run by run
+Pilot sequence each time: `sitl_pilot.py` (the MAVProxy stand-in, as in Pass 10) arms, then GUIDED + takeoff 20 m (Plane: TAKEOFF mode), then AUTO. The GCS only drew, uploaded, exported and watched (S9).
+
+| Run | Build | Survey | Photos (planned) | Off a line > 10 m | Verdict |
+|---|---|---|---|---|---|
+| Copter, desktop #1 | before the fix | 8 lines, P4P 50 m, 5 m/s | **104 (104)** | 0 (max 0.2 m) | pass; superseded by #2 |
+| Plane, desktop #1 | before the fix | 7 lines, every 3rd, RX1R II 100 m, 18 m/s, 50 m lead-in | **121 (126)**, −5 | 22 | **fail**, found both bugs |
+| Copter, Android emulator #1 | before the fix (stale APK) | 7 lines, 5 m/s | **98 (105)**, −7 | 0 | **fail**, the same bug on Copter |
+| Plane, desktop #2 | final | same field, 120 m lead-in | **126 (126)** | 11 (max 34 m, see below) | **pass on count** |
+| Copter, Android emulator #2 | final | the identical field | **105 (105)** | 0 (max 0.3 m) | **pass** |
+| Copter, desktop #2 | final | the identical plan file | **104 (104)** | 0 (max 0.2 m) | **pass** |
+
+Screenshots:
+- `pass15-survey-plan.png`: the Plan screen.
+- `pass16-copter-desktop-done.png`: 104 / 104, dots on the lines only.
+- `pass16-plane-desktop-run1.png` (121 / 126) and `pass16-plane-desktop-done.png` (126 / 126).
+- `pass16-copter-android-old-apk.png` (98 / 105, the far-edge dots missing) and `pass16-copter-android-done.png` (105 / 105).
+
+### What the failing runs taught (the two fixes)
+1. **The last photo of a line was lost when it fell close to the switch-off.** On Plane #1 the lines were 408.9 m with a 24 m trigger (17.04 spacings), so the 18th photo was due 1 m before the camera-off waypoint. Six of seven lines stopped at 17. Two ArduPilot behaviours add up to that:
+   - The distance check runs at 50 Hz, so every photo is taken a little past its mark: the logged spacing was 24.1 m, not 24.0 m.
+   - A waypoint counts as reached slightly before the vehicle is on it.
+
+   The emulator's first Copter run hit exactly the same case (140.1 m lines, 10 m trigger: the 15th photo was due 0.1 m before the switch-off) and lost one photo per line, 98 of 105.
+   **Fix:** switch the camera off at (⌊L/d⌋ + ½)·d. The last planned photo then has d/2 of margin, and so does the unplanned one after it, so ⌊L/d⌋ + 1 is exactly what ArduPilot does. The same two fields on the final build: 126 / 126 and 105 / 105.
+2. **Plane: a 50 m lead-in is too short to finish the turn.** In run 1 the first photos of every line were taken at 22–25° of bank and 10–14 m off the line. From that data, roll is back to 0° about 110 m after the lead-in starts (ArduPlane SITL, `NAVL1_PERIOD` 15, 18 m/s). **Fix:** 120 m default lead-in; the lead-out needs only the camera's d/2.
+
+### Engineering learnings
+- **Test the prediction, not just the code.** Every unit test passed with the old camera-off point, because the tests checked the formula we chose. Only the real autopilot showed that the formula sat on a knife-edge. The planner's job is to predict what ArduPilot *will* do, so the switch-off now sits in the middle of the safe zone rather than on its edge.
+- **Measure before fixing.** `photo_check.py` turned "some photos are missing" into "the 18th photo on lines 1–6, due 1 m before switch-off", and the emulator's −7 into "an old APK" (its camera-off waypoint was exactly at the edge). Without the per-line numbers, both would have looked like the same random loss.
+- **CAMERA_FEEDBACK is the right count** (S10, `AP_Camera_Backend.cpp`, master 2026-09). Without a feedback pin, ArduPilot sends it for every photo it takes, with the AHRS position at that moment. It is `ardupilotmega.xml` #180, and it's parsed only from the autopilot's own system/component id, like all telemetry.
+- **Windows SITL quirk:** `CAM1_TYPE` in a defaults file is ignored, even on a fresh `eeprom.bin`, while `SERVO9_FUNCTION` from the same file works. The camera's parameters are created after the defaults are read. So it's set once per vehicle with `param set CAM1_TYPE 1` and a restart (written in `camera.parm` and the `start-sitl.ps1` header).
+- **The exact-limit warning:** at 5 m/s with a 10 m trigger and a 2.0 s camera, the maths gives 1.999… s. That produced the warning "2.0 s apart, but the camera needs 2.0 s", which is noise. Found in the first desktop run; fixed with a 1e-9 s tolerance and a test.
+
+**Ponytail review:** lean already. `photo_check.py` (≈ 70 lines) is what makes "no photos in the turns" a number. `log_photos` is ≈ 20 lines in the existing pilot script. The camera-off point is one pure function plus a two-line minimum in `planSurvey`. `MAX_PHOTOS` carries a `ponytail:` note. Deleted the `__pycache__` my analysis left behind.
+
+### Safety
+- **No allowlist change.** `DO_SET_CAM_TRIGG_DIST` goes only inside `MISSION_ITEM_INT` (MISSION_CHANGE), like every mission item. The GCS never sends it as an immediate command. It's still UNLISTED as COMMAND_LONG, and `DO_SET_SERVO` / `DO_SET_RELAY` stay NEVER.
+- **S9 held in every run:** the GCS drew, uploaded, exported and watched. Arming, takeoff and AUTO came from `sitl_pilot.py` on SITL port 5763 (system id 254).
+- **S11:** every preview and every export shows home as seq 0. The emulator's exported `.waypoints` (pulled off the device) starts `0 1 0 16 … -35.363261 149.1652299 584.09`.
+- The one `COMMAND_LONG DO_SET_CAM_TRIGG_DIST` in this pass was a SITL setup check sent by a Python snippet on port 5763, never by the GCS.
+
+### What to look at
+1. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/SurveyGrid.kt:268`: `cameraOff`, and its KDoc with the SITL numbers.
+2. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/Survey.kt:87`: the minimum run-out.
+3. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/VehicleState.kt:134`: CAMERA_FEEDBACK.
+4. `tools/sitl/photo_check.py`: how "on the line" is measured.
+
+### Tests
+- **Unit:**
+  - `cameraFeedbackAddsAPhoto`: E7 → degrees, and 0,0 ignored.
+  - `photosTakenOutOfPlanned`: "2 / 11", two dots, Clear track → "1 / 11".
+  - `cameraSwitchesOffHalfATriggerDistanceAfterTheLastPhoto`: 200 m → off at 210; 205 m → still 210; run-out 4 m → capped at 204.
+  - `runOutIsAtLeastHalfATriggerDistance`: Copter 25 kept; Plane lead-in 120 kept, lead-out 10.
+  - `exactlyAtTheCameraLimitIsFine`: 5.0 m/s no warning, 5.1 m/s warning.
+  - Updated: `altitudeFirstWithStatsAndBothWarnings` (1810 m, 181 s, 4 batteries), `exactlyTwoBatteries` (90.5 s), `copterSurveyItems` (38 items, off at (15, 210)).
+- **SITL (ArduCopter / ArduPlane 4.8.0-dev):** the table above, with screenshots.
+- **Android extras**, on the Medium_Tablet emulator:
+  - Drawing by tap. A finger drag moved a corner without panning the map, and the Undo button restored it.
+  - The upload preview, then "On vehicle".
+  - Export through the system document picker (`mission.waypoints`, then `mission (1).waypoints`), pulled with adb and read by `photo_check.py`.
+- `./gradlew check` and `:app:android:assembleDebug` pass, with no warnings.
+
+### Your checklist: run the exit check yourself
+1. Once per vehicle: `start-sitl.ps1 -Vehicle copter`, then type `param set CAM1_TYPE 1` in MAVProxy, close SITL, and start it again.
+2. `gradlew.bat :app:desktop:run` → Links → your SITL profile → Plan → + Survey → click 4 corners → set the speed so there's no interval warning → Upload → check the preview → Upload → "On vehicle".
+3. Plan → Export → Mission Planner .waypoints (for step 5). Then Fly → Clear track.
+4. In MAVProxy: `mode guided`, `arm throttle`, `takeoff 20`, `mode auto`. Watch "Photos n / planned" and the dots. Or run `py -3.9 tools/sitl/sitl_pilot.py tcp:127.0.0.1:5763 --photos photos.csv` for the same sequence plus the log.
+5. `py -3.9 tools/sitl/photo_check.py mission.waypoints photos.csv --planned <n>`. Expect a difference within ±2 and 0 photos off the lines for Copter. For Plane, see the open item below.
+
+### Open questions / next
+- **Plane line settling (not fixed, measured):** on the final Plane run, 11 of 126 photos were 10–18 m to the side of their line, at roll ≈ 0°: the first one to three photos of a line, while ArduPlane's L1 was still converging. The worst was the first line's first photo, 34 m off, after the long diagonal approach from home. With a 102 m footprint and 41 m spacing the ground is still covered (side overlap drops locally from 60 % to about 42 %). Options, cheapest first:
+  - Tune `NAVL1_PERIOD` on the real aircraft (a vehicle setting, not the GCS).
+  - Add a longer lead-in only for the first line.
+  - Plan the turn with the aircraft's real turn radius (from `NAVL1_PERIOD` and speed) rather than 30° bank.
+
+  Your call which.
+- Photo count on a lossy radio link: the count is CAMERA_FEEDBACK messages received, so a lost packet undercounts. `img_idx` / `completed_captures` could be used to fill gaps. `ponytail:` `MAX_PHOTOS` caps the stored list at 10 000.
+- `CAM1_TYPE` from a defaults file not applying on Windows SITL may be a SITL-build quirk: worth checking on a Linux SITL build before calling it an ArduPilot bug.
+- **The rapid prototype (spec §4, weeks 4–5) is met in SITL:** draw polygon → grid → upload → SITL flies it → photos triggered and counted, on desktop (Copter, Plane) and on Android (Copter). A real FC with a camera is the next proof.
+- **Suggested next pass:** a real-hardware check with a KFT FC and a camera on the servo trigger (needs `KFT_APP_SECRET`, Pass 12), or the spec §4 weeks 6–8 list (crosshatch, corridor, KML import).

@@ -31,10 +31,14 @@ class FlyViewModel(
     private val sync: MissionSync,
 ) : ViewModel() {
 
-    /** Screen-only state: which basemap, the track drawn so far, and the last camera move asked for. */
+    /**
+     * Screen-only state: which basemap, the track drawn so far, and the last camera move asked for. [photosCleared]
+     * is how many of the vehicle's photos Clear track hid, so a new flight counts from 0.
+     */
     private data class Local(
         val basemap: TileSourceConfig,
         val track: List<LatLon> = emptyList(),
+        val photosCleared: Int = 0,
         val camera: CameraRequest? = null,
         val cameraRequests: Long = 0,
     )
@@ -72,24 +76,29 @@ class FlyViewModel(
         local.update { it.copy(camera = CameraRequest(position, FOLLOW_ZOOM, it.cameraRequests + 1), cameraRequests = it.cameraRequests + 1) }
     }
 
-    fun onClearTrackClicked() = local.update { it.copy(track = emptyList()) }
+    fun onClearTrackClicked() = local.update { it.copy(track = emptyList(), photosCleared = vehicles.state.value.photos.size) }
 
-    private fun build(v: VehicleState, l: Local, s: MissionSyncState) = FlyUiState(
-        connected = v.connected,
-        firmware = v.firmwareVersion?.let { "ArduPilot $it" },
-        login = v.login?.let { LoginUi(it.label, it.warning) },
-        hud = hudItems(v),
-        message = v.lastMessage?.let { MessageUi(it.text, it.severity) },
-        missionWarning = if (v.connected && s.differsFrom(v.mission?.total)) "Vehicle mission ≠ plan" else null,
-        overlays = listOfNotNull(
-            MapOverlay.Track(l.track),
-            v.position?.let { MapOverlay.Vehicle(it, v.headingDeg) },
-        ),
-        basemaps = basemaps,
-        selectedBasemap = l.basemap,
-        cameraRequest = l.camera,
-        canCenter = v.position != null,
-    )
+    private fun build(v: VehicleState, l: Local, s: MissionSyncState): FlyUiState {
+        // A new link starts the vehicle's photo list again from 0; then nothing is hidden any more.
+        val photos = v.photos.drop(if (l.photosCleared > v.photos.size) 0 else l.photosCleared)
+        return FlyUiState(
+            connected = v.connected,
+            firmware = v.firmwareVersion?.let { "ArduPilot $it" },
+            login = v.login?.let { LoginUi(it.label, it.warning) },
+            hud = hudItems(v) + photosItem(photos.size, s.plannedPhotos),
+            message = v.lastMessage?.let { MessageUi(it.text, it.severity) },
+            missionWarning = if (v.connected && s.differsFrom(v.mission?.total)) "Vehicle mission ≠ plan" else null,
+            overlays = listOfNotNull(
+                MapOverlay.Track(l.track),
+                MapOverlay.Photos(photos),
+                v.position?.let { MapOverlay.Vehicle(it, v.headingDeg) },
+            ),
+            basemaps = basemaps,
+            selectedBasemap = l.basemap,
+            cameraRequest = l.camera,
+            canCenter = v.position != null,
+        )
+    }
 
     companion object {
         /** Close enough to see a survey block and the vehicle's direction; about 1 px per metre. */

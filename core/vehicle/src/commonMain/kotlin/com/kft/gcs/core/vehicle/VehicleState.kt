@@ -1,6 +1,7 @@
 package com.kft.gcs.core.vehicle
 
 import com.divpundir.mavlink.api.MavMessage
+import com.divpundir.mavlink.definitions.ardupilotmega.CameraFeedback
 import com.divpundir.mavlink.definitions.ardupilotmega.CopterMode
 import com.divpundir.mavlink.definitions.ardupilotmega.PlaneMode
 import com.divpundir.mavlink.definitions.common.Attitude
@@ -54,7 +55,15 @@ data class VehicleState(
     val mission: MissionProgress? = null,
     /** The KFT login (spec S12) for this link. Null until a vehicle is heard. */
     val login: KftLoginStatus? = null,
+    /** Where the camera took each photo since the link came up, oldest first (CAMERA_FEEDBACK), at most [MAX_PHOTOS]. */
+    val photos: List<LatLon> = emptyList(),
 )
+
+/**
+ * Photos kept for the map. A day's survey is a few thousand; beyond this the oldest are dropped from the map.
+ * ponytail: the count shown in Fly is then capped too; count img_idx instead if a single flight ever takes more.
+ */
+const val MAX_PHOTOS = 10_000
 
 /**
  * Mission progress. Seq numbers are the vehicle's, so item 1 is the first item after home (spec S11).
@@ -119,6 +128,11 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
     is MissionItemReached -> copy(
         mission = (mission ?: MissionProgress(message.seq.toInt(), null, null, false)).copy(lastReached = message.seq.toInt()),
     )
+    // CAMERA_FEEDBACK (ardupilotmega.xml #180). ArduPilot sends one per photo taken (AP_Camera_Backend::log_picture,
+    // master 2026-09): straight away when no feedback pin is set, or when the hot-shoe pin confirms the shot.
+    // lat/lng are the vehicle's position from the AHRS at that moment; 0,0 means it had none.
+    is CameraFeedback -> if (message.lat == 0 && message.lng == 0) this
+        else copy(photos = (photos + LatLon.fromE7(message.lat, message.lng)).takeLast(MAX_PHOTOS))
     // AUTOPILOT_VERSION is in standard.xml.
     is AutopilotVersion -> copy(firmwareVersion = firmwareVersionName(message.flightSwVersion))
     else -> this

@@ -299,7 +299,7 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
         NumberField("Grid angle °", s.gridAngleDeg, SurveyField.GRID_ANGLE, group, actions, Modifier.weight(1f))
         NumberField("Speed m/s", s.speedMs, SurveyField.SPEED, group, actions, Modifier.weight(1f))
     }
-    NumberField(if (panel.isPlane) "Lead-in / lead-out (m)" else "Run-in / run-out (m)", s.turnaroundM, SurveyField.TURNAROUND, group, actions)
+    NumberField(if (panel.isPlane) "Lead-in (m)" else "Run-in / run-out (m)", s.turnaroundM, SurveyField.TURNAROUND, group, actions)
     Text("Start corner", color = Dim, style = MaterialTheme.typography.labelSmall)
     Chips(
         listOf("↙" to EntryCorner.BOTTOM_LEFT, "↘" to EntryCorner.BOTTOM_RIGHT, "↖" to EntryCorner.TOP_LEFT, "↗" to EntryCorner.TOP_RIGHT),

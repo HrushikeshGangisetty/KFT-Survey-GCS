@@ -1,0 +1,16 @@
+# SITL only: a camera trigger for the survey checks (Copter and Plane alike). Loaded after the vehicle's defaults by
+# start-sitl.ps1. Checked against ArduPilot master 2026-09 (AP_Camera_Params.cpp, SRV_Channel.h).
+#
+# CAM1_TYPE 1 = Servo: taking a photo pulses a servo output. In SITL nothing is on that output, but ArduPilot still
+# counts the photo, logs it and sends CAMERA_FEEDBACK (no feedback pin is set), which is what the GCS counts.
+# SERVO9_FUNCTION 10 = CameraTrigger: output 9 is free on both the quad and the plane model.
+# Everything else stays at its default: CAM1_INTRVAL_MIN 0 (no minimum), CAM_AUTO_ONLY 0, CAM_MAX_ROLL 0.
+#
+# CAUTION (seen in Pass 16 with the Windows SITL 4.8.0-dev builds): CAM1_TYPE from this file does NOT take effect,
+# even on a fresh eeprom.bin, while SERVO9_FUNCTION does. The camera driver's parameters are only created at boot,
+# after the defaults files are read. Once per vehicle, in the MAVProxy window:
+#     param set CAM1_TYPE 1
+# then close SITL and run start-sitl.ps1 again. It's saved in that vehicle's eeprom.bin from then on.
+# Check: "param show CAM1_TYPE" prints 1.
+CAM1_TYPE 1
+SERVO9_FUNCTION 10

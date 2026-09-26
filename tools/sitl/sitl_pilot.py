@@ -8,6 +8,9 @@ climbs out along the runway heading to TKOFF_ALT and works on every ArduPlane ve
 
     py -3.9 tools/sitl/sitl_pilot.py tcp:127.0.0.1:5763 --alt 20
 
+With --photos photos.csv it then stays connected and writes one line per CAMERA_FEEDBACK (the photos the GCS counts)
+until the vehicle leaves AUTO, disarms or finishes the mission, for tools/sitl/photo_check.py.
+
 Needs pymavlink (it comes with `pip install MAVProxy`). Connect to a SITL port the GCS isn't using: SERIAL2 (5763).
 """
 import argparse
@@ -30,6 +33,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("link", help="e.g. tcp:127.0.0.1:5763")
     parser.add_argument("--alt", type=float, default=20)
+    parser.add_argument("--photos", help="CSV file for the photo positions (CAMERA_FEEDBACK) until the mission ends")
     args = parser.parse_args()
 
     master = mavutil.mavlink_connection(args.link, source_system=254)  # 254: not the GCS's 255
@@ -69,6 +73,30 @@ def main():
     master.set_mode("AUTO")                          # MAVProxy: mode auto
     wait_mode(master, "AUTO")
     print("AUTO: the mission is flying; watch the GCS")
+    if args.photos:
+        log_photos(master, args.photos)
+
+
+def log_photos(master, path):
+    """Records CAMERA_FEEDBACK (ardupilotmega.xml #180) until the mission is over: out of AUTO, disarmed, or
+    MISSION_CURRENT reporting MISSION_STATE_COMPLETE (5)."""
+    n = 0
+    with open(path, "w") as out:
+        out.write("img_idx,lat,lon,alt_rel,roll\n")
+        while True:
+            m = master.recv_match(type=["CAMERA_FEEDBACK", "HEARTBEAT", "MISSION_CURRENT"], blocking=True, timeout=5)
+            if m is None:
+                continue
+            t = m.get_type()
+            if t == "CAMERA_FEEDBACK":
+                n += 1
+                out.write(f"{m.img_idx},{m.lat / 1e7:.7f},{m.lng / 1e7:.7f},{m.alt_rel:.1f},{m.roll:.1f}\n")
+                out.flush()
+            elif t == "HEARTBEAT" and m.get_srcComponent() == 1 and (master.flightmode != "AUTO" or not master.motors_armed()):
+                break
+            elif t == "MISSION_CURRENT" and getattr(m, "mission_state", 0) == 5:
+                break
+    print(f"{n} photos written to {path} (mission over: {master.flightmode})")
 
 
 if __name__ == "__main__":

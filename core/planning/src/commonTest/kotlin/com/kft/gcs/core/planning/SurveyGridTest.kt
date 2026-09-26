@@ -237,6 +237,24 @@ class SurveyGridTest {
     }
 
     /**
+     * The camera switch-off point (Pass 16), with a 20 m trigger and a 12 m run-out:
+     * - 200 m lines: ⌊200/20⌋ = 10 photos after the first, the last at 200 m; off at (10 + ½) × 20 = 210 m, 10 m into
+     *   the run-out.
+     * - 205 m lines (a 300 × 205 m area): the last photo at 200 m, 5 m before the edge; off still at 210 m. The ~1 m
+     *   of ArduPilot's lateness can't lose that photo (10 m of margin) or add one at 220 m (10 m the other way).
+     * - A run-out shorter than that caps it: 4 m → off at 204 m.
+     */
+    @Test
+    fun cameraSwitchesOffHalfATriggerDistanceAfterTheLastPhoto() {
+        val (_, g) = grid(rectangle, 0.0, 45.0, turn = Turnaround.Copter(extensionM = 12.0))
+        assertAt(15.0, 210.0, g.passes[0].cameraOff(20.0), "northbound, 200 m")
+        assertAt(60.0, -10.0, g.passes[1].cameraOff(20.0), "southbound: 10 m south of the edge")
+        val taller = listOf(m(0.0, 0.0), m(300.0, 0.0), m(300.0, 205.0), m(0.0, 205.0))
+        assertAt(15.0, 210.0, grid(taller, 0.0, 45.0, turn = Turnaround.Copter(12.0)).second.passes[0].cameraOff(20.0), "205 m")
+        assertAt(15.0, 204.0, grid(rectangle, 0.0, 45.0, turn = Turnaround.Copter(4.0)).second.passes[0].cameraOff(20.0), "capped")
+    }
+
+    /**
      * Turn lengths by hand, r = 50 m:
      * - lateral 100 (= 2r): π × 50 = 157.080; lateral 150: 157.080 + 50 = 207.080.
      * - lateral 0 (back onto the same line): cos γ = 1/2, γ = π/3, 50 × (π + 4π/3) = 50 × 7π/3 = 366.519.

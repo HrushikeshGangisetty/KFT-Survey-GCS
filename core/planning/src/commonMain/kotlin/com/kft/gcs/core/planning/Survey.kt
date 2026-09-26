@@ -2,6 +2,7 @@ package com.kft.gcs.core.planning
 
 import com.kft.gcs.core.geo.LatLon
 import kotlin.math.ceil
+import kotlin.math.max
 
 /**
  * How the survey height is chosen. Either one fixes the other through the camera ([gsdM] / [altitudeForGsdM]):
@@ -37,8 +38,8 @@ data class SurveyLimits(val usableFlightTimeS: Double? = null, val maxGsdM: Doub
 /** Something the operator should look at before flying. Not a block: the plan is still valid. */
 sealed interface SurveyWarning {
     /**
-     * Photos would be due every [intervalS] seconds, but the camera needs at least [minIntervalS]. ArduPilot skips the
-     * early ones, which leaves gaps. [maxSpeedMs] is the fastest speed that works with these overlaps.
+     * Photos would be due every [intervalS] seconds, but the camera needs at least [minIntervalS]. ArduPilot holds each
+     * early photo back until the interval has passed, so they end up further apart than the overlap needs. [maxSpeedMs] is the fastest speed that works with these overlaps.
      */
     data class PhotoIntervalTooShort(val intervalS: Double, val minIntervalS: Double, val maxSpeedMs: Double) : SurveyWarning
 
@@ -82,13 +83,20 @@ fun planSurvey(params: SurveyParams, limits: SurveyLimits = SurveyLimits()): Sur
     val footprint = camera.footprint(altitude, params.orientation)
     val spacing = lineSpacingM(footprint, params.sideOverlap)
     val trigger = triggerDistanceM(footprint, params.frontOverlap)
-    val spec = GridSpec(params.polygon, params.gridAngleDeg, spacing, params.turnaround, params.entry)
+    // The camera switches off d/2 after each pass's last photo ([cameraOff]), so the run-out must reach that far.
+    val turnaround = when (val t = params.turnaround) {
+        is Turnaround.Copter -> t.copy(extensionM = max(t.extensionM, trigger / 2))
+        is Turnaround.Plane -> t.copy(leadOutM = max(t.leadOutM, trigger / 2))
+    }
+    val spec = GridSpec(params.polygon, params.gridAngleDeg, spacing, turnaround, params.entry)
     val grid = buildSurveyGrid(spec)
     val stats = surveyStats(spec, grid, trigger, params.speedMs)
 
     val warnings = buildList {
         val interval = trigger / params.speedMs
-        if (interval < camera.minTriggerIntervalS) {
+        // 1e-9: exactly at the camera's limit is fine. 10 m / 5 m/s comes out as 1.999… s through the camera maths,
+        // and warning "2.0 s apart, but the camera needs 2.0 s" is noise (the first SITL run showed it).
+        if (interval < camera.minTriggerIntervalS - 1e-9) {
             add(SurveyWarning.PhotoIntervalTooShort(interval, camera.minTriggerIntervalS, trigger / camera.minTriggerIntervalS))
         }
         limits.maxGsdM?.let { if (gsd > it) add(SurveyWarning.GsdAboveLimit(gsd, it)) }
