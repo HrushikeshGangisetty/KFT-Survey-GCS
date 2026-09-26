@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kft.gcs.core.mavlink.STANDARD_BAUD_RATES
 import com.kft.gcs.core.mavlink.SerialPortInfo
+import com.kft.gcs.ui.design.KftTheme
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
@@ -121,8 +122,8 @@ private fun LinkStatusCard(link: LinkStatusUi, canDisconnect: Boolean, onDisconn
     val accent = when (link.tone) {
         Tone.IDLE -> MaterialTheme.colorScheme.outline
         Tone.BUSY -> MaterialTheme.colorScheme.primary
-        Tone.OK -> Color(0xFF66BB6A)
-        Tone.WARNING -> MaterialTheme.colorScheme.secondary
+        Tone.OK -> KftTheme.status.ok
+        Tone.WARNING -> KftTheme.status.warn
     }
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -133,7 +134,7 @@ private fun LinkStatusCard(link: LinkStatusUi, canDisconnect: Boolean, onDisconn
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (link.loginWarning) MaterialTheme.colorScheme.secondary else Color.Unspecified,
+                        color = if (link.loginWarning) KftTheme.status.warn else Color.Unspecified,
                     )
                 }
             }

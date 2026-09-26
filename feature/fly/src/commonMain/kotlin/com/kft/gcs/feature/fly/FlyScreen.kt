@@ -1,26 +1,31 @@
 package com.kft.gcs.feature.fly
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kft.gcs.core.vehicle.Severity
+import com.kft.gcs.ui.design.KftIcons
+import com.kft.gcs.ui.design.MapCard
+import com.kft.gcs.ui.design.Spacing
+import com.kft.gcs.ui.design.StatTile
+import com.kft.gcs.ui.design.Status
+import com.kft.gcs.ui.design.StatusChip
+import com.kft.gcs.ui.design.TooltipIconButton
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
@@ -34,9 +39,10 @@ fun FlyRoute(viewModel: FlyViewModel = koinViewModel()) {
 }
 
 /**
- * Map-first layout, as in every GCS: the map (drawn underneath by `App()`) fills the screen, the HUD strip floats
- * top-left, map controls top-right, and the latest vehicle message bottom-left. Translucent panels keep the map
- * visible. Monitoring only: no flight-action buttons (spec S9).
+ * Map-first layout, as in every GCS: the map (drawn underneath by `App()`) fills the screen. Top left: status chips
+ * (link, KFT login, GPS, "mission ≠ plan"), and under them the HUD card of stat tiles. Top right: the map buttons as
+ * a small vertical stack. Bottom left: the latest vehicle message. Everything else is left empty so the map shows and
+ * takes the clicks. Monitoring only: no flight-action buttons (spec S9).
  */
 @Composable
 fun FlyScreen(
@@ -45,66 +51,72 @@ fun FlyScreen(
     onCenter: () -> Unit,
     onClearTrack: () -> Unit,
 ) {
-    Box(Modifier.fillMaxSize()) {
-        Panel(Modifier.align(Alignment.TopStart).padding(12.dp)) {
-            if (!state.connected) {
-                Text("No vehicle", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall)
+    Box(Modifier.fillMaxSize().padding(Spacing.m)) {
+        Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                if (state.connected) {
+                    StatusChip(state.firmware ?: "Connected", Status.OK, icon = KftIcons.Link)
+                } else {
+                    StatusChip("No vehicle", Status.WARN, icon = KftIcons.LinkOff)
+                }
+                state.login?.let { StatusChip(it.text, if (it.warning) Status.WARN else Status.OK, icon = KftIcons.Login) }
+                if (state.connected) StatusChip(state.gps.value, state.gps.status(), icon = KftIcons.Gps)
+                state.missionWarning?.let { StatusChip(it, Status.WARN) }
             }
-            state.firmware?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f)) }
-            state.login?.let {
-                Text(
-                    it.text,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (it.warning) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.7f),
-                )
+            MapCard {
+                // Four tiles a row: Mode, State, Alt, Speed / Heading, Battery, Mission, Photos.
+                FlowRow(
+                    maxItemsInEachRow = 4,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.l),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.m),
+                ) {
+                    state.hud.forEach { StatTile(it.label, it.value, status = it.status()) }
+                }
             }
-            state.missionWarning?.let { Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.titleSmall) }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                state.hud.forEach { item ->
-                    Column {
-                        Text(item.label, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
-                        Text(
-                            item.value,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = if (item.warning) MaterialTheme.colorScheme.secondary else Color.White,
+        }
+
+        MapButtons(state, onBasemapSelected, onCenter, onClearTrack, Modifier.align(Alignment.TopEnd))
+
+        state.message?.let { message ->
+            val status = when (message.severity) {
+                Severity.ERROR -> Status.CRITICAL
+                Severity.WARNING -> Status.WARN
+                Severity.INFO -> Status.NEUTRAL
+            }
+            // Clear of the map's attribution line along the bottom edge.
+            StatusChip(message.text, status, Modifier.align(Alignment.BottomStart).padding(bottom = Spacing.xl))
+        }
+    }
+}
+
+/** Basemap (only when there's a choice), centre on the vehicle, clear the flown track: icon buttons with tooltips. */
+@Composable
+private fun MapButtons(
+    state: FlyUiState,
+    onBasemapSelected: (String) -> Unit,
+    onCenter: () -> Unit,
+    onClearTrack: () -> Unit,
+    modifier: Modifier,
+) {
+    MapCard(modifier, padding = false) {
+        if (state.basemaps.size > 1) {
+            var open by remember { mutableStateOf(false) }
+            Box {
+                TooltipIconButton(KftIcons.Layers, "Basemap: ${state.selectedBasemap.name}", { open = true })
+                DropdownMenu(open, onDismissRequest = { open = false }) {
+                    state.basemaps.forEach { b ->
+                        DropdownMenuItem(
+                            text = { Text(b.name) },
+                            leadingIcon = { if (b == state.selectedBasemap) Icon(KftIcons.Check, contentDescription = "Selected") },
+                            onClick = { open = false; onBasemapSelected(b.id) },
                         )
                     }
                 }
             }
         }
-
-        Panel(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (state.basemaps.size > 1) {
-                    state.basemaps.forEach { b ->
-                        FilterChip(selected = b == state.selectedBasemap, onClick = { onBasemapSelected(b.id) }, label = { Text(b.name) })
-                    }
-                }
-                FilledTonalButton(onClick = onCenter, enabled = state.canCenter) { Text("Centre") }
-                FilledTonalButton(onClick = onClearTrack) { Text("Clear track") }
-            }
-        }
-
-        state.message?.let { message ->
-            Panel(Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 40.dp)) {
-                Text(
-                    message.text,
-                    color = when (message.severity) {
-                        Severity.ERROR -> MaterialTheme.colorScheme.error
-                        Severity.WARNING -> MaterialTheme.colorScheme.secondary
-                        Severity.INFO -> Color.White
-                    },
-                )
-            }
-        }
+        TooltipIconButton(KftIcons.Center, "Centre on vehicle", onCenter, enabled = state.canCenter)
+        TooltipIconButton(KftIcons.ClearTrack, "Clear track and photo count", onClearTrack)
     }
 }
 
-/**
- * A translucent dark panel so text stays readable over both street and satellite maps. Children stack
- * vertically (a Box would draw them on top of each other).
- */
-@Composable
-private fun Panel(modifier: Modifier, content: @Composable () -> Unit) {
-    Column(modifier.background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp)).padding(12.dp)) { content() }
-}
+private fun HudItem.status() = if (warning) Status.WARN else Status.NEUTRAL

@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kft.gcs.ui.design.KftTheme
 import org.koin.compose.viewmodel.koinViewModel
 
 /** Gets the ViewModel from Koin and wires the stateless [ParamsScreen] to it. */
@@ -93,7 +94,7 @@ fun ParamsScreen(state: ParamsUiState, actions: ParamsActions) {
             OutlinedButton(actions.onLoadFile, enabled = state.canWrite) { Text("Load file…") }
             OutlinedButton(actions.onSaveFile, enabled = state.canSave) { Text("Save file…") }
         }
-        state.writeHint?.let { Text(it, color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodyMedium) }
+        state.writeHint?.let { Text(it, color = KftTheme.status.warn, style = MaterialTheme.typography.bodyMedium) }
         OutlinedTextField(
             state.query, actions.onQueryChanged, Modifier.fillMaxWidth(),
             label = { Text("Search by name") }, singleLine = true,
@@ -152,7 +153,7 @@ private fun FileLoadDialog(load: FileLoad, actions: ParamsActions) {
         title = { Text("Write ${load.changes.size} parameters from ${load.fileName}?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                load.skipped?.let { Text(it, color = MaterialTheme.colorScheme.tertiary) }
+                load.skipped?.let { Text(it, color = KftTheme.status.warn) }
                 LazyColumn(Modifier.heightIn(max = 320.dp)) {
                     items(load.changes, key = { it.name }) { c ->
                         Text("${c.name}  ${c.from} → ${c.to}", fontFamily = FontFamily.Monospace)

@@ -8,6 +8,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":core:vehicle"))
+            implementation(project(":ui:design"))
             implementation(project(":ui:map"))
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.jb.lifecycle.viewmodel.compose)

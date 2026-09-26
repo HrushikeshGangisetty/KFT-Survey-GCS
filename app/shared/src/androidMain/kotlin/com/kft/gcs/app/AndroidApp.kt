@@ -26,6 +26,7 @@ fun AndroidApp(context: Context) {
             single { SerialPorts(app) }
             single<ProfileStore> { FileTextStore(File(app.filesDir, "connection-profiles.json")) }
             single<SettingsStore> { FileTextStore(File(app.filesDir, "plan-settings.json")) }
+            single<ThemeStore> { FileTextStore(File(app.filesDir, "theme.txt")) }
             single<PlanFiles> { planFiles }
         }
     }

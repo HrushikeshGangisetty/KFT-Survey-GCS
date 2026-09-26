@@ -133,16 +133,16 @@ class FlyViewModelTest {
     @Test
     fun hudShowsDashesUntilReportedAndFormatsUnits() {
         assertTrue(hudItems(VehicleState()).filter { it.label in setOf("Alt", "Speed", "Heading", "Battery") }.all { it.value == "–" })
-        val hud = hudItems(
-            VehicleState(
-                armed = true, flightMode = "Loiter", altitudeRelativeM = 12.345, groundspeedMs = 4.96,
-                headingDeg = 359.6, gpsFix = GpsFix.FIX_3D, satellites = 14, batteryVolts = 12.61, batteryPercent = 15,
-            ),
-        ).associateBy { it.label }
+        val v = VehicleState(
+            armed = true, flightMode = "Loiter", altitudeRelativeM = 12.345, groundspeedMs = 4.96,
+            headingDeg = 359.6, gpsFix = GpsFix.FIX_3D, satellites = 14, batteryVolts = 12.61, batteryPercent = 15,
+        )
+        val hud = hudItems(v).associateBy { it.label }
         assertEquals("12.3 m", hud.getValue("Alt").value)
         assertEquals("5.0 m/s", hud.getValue("Speed").value)
         assertEquals("0°", hud.getValue("Heading").value, "359.6° rounds to 360°, which is north: 0°")
-        assertEquals("3D · 14 sats", hud.getValue("GPS").value)
+        assertEquals(HudItem("GPS", "3D · 14 sats", warning = false), gpsItem(v))
+        assertTrue(gpsItem(VehicleState(gpsFix = GpsFix.FIX_2D)).warning, "below 3D warns")
         assertEquals("12.6 V · 15%", hud.getValue("Battery").value)
         assertTrue(hud.getValue("Battery").warning, "below 20% warns")
         assertTrue(hud.getValue("State").warning, "armed is highlighted")

@@ -20,8 +20,10 @@ data class FlyUiState(
     val firmware: String?,
     /** "KFT login: OK" etc. (spec S12), null while no vehicle is heard. [login] warning = the operator must act. */
     val login: LoginUi?,
-    /** The HUD strip: "Mode Loiter", "Alt 12.3 m", … Always the same items in the same order, so nothing jumps. */
+    /** The HUD tiles: "Mode Loiter", "Alt 12.3 m", … Always the same items in the same order, so nothing jumps. */
     val hud: List<HudItem>,
+    /** "3D · 14 sats", shown as a status chip beside the link and login rather than as a HUD tile. */
+    val gps: HudItem,
     val message: MessageUi?,
     /**
      * "Vehicle mission ≠ plan" when the vehicle is known to hold something other than the Plan tab's plan. A warning
@@ -42,14 +44,13 @@ data class MessageUi(val text: String, val severity: Severity)
 
 data class LoginUi(val text: String, val warning: Boolean)
 
-/** The strings for the HUD strip. A dash means "not reported", never a fake zero. */
+/** The strings for the HUD tiles. A dash means "not reported", never a fake zero. Mode is ArduPilot's own name. */
 fun hudItems(v: VehicleState): List<HudItem> = listOf(
     HudItem("Mode", v.flightMode ?: DASH),
     HudItem("State", if (v.armed) "ARMED" else "Disarmed", warning = v.armed),
     HudItem("Alt", v.altitudeRelativeM?.let { "${it.oneDecimal()} m" } ?: DASH),
     HudItem("Speed", v.groundspeedMs?.let { "${it.oneDecimal()} m/s" } ?: DASH),
     HudItem("Heading", v.headingDeg?.let { "${it.roundToInt() % 360}°" } ?: DASH),
-    HudItem("GPS", "${v.gpsFix.label}${v.satellites?.let { " · $it sats" } ?: ""}", warning = v.gpsFix < GpsFix.FIX_3D),
     HudItem(
         "Battery",
         listOfNotNull(v.batteryVolts?.let { "${it.oneDecimal()} V" }, v.batteryPercent?.let { "$it%" }).joinToString(" · ").ifEmpty { DASH },
@@ -58,6 +59,10 @@ fun hudItems(v: VehicleState): List<HudItem> = listOf(
     ),
     HudItem("Mission", missionText(v.mission)),
 )
+
+/** GPS fix and satellites; a warning below a 3D fix, where ArduPilot won't fly a mission. */
+fun gpsItem(v: VehicleState) =
+    HudItem("GPS", "${v.gpsFix.label}${v.satellites?.let { " · $it sats" } ?: ""}", warning = v.gpsFix < GpsFix.FIX_3D)
 
 /**
  * "Photos 12 / 144": taken (CAMERA_FEEDBACK since the last Clear track) out of what the plan expects. Without a

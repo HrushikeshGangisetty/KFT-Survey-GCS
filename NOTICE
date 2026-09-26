@@ -1,0 +1,13 @@
+KFT Survey GCS
+Copyright 2026 Kapil Future Tech
+
+This product includes third-party material, listed below with its licence.
+
+--------------------------------------------------------------------------------
+Material Symbols (icons)
+  Files:   ui/design/src/commonMain/composeResources/drawable/ic_*.xml
+  Source:  https://github.com/google/material-design-icons
+           symbols/android/<name>/materialsymbolsoutlined/<name>_24px.xml (Outlined, weight 400, 24 px)
+  Licence: Apache License, Version 2.0 (licenses/Apache-2.0.txt). Copyright Google LLC.
+  Changes: the android:tint attribute was removed and the fill colour set to black (#FF000000), so the same
+           files render on desktop; the app tints them at draw time. Paths are unchanged.

@@ -33,6 +33,7 @@ If a task seems to need one of these changed, stop and say so in the pass summar
 | `core:vehicle` | Vehicle state, telemetry Flows, command and mission protocols | `core:mavlink`, `core:geo`, `core:mission` |
 | `core:terrain` | DEM, elevation queries (P1) | `core:geo` |
 | `core:geo-io` | Import/export parsing (`.plan`, `.waypoints`, camera lists, KML, …) | `core:geo`, `core:planning`, `core:mission` |
+| `ui:design` | KFT theme (light, dark, high contrast), tokens, Material Symbols icons, logo, shared components | Compose |
 | `ui:map` | `MapView` abstraction + engine adapters | `core:geo`, Compose |
 | `feature:*` | Screens + ViewModels (connections, fly, plan, params, settings) | `core:*`, `ui:*` — **never another `feature:*`** |
 | `app:shared` | `App()` root, navigation, Koin graph | everything above |
@@ -41,6 +42,7 @@ If a task seems to need one of these changed, stop and say so in the pass summar
 Hard rules:
 - **`core:geo` and `core:planning` are pure.** No I/O, no coroutines, no clocks, no randomness, no platform APIs. Inputs in, outputs out. This makes every survey pattern testable without a drone or a UI.
 - **No map-library imports outside `ui:map`.** Features draw through `MapView` and our overlay model.
+- **Screens take colours, icons and spacing from `ui:design`** (`MaterialTheme.colorScheme`, `KftTheme.status`, `KftIcons`, `Spacing`), never literals. One icon family: Material Symbols (see `KftIcons`). Map overlay colours live in `ui:map` and never use the brand navy.
 - **No `android.*`, `java.*` or `javax.*` imports in `commonMain`.** Platform code goes in `androidMain` / `jvmMain` behind `expect`/`actual` or an interface injected by Koin. (`jvmMain` is the desktop source set.)
 - **Features never import each other.** Cross-feature navigation goes through routes defined in `app:shared`.
 - New modules get a convention plugin (`kft.kmp.library` or `kft.kmp.compose`) and a one-line purpose comment at the top of `build.gradle.kts`.

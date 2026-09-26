@@ -1,18 +1,17 @@
 package com.kft.gcs.feature.plan
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,10 +23,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -44,12 +41,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -57,6 +48,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.CameraOrientation
 import com.kft.gcs.core.planning.EntryCorner
+import com.kft.gcs.ui.design.ConfirmDialog
+import com.kft.gcs.ui.design.KftIcons
+import com.kft.gcs.ui.design.KftTheme
+import com.kft.gcs.ui.design.KftToolbar
+import com.kft.gcs.ui.design.Spacing
+import com.kft.gcs.ui.design.Status
+import com.kft.gcs.ui.design.StatusChip
+import com.kft.gcs.ui.design.ToolbarEntry
 import kotlin.math.roundToLong
 
 /**
@@ -127,69 +126,73 @@ fun PlanScreen(state: PlanUiState, actions: PlanActions) {
         Surface(
             Modifier.align(Alignment.TopEnd).padding(12.dp).width(348.dp).fillMaxHeight(),
             shape = RoundedCornerShape(12.dp),
-            color = Color.Black.copy(alpha = 0.78f),
+            color = MaterialTheme.colorScheme.surfaceContainer,
         ) {
             Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Mission", style = MaterialTheme.typography.titleMedium, color = Color.White)
-                Text(state.hint, style = MaterialTheme.typography.bodySmall, color = Dim)
+                Text("Mission", style = MaterialTheme.typography.titleMedium)
+                Text(state.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 state.transfer?.let { progress ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(progress, Modifier.weight(1f), color = MaterialTheme.colorScheme.secondary)
+                        Text(progress, Modifier.weight(1f), color = MaterialTheme.colorScheme.primary)
                         TextButton(onClick = actions::onCancelTransferClicked) { Text("Cancel") }
                     }
                 }
                 GroupList(state.groups, actions)
-                HorizontalDivider(color = Color.White.copy(alpha = 0.2f))
+                HorizontalDivider()
                 state.survey?.let { SurveyEditor(it, state.groups.firstOrNull { g -> g.selected }?.index ?: 0, actions) }
                     ?: WaypointEditor(state, actions)
             }
         }
     }
     if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("Clear the mission?") },
-            text = { Text(state.clearWarning) },
-            confirmButton = { TextButton(onClick = { confirmClear = false; actions.onClearClicked() }) { Text("Clear") } },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Keep") } },
+        ConfirmDialog(
+            title = "Clear the mission?",
+            text = state.clearWarning,
+            confirmLabel = "Clear",
+            onConfirm = { confirmClear = false; actions.onClearClicked() },
+            onDismiss = { confirmClear = false },
+            dismissLabel = "Keep",
+            destructive = true,
         )
     }
     state.preview?.let { UploadPreviewDialog(it, actions) }
 }
 
 /**
- * Plan edits, file actions (disk icon) and vehicle actions (arrow icons), in that order, so "save to a file" and
- * "send to the aircraft" never look alike.
+ * One row, in groups: plan edits | undo, redo | files | the vehicle. Files and the vehicle use different icons
+ * (folder / save / export against download / upload), so "save to a file" and "send to the aircraft" never look alike.
+ * The vehicle's sync state sits beside the toolbar as a chip. If the window is narrow, the vehicle group is the first
+ * to move into the "more" menu (KftToolbar keeps the order as priority).
  */
 @Composable
 private fun Toolbar(state: PlanUiState, actions: PlanActions, onClear: () -> Unit, modifier: Modifier) {
-    var exportMenu by remember { mutableStateOf(false) }
-    Surface(modifier, shape = RoundedCornerShape(12.dp), color = Color.Black.copy(alpha = 0.78f)) {
-        FlowRow(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedButton(onClick = actions::onAddWaypointsClicked) { Text("+ Waypoints") }
-            OutlinedButton(onClick = actions::onAddSurveyClicked) { Text("+ Survey") }
-            TextButton(onClick = actions::onUndoClicked, enabled = state.canUndo) { Text("↶ Undo") }
-            TextButton(onClick = actions::onRedoClicked, enabled = state.canRedo) { Text("↷ Redo") }
-            OutlinedButton(onClick = actions::onOpenClicked) { IconText(Disk, "Open") }
-            OutlinedButton(onClick = actions::onSaveClicked) { IconText(Disk, "Save") }
-            Box {
-                OutlinedButton(onClick = { exportMenu = true }) { IconText(Disk, "Export ▾") }
-                DropdownMenu(exportMenu, onDismissRequest = { exportMenu = false }) {
-                    DropdownMenuItem(text = { Text("QGC .plan (plain items)") }, onClick = { exportMenu = false; actions.onExportClicked(ExportFormat.QGC_PLAN) })
-                    DropdownMenuItem(text = { Text("Mission Planner .waypoints") }, onClick = { exportMenu = false; actions.onExportClicked(ExportFormat.WAYPOINTS) })
-                }
-            }
-            FilledTonalButton(onClick = actions::onUploadClicked, enabled = state.canUpload) { IconText(ArrowUp, "Upload") }
-            FilledTonalButton(onClick = actions::onReadClicked, enabled = state.canRead) { IconText(ArrowDown, "Read") }
-            OutlinedButton(onClick = onClear, enabled = state.canClear) { Text("Clear") }
-            state.sync?.let {
-                Text(
-                    it.text,
-                    Modifier.align(Alignment.CenterVertically).padding(horizontal = 6.dp),
-                    color = if (it.warning) MaterialTheme.colorScheme.secondary else Color(0xFF81C784),
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(Spacing.s), verticalAlignment = Alignment.CenterVertically) {
+        KftToolbar(
+            listOf(
+                ToolbarEntry.Action(KftIcons.AddWaypoint, "Add waypoints", onClick = actions::onAddWaypointsClicked),
+                ToolbarEntry.Action(KftIcons.AddSurvey, "Add survey", onClick = actions::onAddSurveyClicked),
+                ToolbarEntry.Divider,
+                ToolbarEntry.Action(KftIcons.Undo, "Undo (Ctrl+Z)", state.canUndo, actions::onUndoClicked),
+                ToolbarEntry.Action(KftIcons.Redo, "Redo (Ctrl+Shift+Z)", state.canRedo, actions::onRedoClicked),
+                ToolbarEntry.Divider,
+                ToolbarEntry.Action(KftIcons.Open, "Open plan file", onClick = actions::onOpenClicked),
+                ToolbarEntry.Action(KftIcons.Save, "Save plan file", onClick = actions::onSaveClicked),
+                ToolbarEntry.Menu(
+                    KftIcons.Export, "Export",
+                    listOf(
+                        "QGC .plan (plain items)" to { actions.onExportClicked(ExportFormat.QGC_PLAN) },
+                        "Mission Planner .waypoints" to { actions.onExportClicked(ExportFormat.WAYPOINTS) },
+                    ),
+                ),
+                ToolbarEntry.Divider,
+                ToolbarEntry.Action(KftIcons.Download, "Read mission from vehicle", state.canRead, actions::onReadClicked),
+                ToolbarEntry.Action(KftIcons.Upload, "Upload mission to vehicle", state.canUpload, actions::onUploadClicked),
+                ToolbarEntry.Action(KftIcons.Delete, "Clear mission on vehicle", state.canClear, onClear),
+            ),
+            Modifier.weight(1f, fill = false),
+        )
+        state.sync?.let {
+            StatusChip(it.text, if (it.warning) Status.WARN else Status.OK, icon = if (it.warning) KftIcons.SyncProblem else KftIcons.Sync)
         }
     }
 }
@@ -200,13 +203,13 @@ private fun GroupList(groups: List<GroupHeader>, actions: PlanActions) {
     groups.forEach { g ->
         Row(
             Modifier.fillMaxWidth().clickable { actions.onGroupSelected(g.index) }
-                .background(if (g.selected) Color.White.copy(alpha = 0.15f) else Color.Transparent, RoundedCornerShape(6.dp))
+                .selectedRow(g.selected)
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(g.name, color = Color.White, fontWeight = FontWeight.Bold)
-                Text("${g.kind} · ${g.summary}", color = Dim, style = MaterialTheme.typography.labelSmall)
+                Text(g.name, fontWeight = FontWeight.Bold)
+                Text("${g.kind} · ${g.summary}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             }
             TextButton(onClick = { renaming = g }) { Text("✎") }
             TextButton(onClick = { actions.onGroupDeleted(g.index) }) { Text("✕") }
@@ -230,19 +233,19 @@ private fun WaypointEditor(state: PlanUiState, actions: PlanActions) {
     state.rows.forEach { row ->
         Row(
             Modifier.fillMaxWidth().clickable { actions.onRowSelected(row.index) }
-                .background(if (row.selected) Color.White.copy(alpha = 0.15f) else Color.Transparent, RoundedCornerShape(6.dp))
+                .selectedRow(row.selected)
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("${row.seq}  ${row.title}", color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                Text(row.detail, color = Dim, style = MaterialTheme.typography.labelSmall)
+                Text("${row.seq}  ${row.title}", style = MaterialTheme.typography.bodyMedium)
+                Text(row.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
             }
             TextButton(onClick = { actions.onDeleteClicked(row.index) }) { Text("✕") }
         }
     }
     state.form?.let { form ->
-        Text("${form.title} (item ${state.rows.getOrNull(form.index)?.seq ?: ""})", color = Color.White)
+        Text("${form.title} (item ${state.rows.getOrNull(form.index)?.seq ?: ""})")
         OutlinedTextField(
             value = form.altitude, onValueChange = actions::onAltitudeChanged, singleLine = true,
             label = { Text("Altitude above home (m)") },
@@ -264,7 +267,7 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
     var cameraMenu by remember { mutableStateOf(false) }
     var addingCamera by remember { mutableStateOf(false) }
 
-    Text("Camera", color = Dim, style = MaterialTheme.typography.labelSmall)
+    Text("Camera", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
     Box {
         OutlinedButton(onClick = { cameraMenu = true }, Modifier.fillMaxWidth()) { Text("${s.camera.name.ifEmpty { "Camera" }} ▾") }
         DropdownMenu(cameraMenu, onDismissRequest = { cameraMenu = false }) {
@@ -277,7 +280,7 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
             DropdownMenuItem(text = { Text("+ Custom camera…") }, onClick = { cameraMenu = false; addingCamera = true })
         }
     }
-    if (s.camera.unverified) Text("Preset not yet checked against the maker's spec sheet.", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.labelSmall)
+    if (s.camera.unverified) Text("Preset not yet checked against the maker's spec sheet.", color = KftTheme.status.warn, style = MaterialTheme.typography.labelSmall)
     if (panel.cameras.any { it.custom && it.name == s.camera.name }) {
         TextButton(onClick = { actions.onCameraDeleted(s.camera.name) }) { Text("Delete this custom camera") }
     }
@@ -286,10 +289,10 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
     Chips(listOf("Set altitude" to HeightMode.ALTITUDE, "Set GSD" to HeightMode.GSD), s.heightMode, actions::onHeightModeSelected)
     if (s.heightMode == HeightMode.ALTITUDE) {
         NumberField("Altitude above home (m)", s.altitudeM, SurveyField.ALTITUDE, group, actions)
-        panel.gsdCm?.let { Text("GSD ${oneDecimalText(it)} cm/px", color = Color.White) }
+        panel.gsdCm?.let { Text("GSD ${oneDecimalText(it)} cm/px") }
     } else {
         NumberField("GSD (cm/px)", s.gsdCm, SurveyField.GSD, group, actions)
-        panel.altitudeM?.let { Text("Altitude ${oneDecimalText(it)} m above home", color = Color.White) }
+        panel.altitudeM?.let { Text("Altitude ${oneDecimalText(it)} m above home") }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         NumberField("Side overlap %", s.sideOverlapPct, SurveyField.SIDE_OVERLAP, group, actions, Modifier.weight(1f))
@@ -300,31 +303,31 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
         NumberField("Speed m/s", s.speedMs, SurveyField.SPEED, group, actions, Modifier.weight(1f))
     }
     NumberField(if (panel.isPlane) "Lead-in (m)" else "Run-in / run-out (m)", s.turnaroundM, SurveyField.TURNAROUND, group, actions)
-    Text("Start corner", color = Dim, style = MaterialTheme.typography.labelSmall)
+    Text("Start corner", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
     Chips(
         listOf("↙" to EntryCorner.BOTTOM_LEFT, "↘" to EntryCorner.BOTTOM_RIGHT, "↖" to EntryCorner.TOP_LEFT, "↗" to EntryCorner.TOP_RIGHT),
         s.entry, actions::onEntrySelected,
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
         Checkbox(s.returnHome, actions::onReturnHomeChanged)
-        Text("Return to launch at the end (mission item)", color = Color.White, style = MaterialTheme.typography.bodySmall)
+        Text("Return to launch at the end (mission item)", style = MaterialTheme.typography.bodySmall)
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("${panel.cornerCount} corners", Modifier.weight(1f), color = Color.White)
+        Text("${panel.cornerCount} corners", Modifier.weight(1f))
         TextButton(onClick = actions::onDeleteCornerClicked, enabled = panel.cornerSelected) { Text("Delete selected corner") }
     }
 
-    panel.error?.let { Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodySmall) }
-    panel.warnings.forEach { Text("⚠ $it", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodySmall) }
+    panel.error?.let { Text(it, color = KftTheme.status.warn, style = MaterialTheme.typography.bodySmall) }
+    panel.warnings.forEach { Text("⚠ $it", color = KftTheme.status.warn, style = MaterialTheme.typography.bodySmall) }
     panel.stats.forEach { (label, value) ->
         Row {
-            Text(label, Modifier.weight(1f), color = Dim, style = MaterialTheme.typography.bodySmall)
-            Text(value, color = Color.White, style = MaterialTheme.typography.bodySmall)
+            Text(label, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            Text(value, style = MaterialTheme.typography.bodySmall)
         }
     }
 
-    HorizontalDivider(color = Color.White.copy(alpha = 0.2f))
-    Text("Settings (kept between runs)", color = Dim, style = MaterialTheme.typography.labelSmall)
+    HorizontalDivider()
+    Text("Settings (kept between runs)", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OptionalNumberField(if (panel.isPlane) "Plane battery, usable min" else "Copter battery, usable min", panel.batteryMinutes, actions::onBatteryMinutesChanged, Modifier.weight(1f))
         OptionalNumberField("Warn above GSD cm/px", panel.maxGsdCm, actions::onMaxGsdChanged, Modifier.weight(1f))
@@ -426,7 +429,7 @@ private fun UploadPreviewDialog(preview: UploadPreview, actions: PlanActions) {
         title = { Text("Upload ${preview.lines.size - 1} items?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                preview.warnings.forEach { Text("⚠ $it", color = MaterialTheme.colorScheme.secondary) }
+                preview.warnings.forEach { Text("⚠ $it", color = KftTheme.status.warn) }
                 LazyColumn(Modifier.heightIn(max = 320.dp)) {
                     items(preview.lines) { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }
@@ -437,33 +440,12 @@ private fun UploadPreviewDialog(preview: UploadPreview, actions: PlanActions) {
     )
 }
 
+
+/**
+ * The selected group or waypoint row: a slightly raised fill that the normal text colour reads on in every theme,
+ * plus a primary outline, so the selection shows even where the fill difference is small (light theme, sunlight).
+ */
 @Composable
-private fun IconText(icon: ImageVector, text: String) {
-    Icon(icon, contentDescription = null, Modifier.size(18.dp))
-    Text(" $text")
-}
-
-private val Dim = Color.White.copy(alpha = 0.7f)
-
-/** Our own line icons (no icon library, and nothing copied from another GCS). 24 × 24, drawn in the text colour. */
-private fun lineIcon(name: String, draw: androidx.compose.ui.graphics.vector.PathBuilder.() -> Unit) =
-    ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f).path(
-        stroke = SolidColor(Color.White), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round, pathBuilder = draw,
-    ).build()
-
-/** A floppy disk: files on this computer or tablet. */
-private val Disk = lineIcon("disk") {
-    moveTo(4f, 3f); lineTo(17f, 3f); lineTo(21f, 7f); lineTo(21f, 21f); lineTo(3f, 21f); lineTo(3f, 3f); close()
-    moveTo(7f, 3f); lineTo(7f, 8f); lineTo(15f, 8f); lineTo(15f, 3f)
-    moveTo(7f, 21f); lineTo(7f, 14f); lineTo(17f, 14f); lineTo(17f, 21f)
-}
-
-/** Arrow up to a bar: to the vehicle. */
-private val ArrowUp = lineIcon("to-vehicle") {
-    moveTo(12f, 21f); lineTo(12f, 7f); moveTo(6f, 13f); lineTo(12f, 7f); lineTo(18f, 13f); moveTo(4f, 3f); lineTo(20f, 3f)
-}
-
-/** Arrow down from a bar: from the vehicle. */
-private val ArrowDown = lineIcon("from-vehicle") {
-    moveTo(12f, 3f); lineTo(12f, 17f); moveTo(6f, 11f); lineTo(12f, 17f); lineTo(18f, 11f); moveTo(4f, 21f); lineTo(20f, 21f)
-}
+private fun Modifier.selectedRow(selected: Boolean): Modifier =
+    if (!selected) this else background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.small)
+        .border(1.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)

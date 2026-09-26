@@ -5,6 +5,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":core:vehicle"))
+            implementation(project(":ui:design"))
             implementation(project(":ui:map"))
             implementation(libs.jb.lifecycle.viewmodel.compose)
             implementation(libs.jb.lifecycle.runtime.compose)

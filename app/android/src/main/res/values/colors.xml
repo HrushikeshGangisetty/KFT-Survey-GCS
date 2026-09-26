@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The KFT brand navy (ui:design KftColors.Navy), for the launcher icon background. -->
+    <color name="kft_navy">#1F2E5D</color>
+</resources>

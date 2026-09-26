@@ -1,20 +1,29 @@
 package com.kft.gcs.app
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -37,10 +46,19 @@ import com.kft.gcs.feature.fly.FlyViewModel
 import com.kft.gcs.feature.params.ParamsRoute
 import com.kft.gcs.feature.plan.PlanRoute
 import com.kft.gcs.feature.plan.PlanViewModel
+import com.kft.gcs.ui.design.KftIcons
+import com.kft.gcs.ui.design.KftLogo
+import com.kft.gcs.ui.design.KftNavigationRail
+import com.kft.gcs.ui.design.KftTheme
+import com.kft.gcs.ui.design.RailItem
+import com.kft.gcs.ui.design.Spacing
+import com.kft.gcs.ui.design.ThemeMode
+import com.kft.gcs.ui.design.TooltipIconButton
 import com.kft.gcs.ui.map.MapView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.compose.KoinApplication
+import org.koin.compose.koinInject
 import org.koin.core.module.Module
 import org.koin.dsl.koinConfiguration
 
@@ -52,17 +70,27 @@ import org.koin.dsl.koinConfiguration
 @Composable
 fun App(platformModule: Module, shortcuts: KeyShortcuts = KeyShortcuts()) {
     KoinApplication(configuration = koinConfiguration { modules(allModules + platformModule) }) {
-        MaterialTheme(colorScheme = KftColors.dark) {
+        val prefs: ThemeStore = koinInject()
+        // Dark unless the operator picked another theme: a dark chrome keeps the map the brightest thing on screen.
+        // Read once, written on every change; a missing or unknown value falls back to dark.
+        var theme by remember { mutableStateOf(ThemeMode.entries.firstOrNull { it.name == prefs.read()?.trim() } ?: ThemeMode.DARK) }
+        KftTheme(theme) {
             Surface(Modifier.fillMaxSize()) {
                 val nav = rememberNavController()
                 // safeDrawing: Android 15 draws edge-to-edge, so without this the UI sits under the status bar (ADR-001 F3).
                 Row(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
-                    AppRail(nav)
+                    AppRail(nav, theme, onThemeSelected = { theme = it; prefs.write(it.name) })
                     MapAndScreens(nav, shortcuts, Modifier.weight(1f))
                 }
             }
         }
     }
+}
+
+/** Where the chosen [ThemeMode] is kept between runs: one word in a text file, like the other stores. */
+interface ThemeStore {
+    fun read(): String?
+    fun write(text: String)
 }
 
 /**
@@ -133,23 +161,33 @@ private fun planShortcut(event: KeyEvent, plan: PlanViewModel): Boolean {
     return true
 }
 
-/** Top-level destinations. A navigation rail suits tablets and desktop, the P0 screens (spec §2.5). */
+/** Top-level destinations, in rail order. A navigation rail suits tablets and desktop, the P0 screens (spec §2.5). */
 internal enum class Destination(val route: String, val label: String) {
     FLY("fly", "Fly"),
     PLAN("plan", "Plan"),
-    CONNECTIONS("connections", "Links"),
     PARAMS("params", "Params"),
+    CONNECTIONS("connections", "Links"),
 }
 
 /** The Fly view first, like every GCS: the map is what you want to see when the app opens. */
 private val START = Destination.FLY
 
+/** The rail: logo, the four tabs, and at the bottom the theme menu and About (which holds the version). */
 @Composable
-private fun AppRail(nav: NavHostController) {
+private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (ThemeMode) -> Unit) {
     val current by nav.currentBackStackEntryAsState()
-    NavigationRail(header = { Text("KFT", style = MaterialTheme.typography.titleMedium) }) {
-        Destination.entries.forEach { destination ->
-            NavigationRailItem(
+    var themeMenu by remember { mutableStateOf(false) }
+    var about by remember { mutableStateOf(false) }
+    KftNavigationRail(
+        items = Destination.entries.map { destination ->
+            RailItem(
+                label = destination.label,
+                icon = when (destination) {
+                    Destination.FLY -> KftIcons.Fly
+                    Destination.PLAN -> KftIcons.Plan
+                    Destination.PARAMS -> KftIcons.Params
+                    Destination.CONNECTIONS -> KftIcons.Link
+                },
                 selected = current?.destination?.route == destination.route,
                 onClick = {
                     nav.navigate(destination.route) {
@@ -159,10 +197,44 @@ private fun AppRail(nav: NavHostController) {
                         restoreState = true
                     }
                 },
-                icon = { Text(destination.label.take(1), style = MaterialTheme.typography.titleMedium) },
-                label = { Text(destination.label) },
             )
-        }
-        Text("v${AppInfo.VERSION}\n${Platform.name}", Modifier.padding(8.dp), style = MaterialTheme.typography.labelSmall)
-    }
+        },
+        footer = {
+            Box {
+                TooltipIconButton(KftIcons.Theme, "Theme", { themeMenu = true })
+                DropdownMenu(themeMenu, onDismissRequest = { themeMenu = false }) {
+                    ThemeMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = { Text(mode.label) },
+                            leadingIcon = { if (mode == theme) Icon(KftIcons.Check, contentDescription = "Current") },
+                            onClick = { themeMenu = false; onThemeSelected(mode) },
+                        )
+                    }
+                }
+            }
+            TooltipIconButton(KftIcons.About, "About", { about = true }, Modifier.padding(bottom = Spacing.s))
+        },
+    )
+    if (about) AboutDialog(onDismiss = { about = false })
+}
+
+/** Logo, version and platform, and the notice the icon licence asks for (Apache-2.0 §4, see `NOTICE`). */
+@Composable
+private fun AboutDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { KftLogo(Modifier.width(180.dp), full = true) },
+        title = { Text("KFT Survey GCS") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                Text("Version ${AppInfo.VERSION} · ${Platform.name}")
+                Text(
+                    "Icons: Material Symbols by Google, Apache License 2.0.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }

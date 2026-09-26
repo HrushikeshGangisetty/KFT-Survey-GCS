@@ -37,10 +37,13 @@ compose.desktop {
             packageName = "KFT-GCS"
             packageVersion = "0.1.0"
             vendor = "Kapil Future Tech"
+            // Placeholder icons made from the logo PNG by tools/brand/make_icons.py (no SVG of the logo yet).
             windows {
+                iconFile.set(project.file("icons/kft.ico"))
                 menuGroup = "KFT"
                 upgradeUuid = "4b1f7c1e-2d7a-4a53-9c1e-6a0f5e2b9d11"
             }
+            linux { iconFile.set(project.file("icons/kft.png")) }
         }
     }
 }

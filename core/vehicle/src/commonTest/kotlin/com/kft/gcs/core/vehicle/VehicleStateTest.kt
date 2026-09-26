@@ -85,8 +85,15 @@ class VehicleStateTest {
     @Test
     fun flightModeNames() {
         assertEquals("Loiter", flightModeName(VehicleKind.COPTER, 5u))
-        assertEquals("Alt Hold", flightModeName(VehicleKind.COPTER, 2u))
+        // Expected strings are ArduPilot's own `name()` (ArduCopter/mode.h, ArduPlane/mode.h), not our formatting.
+        assertEquals("Altitude Hold", flightModeName(VehicleKind.COPTER, 2u))
+        assertEquals("RTL", flightModeName(VehicleKind.COPTER, 6u))
+        assertEquals("Smart RTL", flightModeName(VehicleKind.COPTER, 21u))
+        assertEquals("Position Hold", flightModeName(VehicleKind.COPTER, 16u))
         assertEquals("Auto", flightModeName(VehicleKind.PLANE, 10u)) // same name as Copter's 3, different number
+        assertEquals("FBWA", flightModeName(VehicleKind.PLANE, 5u))
+        assertEquals("QRTL", flightModeName(VehicleKind.PLANE, 21u))
+        assertEquals("QLoiter", flightModeName(VehicleKind.PLANE, 19u))
         assertEquals("Mode 99", flightModeName(VehicleKind.COPTER, 99u))
     }
 

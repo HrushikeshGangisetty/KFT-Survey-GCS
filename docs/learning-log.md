@@ -1986,3 +1986,188 @@ What differs from Pass 16 is the Pass 17 rule: line 1's lead-in is max(120, 4r) 
 - The field was reconstructed from a screenshot (above). From now on, `PlaneSurveySitlRun` pins it in code.
 
 ---
+
+## Pass 19a — Design system: `ui:design`, brand theme, applied to Fly and the Plan toolbar (2026-09-26)
+
+First of the UI refactor batch (19a → 19b → 20 → 21). **Stop point: waiting for Hrushikesh's approval of the design
+before 19b applies it to every screen.** Screenshots: `docs/design/19a-*`.
+
+### What changed
+- **`ui/design`** (new module, `kft.kmp.compose`):
+  - `KftColors.kt`: the light, dark and high-contrast M3 schemes from the seed #1F2E5D, plus `StatusColors` (ok, warn,
+    critical).
+  - `KftTheme.kt`: `ThemeMode`, `KftTheme`, and the tokens: `Spacing` (4 dp grid), `MinTouchTarget` (48 dp),
+    `KftShapes` (16 dp floating cards), `KftTypography` (tabular figures) and `hudValue`.
+  - `KftIcons.kt`: every icon (Material Symbols), `KftLogo`, `kftAppIcon`.
+  - `Components.kt`: navigation rail, `MapCard`, `TooltipIconButton`, `SectionHeader`, `NumberField` (unit suffix),
+    `SegmentedChoice`, `StatusChip`, `StatTile`, `ConfirmDialog`.
+  - `Toolbar.kt`: `KftToolbar`, one row with overflow into a "more" menu.
+  - `Tooltip.jvm.kt` / `Tooltip.android.kt`: hover tooltip on desktop, long-press on Android (see learnings).
+  - `composeResources/drawable`: 32 Material Symbols XMLs, `kft_mark.png`, `kft_logo.png`, `kft_app_icon.png`.
+  - Tests: `KftColorsTest`, `ToolbarTest`.
+- **`app/shared`**:
+  - `App.kt`: `KftTheme`, and the theme choice saved through the new `ThemeStore` (`theme.txt` next to the other stores).
+    The rail now has the logo, icons with labels in the order Fly, Plan, Params, Links, and a theme menu and About at
+    the bottom. The About dialog shows the full logo, version, platform and the icon licence line. The version text is
+    no longer in the rail; that was a 19b item, done now because the About dialog it moves into was built here.
+  - The old `KftColors.kt` is deleted.
+  - `FileTextStore` also implements `ThemeStore`, and both shells bind it.
+  - `DesktopApp.kt`: `kftWindowIcon()`.
+- **`feature/fly`**: `FlyScreen` rebuilt from the components:
+  - Status chips: link / firmware, KFT login, GPS, and "mission ≠ plan".
+  - A HUD card of stat tiles, 4 per row.
+  - Map buttons as a vertical stack of icon buttons: basemap menu, centre, clear track.
+  - The vehicle message as a chip.
+  - `FlyUiState.gps` is new (`gpsItem`); GPS is no longer a HUD tile.
+- **`feature/plan`**:
+  - The toolbar is one row: Add waypoints, Add survey | Undo, Redo | Open, Save, Export▾ | Read, Upload, Clear. The
+    sync state is a chip, and Clear uses `ConfirmDialog` (destructive).
+  - The hand-drawn disk and arrow icons are removed (one icon family).
+  - Panel colours only, no layout change: theme roles instead of white-on-black, because the text fields would have been
+    unreadable in the light theme. Warnings use `status.warn`, and selected rows get a raised fill plus a primary
+    outline.
+- **`feature/connections`, `feature/params`**: warnings used `colorScheme.secondary` / `tertiary`. In the new scheme
+  those are slate, no longer orange, so warnings now use `KftTheme.status.warn`, and the OK colour uses `status.ok`.
+  These are colour-role fixes only; the restyle is 19b.
+- **`ui/map/MapView.kt`**:
+  - New `MapColors`: cyan route, magenta track, orange areas, lime photos, green home, yellow selected. Never navy.
+  - Lines get a thin dark outline ("casing", `CasedLine`).
+  - Marker outlines are dark instead of white.
+  - The vehicle arrow gets a dark outer and a white inner edge.
+- **`core/vehicle/VehicleState.kt`**: `flightModeName` returns ArduPilot's own names ("RTL", "Altitude Hold", "FBWA",
+  "QRTL"), not "Rtl" / "Alt Hold" / "Fly By Wire A".
+- **Icons and brand files**:
+  - `app/android`: an adaptive launcher icon (`mipmap-anydpi-v26`, `kft_navy`) and the manifest icon.
+  - `app/desktop`: `icons/kft.ico` / `kft.png` for the MSI/DEB, and the window icon.
+  - `tools/brand/make_icons.py` (logo PNG → rail mark, About logo, app icons) and `tools/brand/generate_scheme.mjs`
+    (the colour scheme).
+- **`NOTICE`, `licenses/Apache-2.0.txt`**: the Material Symbols attribution, as Apache-2.0 §4 requires.
+- **`CLAUDE.md` §2**: `ui:design` in the module table, and a rule that screens take colours, icons and spacing from
+  it.
+- `settings.gradle.kts`: the new module.
+
+### How it works
+```
+ThemeStore (theme.txt) ──read once──▶ App(): var theme ──▶ KftTheme(mode)
+                                         ▲                   ├─ MaterialTheme(colorScheme = KftColors.<mode>, KftShapes, KftTypography)
+       rail theme menu ─onThemeSelected──┘                   └─ LocalStatusColors = StatusColors.<mode>  (KftTheme.status)
+
+Screen ──▶ ui:design components (StatusChip, StatTile, MapCard, KftToolbar, TooltipIconButton, ConfirmDialog …)
+             └─ read MaterialTheme.colorScheme / KftTheme.status / Spacing / KftIcons, never literals
+
+Map (ui:map) ──▶ MapColors, the same in every theme: bright fill + dark casing, readable on street and satellite
+```
+
+### Engineering learnings
+- **Scheme generation: `material-color-utilities` 0.4.0** (Google, Apache-2.0, the engine inside Material Theme
+  Builder). I ran it once and hard-coded the output, because a runtime dependency for 3 fixed schemes adds nothing.
+  - The variant is TonalSpot, M3's default. Fidelity keeps more chroma, but it put the navy in `primaryContainer` and
+    made light `primary` darker than the brand.
+  - Changed by hand, each with a reason in the KDoc:
+    1. The light and high-contrast primary is exactly #1F2E5D (13.07:1 on white).
+    2. The dark neutrals use chroma 12/16 at the seed hue, so the dark theme is navy, not grey.
+    3. The tertiary roles copy secondary ("one accent").
+    4. `error` is our critical colour.
+  - The npm package's ESM build has extension-less imports that Node won't load, so the script is bundled with esbuild
+    first. The steps are in `tools/brand/generate_scheme.mjs`.
+- **High contrast is light, not dark.** In direct sun a dark screen reflects like a mirror; dark text on white is what
+  stays readable. It's TonalSpot at contrast level 1.0 with pure white surfaces.
+- **Colour-blind check, done with numbers rather than by eye.** The ok/warn/critical colours were run through the
+  Machado 2009 protan, deutan and tritan simulations, measuring CIELAB ΔE between each pair.
+  - First try: amber warn vs red critical came out at **ΔE 3 for deuteranopes**, which is the same colour. Moving
+    critical to crimson (#B0105A), which keeps blue that red-green colour-blind users still see, gave ΔE ≥ 15 in the
+    light themes and 23 in dark.
+  - Text contrast (≥ 4.5:1) caps how far the light themes can go, so status never relies on hue alone:
+    - each status has its own icon shape: check circle, triangle, octagon;
+    - a critical chip is filled solid, while ok and warn chips are only outlined or tinted.
+- **Contrast is a unit test, not a claim.** `KftColorsTest` implements the WCAG 2 ratio on Compose's own
+  `Color.luminance()`. It first checks the formula against published values (black/white 21:1; #777 on white 4.48:1,
+  WebAIM). Then it asserts every text pair (≥ 4.5) and outline (≥ 3.0) on surface, surfaceContainer and
+  surfaceContainerHigh in all 3 themes, and the navy's 13.07:1.
+- **Icons: Material Symbols over Lucide.** Both have permissive licences (Apache-2.0 / ISC). Material Symbols were
+  chosen because:
+  - they're drawn for M3, so their optical size and weight match the components they sit in;
+  - they include the GCS glyphs we need (flight, satellite_alt, my_location, layers);
+  - Google publishes them as Android vector XML, which compose-resources renders on both platforms.
+
+  Lucide is SVG only, so every path would have to be converted by hand. The XMLs are Google's files, with one edit:
+  the Android-only `?attr/colorControlNormal` tint is removed (desktop can't resolve theme attributes). The edit is
+  recorded in `NOTICE`, as §4(b) asks.
+- **M3 `TooltipBox` never opens on mouse hover on desktop (material3 1.9.0).** Found on the screenshots.
+  - The bytecode does handle Enter/Exit, but nothing showed, even in a raw screen grab (so it wasn't the screenshot
+    tool masking a popup).
+  - Fix: `Tooltip` is `expect`/`actual`. Desktop uses Compose Desktop's `TooltipArea`, which works on hover (verified:
+    "Centre on vehicle", "Upload mission to vehicle"). Android keeps M3's long-press tooltip, which is the platform
+    convention.
+- **Theme choice lives in `App()`, not a ViewModel.** It's one enum, read once and written on change, and no screen
+  reads it. A ViewModel plus a repository would be three classes for one `remember`. If Settings ever grows a theme
+  row, that's when it moves.
+- **Floating cards are opaque.** The old panels were black at 60–78 % opacity. Contrast through a half-transparent
+  card depends on the map underneath, and satellite imagery breaks it. The shadow separates an opaque card from the
+  map instead.
+- **Map colours are theme-independent and never navy.** The map doesn't change with the app theme. Navy disappears on
+  dark satellite fields and water, and reads as a road on the street map. Bright fills carry the colour on the pale
+  street map; the dark casing separates it from busy imagery. MapLibre lines have no stroke, so the outline is a second
+  line 2 dp wider underneath (`CasedLine`), the way road maps draw.
+- **Overflow toolbar = order as priority.** `splitForWidth` is a pure function (tested): buttons are 48 dp and
+  dividers 17 dp. It keeps room for the "more" button, and never starts or ends the row with a divider. On a narrow
+  window the vehicle group moves into the menu first, where every item has its name.
+- **App icon: placeholder from the logo PNG, not a font wordmark.** There's no SVG of the logo, but the PNG is a
+  single colour with transparency, so the "KFT" letters can be cropped, turned white and put on navy
+  (`make_icons.py`). That's the real letterform, not a font imitating it. Replace it when an SVG exists (one command).
+- **Ponytail review** (`/ponytail-review` on the diff), two shrinks applied:
+  - `KftIcons.Links` duplicated `Link`; one is kept.
+  - A private `icon()` wrapper around `vectorResource` is removed.
+
+  Kept:
+  - `ThemeStore`: commonMain can't see the jvmCommon `FileTextStore`.
+  - `kftWindowIcon()`: `app:desktop` doesn't see `ui:design`.
+  - The requested components that 19b will use (SectionHeader, NumberField, SegmentedChoice).
+  - Both test classes.
+  - The two generator scripts: provenance for the colours and icons.
+
+### What to look at
+1. `ui/design/src/commonMain/kotlin/com/kft/gcs/ui/design/KftColors.kt`: the top KDoc (what was generated, what was
+   hand-changed and why) and `StatusColors` (the colour-blind reasoning).
+2. `ui/design/src/commonMain/kotlin/com/kft/gcs/ui/design/Components.kt`: `StatusChip` and `StatTile`, colour plus
+   icon, never colour alone.
+3. `feature/fly/src/commonMain/kotlin/com/kft/gcs/feature/fly/FlyScreen.kt`: a screen built only from design-system
+   parts.
+
+### Tests
+- `KftColorsTest` (5):
+  - The formula matches published values.
+  - The navy is 13.07:1.
+  - Text ≥ 4.5 and outlines ≥ 3 in every theme.
+  - The dark primary is a light tint of the brand hue.
+  - The status colours are readable as text; onCritical on critical; error == critical.
+- `ToolbarTest` (3): everything fits at 274 dp; at 273 dp "e" overflows; a divider never ends the row or goes into the
+  menu.
+- `VehicleStateTest.flightModeNames`: expected strings are ArduPilot's `name()`: "Altitude Hold", "RTL", "Smart RTL",
+  "Position Hold", "FBWA", "QRTL", "QLoiter".
+- `FlyViewModelTest.hudShowsDashesUntilReportedAndFormatsUnits`: GPS via `gpsItem`, and below 3D warns.
+- `gradlew.bat check` and `:app:android:assembleDebug` pass. The one compiler warning is still the old
+  `PlanViewModel.kt:398`.
+- **Screenshots, run by me** (Copter SITL, `start-sitl.ps1 -Vehicle copter`, TCP 5762, a 4-corner survey at CMAC):
+  - Desktop 1920×1140:
+    - Fly: dark, light, dark on satellite, light on satellite.
+    - Plan: dark, light, high contrast.
+    - About.
+  - Emulator Medium_Tablet (2560×1600 at 320 dpi = 1280×800 dp): Fly and Plan, dark and light.
+  - The desktop app was driven with computer-use this time, granted as `java.exe` (the Pass 18 attempt with the
+    window title failed).
+
+### Open questions / next
+- **Your approval of the design (stop point).** Especially:
+  - the dark default;
+  - high contrast being light;
+  - the crimson critical colour;
+  - the map palette (cyan route vs magenta track);
+  - the rail order (Fly, Plan, Params, Links, as in the brief; it was Fly, Plan, Links, Params).
+- **App icon is a placeholder** made from the PNG. Send an SVG of the logo and `make_icons.py` becomes a one-line
+  change.
+- **Satellite on Android:** the emulator build has no Esri key (it only shows Street), so the tablet screenshots are
+  Street only.
+- **19b next** (after your OK): the Plan panel in collapsible sections with the start-corner diagram, the survey line
+  styling, and the Links and Params restyle. It's also when the remaining literal dp values in the Plan panel go.
+- `PlanViewModel.kt:398` warning (pre-existing, one character).

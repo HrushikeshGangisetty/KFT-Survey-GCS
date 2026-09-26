@@ -7,11 +7,11 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 /**
- * One UTF-8 text file: the saved connection profiles, or the plan settings (one instance per file). Each shell picks
+ * One UTF-8 text file: the saved connection profiles, the plan settings or the theme (one instance per file). Each shell picks
  * the folder: `%APPDATA%\KFT-GCS` on desktop, the app's private files directory on Android. Both store interfaces
  * are "read the text, write the text", so one class serves both.
  */
-class FileTextStore(private val file: File) : ProfileStore, SettingsStore {
+class FileTextStore(private val file: File) : ProfileStore, SettingsStore, ThemeStore {
 
     override fun read(): String? = file.takeIf { it.exists() }?.readText()
 

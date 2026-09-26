@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * The Fly view: vehicle on the map, HUD strip, basemap choice. Monitoring only, by design: the pilot arms, takes
+ * The Fly view: vehicle on the map, HUD, basemap choice. Monitoring only, by design: the pilot arms, takes
  * off, changes mode and lands on the RC, never from the GCS (spec S9), so this screen has no flight-action buttons.
  *
  * @param basemaps what this build can show; passed in (not read from the platform here) so tests are deterministic.
@@ -86,6 +86,7 @@ class FlyViewModel(
             firmware = v.firmwareVersion?.let { "ArduPilot $it" },
             login = v.login?.let { LoginUi(it.label, it.warning) },
             hud = hudItems(v) + photosItem(photos.size, s.plannedPhotos),
+            gps = gpsItem(v),
             message = v.lastMessage?.let { MessageUi(it.text, it.severity) },
             missionWarning = if (v.connected && s.differsFrom(v.mission?.total)) "Vehicle mission ≠ plan" else null,
             overlays = listOfNotNull(

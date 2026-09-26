@@ -11,6 +11,7 @@ kotlin {
             implementation(project(":core:geo-io"))
             implementation(libs.kotlinx.serialization.json)
             implementation(project(":core:vehicle"))
+            implementation(project(":ui:design"))
             implementation(project(":ui:map"))
             implementation(libs.jb.lifecycle.viewmodel.compose)
             implementation(libs.jb.lifecycle.runtime.compose)

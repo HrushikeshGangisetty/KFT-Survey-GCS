@@ -1,12 +1,14 @@
 package com.kft.gcs.app
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.window.FrameWindowScope
 import com.kft.gcs.core.mavlink.SerialPorts
 import com.kft.gcs.core.mavlink.di.IoDispatcher
 import com.kft.gcs.feature.connections.ProfileStore
 import com.kft.gcs.feature.plan.PlanFiles
 import com.kft.gcs.feature.plan.SettingsStore
+import com.kft.gcs.ui.design.kftAppIcon
 import com.kft.gcs.ui.map.ProvideDesktopMapHost
 import java.io.File
 import org.koin.dsl.module
@@ -27,5 +29,10 @@ private val desktopModule = module {
     single { SerialPorts() }
     single<ProfileStore> { FileTextStore(File(dir, "connection-profiles.json")) }
     single<SettingsStore> { FileTextStore(File(dir, "plan-settings.json")) }
+    single<ThemeStore> { FileTextStore(File(dir, "theme.txt")) }
     single<PlanFiles> { DesktopPlanFiles(get(IoDispatcher)) }
 }
+
+/** The window's title-bar and taskbar icon (the placeholder KFT app icon, see `kftAppIcon`). */
+@Composable
+fun kftWindowIcon(): Painter = kftAppIcon()

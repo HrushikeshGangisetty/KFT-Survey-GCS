@@ -35,6 +35,7 @@ include(":core:terrain")
 include(":core:geo-io")
 
 // ---- ui: shared UI building blocks ----
+include(":ui:design")  // KFT theme, tokens, icons, logo, shared components
 include(":ui:map")
 
 // ---- features: one screen family each, never depend on each other ----

@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.vector.PathBuilder
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.unit.dp
@@ -46,6 +48,8 @@ import org.maplibre.compose.map.MaplibreMap
 import org.maplibre.compose.map.rememberMapState
 import org.maplibre.compose.resource.MapRequestInterceptor
 import org.maplibre.compose.sources.GeoJsonData
+import org.maplibre.compose.sources.GeoJsonSource
+import org.maplibre.compose.util.MaplibreComposable
 import org.maplibre.compose.sources.TileSetOptions
 import org.maplibre.compose.sources.rememberGeoJsonSource
 import org.maplibre.compose.sources.rememberRasterTileSource
@@ -114,26 +118,19 @@ fun MapView(
         val polygons = overlays.filterIsInstance<MapOverlay.Polygon>()
         listOf(true, false).forEach { selected ->
             val areas = rememberGeoJsonSource(GeoJsonData.JsonString(polygonsGeoJson(polygons.filter { it.selected == selected })))
-            FillLayer(id = "areas-fill-$selected", source = areas, color = const(AREA_COLOR), opacity = const(if (selected) 0.2f else 0.1f))
-            LineLayer(id = "areas-outline-$selected", source = areas, color = const(AREA_COLOR), width = const(if (selected) 3.dp else 1.5.dp))
+            FillLayer(id = "areas-fill-$selected", source = areas, color = const(MapColors.AREA), opacity = const(if (selected) 0.2f else 0.1f))
+            CasedLine("areas-outline-$selected", areas, MapColors.AREA, if (selected) 3.dp else 1.5.dp)
         }
         // Under the track: once the vehicle flies the plan, the flown path must show on top of the planned one.
-        LineLayer(
-            id = "route",
-            source = rememberGeoJsonSource(GeoJsonData.JsonString(routeGeoJson(overlays.filterIsInstance<MapOverlay.Route>()))),
-            color = const(Color(0xFF4FC3F7)),
-            width = const(3.dp),
+        CasedLine(
+            "route",
+            rememberGeoJsonSource(GeoJsonData.JsonString(routeGeoJson(overlays.filterIsInstance<MapOverlay.Route>()))),
+            MapColors.ROUTE,
+            3.dp,
         )
         overlays.filterIsInstance<MapOverlay.Track>().forEachIndexed { i, track ->
             if (track.points.size >= 2) {
-                LineLayer(
-                    id = "track-$i",
-                    source = rememberGeoJsonSource(GeoJsonData.JsonString(lineGeoJson(track.points))),
-                    color = const(Color(0xFFFFB74D)),
-                    width = const(3.dp),
-                    cap = const(LineCap.Round),
-                    join = const(LineJoin.Round),
-                )
+                CasedLine("track-$i", rememberGeoJsonSource(GeoJsonData.JsonString(lineGeoJson(track.points))), MapColors.TRACK, 3.dp)
             }
         }
         // Photo dots under the markers: there can be hundreds, and a waypoint must never hide behind them.
@@ -141,8 +138,8 @@ fun MapView(
             id = "photos",
             source = rememberGeoJsonSource(GeoJsonData.JsonString(pointsGeoJson(overlays.filterIsInstance<MapOverlay.Photos>().flatMap { it.points }))),
             radius = const(4.dp),
-            color = const(Color(0xFF76FF03)),
-            strokeColor = const(Color.Black),
+            color = const(MapColors.PHOTO),
+            strokeColor = const(MapColors.OUTLINE),
             strokeWidth = const(1.dp),
         )
         MarkerStyle.entries.forEach { style ->
@@ -153,8 +150,8 @@ fun MapView(
                 // Corners are handles, not numbered stops: smaller, so a dense polygon doesn't hide its own outline.
                 radius = const(if (style == MarkerStyle.CORNER) CORNER_RADIUS else MARKER_RADIUS),
                 color = const(style.color),
-                strokeColor = const(Color.White),
-                strokeWidth = const(2.dp),
+                strokeColor = const(MapColors.OUTLINE),
+                strokeWidth = const(1.5.dp),
             )
             SymbolLayer(
                 id = "marker-labels-$style",
@@ -238,16 +235,44 @@ fun MapView(
 private val MARKER_HIT_RADIUS = 24.dp
 private val MARKER_RADIUS = 11.dp
 private val CORNER_RADIUS = 7.dp
-private val AREA_COLOR = Color(0xFFFFA726)
+
+/**
+ * Overlay colours. The same in every app theme, because the map underneath doesn't change with the theme, and never
+ * the KFT brand navy: a dark blue line vanishes on satellite imagery (dark fields, water) and reads as a road on the
+ * street map. Instead: saturated, light colours that basemaps use little (cyan, magenta, yellow, lime, orange), each
+ * with a thin near-black outline. The fill carries the colour on the pale street map; the outline separates it from
+ * bright or busy satellite tiles. Every colour here is at least 5.4:1 against [OUTLINE].
+ */
+private object MapColors {
+    val OUTLINE = Color(0xE6101010)
+    val ROUTE = Color(0xFF00E5FF) // cyan: the planned path
+    val TRACK = Color(0xFFFF40C8) // magenta: the path already flown, never mistaken for the plan
+    val AREA = Color(0xFFFF9100) // orange: survey areas and their corner handles
+    val PHOTO = Color(0xFF76FF03) // lime: photo positions
+    val HOME = Color(0xFF00E676)
+    val SELECTED = Color(0xFFFFD600)
+    val VEHICLE = Color(0xFFFF3D00)
+}
 
 private val MarkerStyle.color
     get() = when (this) {
-        MarkerStyle.HOME -> Color(0xFF66BB6A)
-        MarkerStyle.WAYPOINT -> Color(0xFF4FC3F7)
-        MarkerStyle.SELECTED -> Color(0xFFFFC107)
-        MarkerStyle.CURRENT -> Color(0xFFE040FB)
-        MarkerStyle.CORNER -> AREA_COLOR
+        MarkerStyle.HOME -> MapColors.HOME
+        MarkerStyle.WAYPOINT -> MapColors.ROUTE
+        MarkerStyle.SELECTED -> MapColors.SELECTED
+        MarkerStyle.CURRENT -> MapColors.TRACK
+        MarkerStyle.CORNER -> MapColors.AREA
     }
+
+/**
+ * A line with a thin dark outline. MapLibre lines have no stroke, so the outline is a second line 2 dp wider, drawn
+ * first ("casing", as road maps do it). Both read the same source.
+ */
+@Composable
+@MaplibreComposable
+private fun CasedLine(id: String, source: GeoJsonSource, color: Color, width: Dp) {
+    LineLayer(id = "$id-casing", source = source, color = const(MapColors.OUTLINE), width = const(width + 2.dp), cap = const(LineCap.Round), join = const(LineJoin.Round))
+    LineLayer(id = id, source = source, color = const(color), width = const(width), cap = const(LineCap.Round), join = const(LineJoin.Round))
+}
 
 /**
  * Index of the marker nearest to [touch] within [radius], or null. A null screen position is a marker that is off
@@ -321,15 +346,19 @@ private fun featureCollection(features: List<String>) = """{"type":"FeatureColle
 internal fun lineGeoJson(points: List<LatLon>) =
     """{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[${points.joinToString(",") { "[${it.longitude},${it.latitude}]" }}]}}"""
 
-/** A 24 dp arrow pointing up (north at heading 0): red fill with a white edge so it reads on satellite and street. */
-private val VehicleArrow = ImageVector.Builder("vehicle-arrow", 24.dp, 24.dp, 24f, 24f).path(
-    fill = SolidColor(Color(0xFFFF5252)),
-    stroke = SolidColor(Color.White),
-    strokeLineWidth = 1.5f,
-) {
+/**
+ * A 24 dp arrow pointing up (north at heading 0). Red-orange with a white edge inside a dark outline: the dark edge
+ * separates it from the pale street map, the white one from dark satellite imagery.
+ */
+private val VehicleArrow = ImageVector.Builder("vehicle-arrow", 24.dp, 24.dp, 24f, 24f)
+    .path(stroke = SolidColor(MapColors.OUTLINE), strokeLineWidth = 3f, strokeLineJoin = StrokeJoin.Round) { arrow() }
+    .path(fill = SolidColor(MapColors.VEHICLE), stroke = SolidColor(Color.White), strokeLineWidth = 1f, strokeLineJoin = StrokeJoin.Round) { arrow() }
+    .build()
+
+private fun PathBuilder.arrow() {
     moveTo(12f, 2f)
     lineTo(20f, 21f)
     lineTo(12f, 17f)
     lineTo(4f, 21f)
     close()
-}.build()
+}

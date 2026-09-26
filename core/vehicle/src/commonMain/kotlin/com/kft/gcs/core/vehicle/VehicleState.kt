@@ -152,15 +152,30 @@ internal fun firmwareVersionName(packed: UInt): String {
     return number + suffix
 }
 
-/** ArduPilot mode name for a custom mode number, e.g. Copter 5 -> "Loiter", Plane 10 -> "Auto". */
+/**
+ * The mode name exactly as ArduPilot writes it, e.g. Copter 5 -> "Loiter", Copter 6 -> "RTL", Plane 5 -> "FBWA".
+ * These are the strings of each mode's `name()` in `ArduCopter/mode.h` and `ArduPlane/mode.h` (master, 2026-09),
+ * which is what ArduPilot's own messages use. The MAVLink enum names (`COPTER_MODE_*`, `PLANE_MODE_*` in
+ * ardupilotmega.xml) are title-cased, and [MODE_NAME_EXCEPTIONS] holds the ones where that gives a different string.
+ */
 fun flightModeName(kind: VehicleKind, customMode: UInt): String {
     val raw = when (kind) {
         VehicleKind.COPTER -> CopterMode.getEntryFromValueOrNull(customMode)?.name
         VehicleKind.PLANE -> PlaneMode.getEntryFromValueOrNull(customMode)?.name
         VehicleKind.UNKNOWN -> null
     } ?: return "Mode $customMode"
-    return raw.split('_').joinToString(" ") { it.lowercase().replaceFirstChar(Char::uppercase) }
+    return MODE_NAME_EXCEPTIONS[raw] ?: raw.split('_').joinToString(" ") { it.lowercase().replaceFirstChar(Char::uppercase) }
 }
+
+/** MAVLink enum name -> ArduPilot's `name()`, where title case isn't enough (acronyms, "Q" modes, spelled-out names). */
+private val MODE_NAME_EXCEPTIONS = mapOf(
+    "RTL" to "RTL", "SMART_RTL" to "Smart RTL", "AUTO_RTL" to "Auto RTL", "ALT_HOLD" to "Altitude Hold",
+    "POSHOLD" to "Position Hold", "FLOWHOLD" to "Flow Hold", "GUIDED_NOGPS" to "Guided No GPS", "AVOID_ADSB" to "Avoid ADSB",
+    "SYSTEMID" to "SystemID", "ZIGZAG" to "ZigZag",
+    "FLY_BY_WIRE_A" to "FBWA", "FLY_BY_WIRE_B" to "FBWB", "INITIALIZING" to "Initialising", "LOITER_ALT_QLAND" to "Loiter to QLand",
+    "QSTABILIZE" to "QStabilize", "QHOVER" to "QHover", "QLOITER" to "QLoiter", "QLAND" to "QLand", "QRTL" to "QRTL",
+    "QACRO" to "QAcro", "QAUTOTUNE" to "QAutotune",
+)
 
 /** GPS_FIX_TYPE values. STATIC (7) and PPP (8) aren't RTK, so they count as a plain 3D fix. */
 private fun gpsFixOf(value: UInt) = when (value) {
