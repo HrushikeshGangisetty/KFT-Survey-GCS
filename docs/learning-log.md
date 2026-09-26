@@ -1898,3 +1898,91 @@ Kept:
 - A value changed by another GCS or by the FC itself isn't picked up until the next Download. PARAM_VALUEs that
   arrive outside a transfer are ignored.
 - `PlanViewModel.kt:398` warning (pre-existing).
+
+### Item 2 — Plane first-line re-check (Pass 17's first-line lead-in, flown)
+
+#### What changed
+- **`feature/plan/src/jvmTest/.../PlaneSurveySitlRun.kt`** (new): plans the Pass 16 Plane field with the Plan screen's
+  own `flatten`, uploads it to a running SITL, and writes the `.waypoints` export for `photo_check.py`. It's skipped
+  unless `KFT_SITL` is set, like `SitlCheck`, so the re-check is one command instead of clicking the field in again.
+- **`tools/sitl/photo_check.py`**: a per-line breakdown, in flight order (photo count, the first three photos'
+  offsets, and the max). The question was about *first-line* photos, and the old totals couldn't show which line a
+  photo belonged to.
+
+#### How it was run
+```
+start-sitl.ps1 -Vehicle plane -Wipe                                  (fresh parameters, camera.parm applies)
+KFT_SITL=127.0.0.1:5762 KFT_SITL_OUT=<dir> gradlew :feature:plan:jvmTest --tests "*PlaneSurveySitlRun*"
+   ─▶ "lines 7, spacing 41.03, trigger 24.0, planned photos 126, items 44" ─▶ uploaded, mission.waypoints written
+py -3.9 tools/sitl/sitl_pilot.py tcp:127.0.0.1:5763 --photos <dir>/photos.csv   (pilot: arm, TAKEOFF, AUTO; S9)
+   ─▶ "126 photos written (mission over: RTL)"
+py -3.9 tools/sitl/photo_check.py mission.waypoints photos.csv --planned 126
+```
+**The field is a reconstruction.** Pass 16's plan file wasn't kept, so I measured the corners from
+`pass16-plane-desktop-done.png`, scaled by the logged 408.9 m line length (0.721 m/px): 453.6–175.2 m west, and 177.4 m
+north to 231.5 m south, of the CMAC home. Settings as logged:
+- Sony RX1R II, 100 m, 60 % side / 65 % front overlap.
+- 18 m/s, grid 0°, entry bottom-left, default 120 m lead-in, RTL.
+
+The plan came out identical on every logged number (7 lines, 41.03 m spacing, 24.0 m trigger, 126 photos, 44
+items), so any difference from the real field is a few metres of corner position. The approach from home to the first
+line is the same diagonal.
+
+What differs from Pass 16 is the Pass 17 rule: line 1's lead-in is max(120, 4r) = **229 m** (r = 57.2 m at 18 m/s and
+30° bank), instead of 120 m.
+
+#### Result
+| | Pass 16 (120 m lead-in on every line) | Pass 18 (229 m on line 1, 120 m after) |
+|---|---|---|
+| Photos / planned | 126 / 126 | **126 / 126** |
+| **Line 1, worst photo** | **34 m** (the first photo) | **5.4 m** (first three: 5.4, 5.4, 4.2 m) |
+| Lines 2–7, first photo | 10–18 m | 16.8–18.0 m |
+| Lines 2–7, second / third photo | (not broken down) | 9.6–10.8 m / 3.9–4.9 m |
+| Photos > 10 m off a line | 11 | 10 (all the first two photos of lines 2–7) |
+| Mean offset, all photos | — | 2.4 m |
+
+- **The first line is fixed.** Its first photos went from 34 m off to about 5 m, which is the same residual as the
+  middle of the other lines.
+- **The U-turn lines didn't change, as expected**, because the Pass 17 rule only touches line 1. After each U-turn the
+  first photo is still about 17–18 m to the side, the second about 10 m, and from the third on under 5 m. ArduPlane's
+  L1 is still converging for about 50 m past the camera start (2 × 24 m trigger).
+
+#### Engineering learnings
+- **Measure per line, not in total.** The totals barely moved (11 → 10 photos over 10 m), and on their own they
+  would have read as "no real change". Split by line, they show exactly what the Pass 17 rule did (line 1: 34 → 5.4 m)
+  and what it was never meant to do (lines 2–7).
+- **One command beats clicking a field in again.** The harness uses the same `flatten` the Plan screen uses, so the
+  uploaded items are what the operator would upload. A future "is Plane better now?" is `PlaneSurveySitlRun` +
+  `sitl_pilot.py` + `photo_check.py`.
+
+**Ponytail review:**
+- The harness is one test (about 60 lines) with no new production code.
+- The `photo_check.py` addition is 7 lines.
+
+#### Safety
+- No GCS code changed in item 2 and no allowlist change. The upload went through the gateway as usual.
+- S9: arming, TAKEOFF and AUTO came from `sitl_pilot.py` on port 5763 (system id 254), the pilot's role. The GCS side
+  (the harness) only uploaded.
+- S11: the exported `.waypoints` starts with home as seq 0 (`0 1 0 16 … -35.363261 149.1652299 584.09`).
+
+#### What to look at
+1. `feature/plan/src/jvmTest/kotlin/com/kft/gcs/feature/plan/PlaneSurveySitlRun.kt`: the field and how it's planned.
+2. `tools/sitl/photo_check.py`, the end: the per-line breakdown.
+
+#### Tests
+- `PlaneSurveySitlRun` (SITL only; skipped in `check`). The ArduPlane 4.8.0-dev run is in the table above.
+- `gradlew.bat check` passes.
+
+#### Open questions / next (item 2)
+- **The first 1–2 photos after each U-turn are still 10–18 m off the line.** With a 102 m footprint and 41 m spacing
+  that still leaves about 42 % side overlap locally, so the ground is covered. Options, cheapest first:
+  1. **Tune `NAVL1_PERIOD` on the real aircraft**, as Pass 17 said. SITL's 15 isn't the KFT airframe's.
+  2. **Use the 4r lead-in on every line**, not only the first: 229 m instead of 120 m at 18 m/s. The line-1 result
+     (5.4 m) suggests it would fix them. It costs about 6 × 109 m ≈ 650 m, or about 36 s per survey here. It's a
+     one-line change in `SurveyGrid.kt`, plus the hand values in three tests.
+  3. Plan turns with the aircraft's real turn radius.
+
+  Your call. Option 2 needs your OK because it lengthens every Plane survey.
+- The field was reconstructed from a screenshot (above). From now on, `PlaneSurveySitlRun` pins it in code.
+
+---

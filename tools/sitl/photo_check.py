@@ -63,6 +63,14 @@ def main():
     print(f"distance from the nearest photo line: max {max(off):.1f} m, mean {sum(off) / len(off):.1f} m")
     print(f"photos more than {a.tolerance:.0f} m off every line (turns, run-ins): {len(outside)}")
 
+    # Per line, in flight order: where a plane is still settling after its turn shows in the first photos (Pass 16/18).
+    # Photos are logged in time order, so each line's first entries are the ones taken first.
+    nearest = [min(range(len(lines)), key=lambda i: distance_to_segment(p, lines[i])) for p in photos]
+    for i in range(len(lines)):
+        d = [off[k] for k in range(len(photos)) if nearest[k] == i]
+        if d:
+            print(f"line {i + 1}: {len(d)} photos, first three {', '.join(f'{x:.1f}' for x in d[:3])} m off, max {max(d):.1f} m")
+
 
 if __name__ == "__main__":
     main()
