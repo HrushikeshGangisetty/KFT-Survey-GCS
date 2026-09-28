@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import com.kft.gcs.core.geoio.ImportFile
 import com.kft.gcs.feature.plan.OpenedFile
 import com.kft.gcs.feature.plan.PlanFiles
 import kotlinx.coroutines.CompletableDeferred
@@ -39,6 +40,14 @@ class AndroidPlanFiles(private val context: Context, private val io: CoroutineDi
         val uri = pick(launch) ?: return null
         val text = withContext(io) { context.contentResolver.openInputStream(uri)!!.use { it.readBytes().decodeToString() } }
         return OpenedFile(nameOf(uri), text)
+    }
+
+    /** The picked file's bytes. The picker grants this one file only, so there are no siblings: shapefiles come zipped. */
+    override suspend fun openForImport(): ImportFile? {
+        val launch = open ?: return null
+        val uri = pick(launch) ?: return null
+        val bytes = withContext(io) { context.contentResolver.openInputStream(uri)!!.use { it.readBytes() } }
+        return ImportFile(nameOf(uri), bytes)
     }
 
     /** Asks for any file and copies it into [dir] (see [copyInto]). Returns the copy's path. */

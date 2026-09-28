@@ -7,6 +7,7 @@ import com.kft.gcs.core.geoio.decodeQgcPlan
 import com.kft.gcs.core.geoio.decodeWaypoints
 import com.kft.gcs.core.geoio.encodeQgcPlan
 import com.kft.gcs.core.geoio.encodeWaypoints
+import com.kft.gcs.core.geoio.importGeometry
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.CameraOrientation
@@ -313,6 +314,48 @@ class PlanViewModel(
             }
             _effects.send(message)
         }
+    }
+
+    /** Reads the file, then asks survey-or-waypoints ([PlanUiState.importDialog]); a file it can't use says why. */
+    override fun onImportClicked() {
+        viewModelScope.launch {
+            val file = files.openForImport() ?: return@launch
+            val shapes = try {
+                importGeometry(file)
+            } catch (e: IllegalArgumentException) {
+                _effects.send("Couldn't import ${file.name}: ${e.message}")
+                return@launch
+            }
+            edit.update { it.copy(importChoice = ImportChoice(file.name, shapes)) }
+        }
+    }
+
+    override fun onImportAsSurveys() {
+        val choice = edit.value.importChoice ?: return
+        val template = defaultSurvey(vehicle.value.vehicleKind, settings.settings.value.cameras.first())
+        addImported(choice, surveyGroupsFrom(choice.shapes, choice.fileName, template))
+    }
+
+    override fun onImportAsWaypoints() {
+        val choice = edit.value.importChoice ?: return
+        val startsMission = edit.value.groups.none(::hasItems)
+        addImported(choice, waypointGroupsFrom(choice.shapes, choice.fileName, vehicle.value.vehicleKind, startsMission))
+    }
+
+    override fun onImportDismissed() = edit.update { it.copy(importChoice = null) }
+
+    /** Appends the new groups as one undoable edit, selects the first, and moves the map to show them. */
+    private fun addImported(choice: ImportChoice, added: List<MissionGroup>) {
+        edit.update { e ->
+            val groups = e.groups + added
+            e.changed(null, groups).copy(
+                selectedGroup = e.groups.size, selectedItem = null, form = null, importChoice = null,
+                camera = fitCamera(choice.shapes.allPoints(), (e.camera?.id ?: 0) + 1),
+            )
+        }
+        val what = if (added.first() is SurveyGroup) "survey" else "waypoint group"
+        val notes = choice.shapes.notes.joinToString(" ", prefix = " ").trimEnd()
+        _effects.trySend("Added ${added.size} $what${if (added.size == 1) "" else "s"} from ${choice.fileName}.$notes")
     }
 
     private fun importItems(name: String, mission: Mission, skipped: Int): String {

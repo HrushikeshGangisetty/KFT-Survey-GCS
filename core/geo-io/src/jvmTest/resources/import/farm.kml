@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+<Document>
+  <name>Farm survey.kml</name>
+  <Folder>
+    <name>Areas</name>
+    <Placemark>
+      <name>North field</name>
+      <Polygon><tessellate>1</tessellate>
+        <outerBoundaryIs><LinearRing><coordinates>
+          78.47,17.41,0 78.48,17.41,0 78.481,17.402,0 78.469,17.401,0 78.47,17.41,0
+        </coordinates></LinearRing></outerBoundaryIs>
+        <innerBoundaryIs><LinearRing><coordinates>78.474,17.406,0 78.476,17.406,0 78.476,17.405,0 78.474,17.405,0 78.474,17.406,0</coordinates></LinearRing></innerBoundaryIs>
+      </Polygon>
+    </Placemark>
+    <Placemark>
+      <name>Twin plots</name>
+      <MultiGeometry>
+        <Polygon><outerBoundaryIs><LinearRing><coordinates>78.46,17.39 78.461,17.39 78.461,17.391 78.46,17.39</coordinates></LinearRing></outerBoundaryIs></Polygon>
+        <Polygon><outerBoundaryIs><LinearRing><coordinates>78.462,17.39 78.463,17.39 78.463,17.391 78.462,17.39</coordinates></LinearRing></outerBoundaryIs></Polygon>
+      </MultiGeometry>
+    </Placemark>
+  </Folder>
+  <Placemark><name>Canal</name><LineString><coordinates>78.465,17.4,0 78.47,17.405,0 78.472,17.412,0</coordinates></LineString></Placemark>
+  <Placemark><name>Gate</name><Point><coordinates>78.4695,17.4015,0</coordinates></Point></Placemark>
+  <Placemark><name>Pump</name><Point><coordinates>78.479,17.409,0</coordinates></Point></Placemark>
+</Document>
+</kml>

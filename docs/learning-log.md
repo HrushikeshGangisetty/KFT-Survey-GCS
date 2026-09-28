@@ -2853,3 +2853,113 @@ tile downloads from OpenFreeMap, started by the operator and capped at 10 000 ti
 - Vector MBTiles (e.g. an OpenFreeMap regional extract) would need a style pointing at the file: a later pass if the
   OpenFreeMap answer is no.
 - Next: **Pass 24 — imports** (KML/KMZ, GeoJSON, Shapefile with .prj, CSV points). **Stopped here, as asked.**
+
+## Pass 24 — Import: KML/KMZ, GeoJSON, shapefile (.prj reprojection), CSV points (2026-09-28)
+
+### What changed
+- **`core/geo/Projections.kt`** (new): `Ellipsoid` (WGS 84, GRS 80), and the inverse projections a file can need:
+  `TransverseMercator` (UTM and national grids, Snyder's formulas), `WebMercator` (EPSG:3857), `Geographic`.
+- **`core/geo-io`** (new files):
+  - `GeoImport.kt`: `ImportFile` (name, bytes, siblings), `ImportedShapes` (areas, lines, points, notes),
+    `importGeometry()` (chooses a reader by extension, else by content), archive handling (KMZ, zipped shapefile).
+  - `Crs.kt`: a file's coordinate system from a `.prj` (WKT 1, ESRI or OGC) or an EPSG code. Supports WGS 84
+    lon/lat, Transverse Mercator/UTM on WGS 84-like datums (in any linear unit), and Web Mercator. Refuses other
+    datums and projections by name.
+  - `GeoJsonImport.kt` (every geometry type, names from `name`/`Name`/`title`, the old `crs` member),
+    `ShapefileImport.kt` (Point, MultiPoint, PolyLine, Polygon and their Z/M variants; holes by ring orientation),
+    `CsvPoints.kt` (tolerant points), `jvmCommonMain/KmlAndZip.kt` (KML by SAX, zip by `java.util.zip`, the same
+    `expect`/`jvmCommon` pattern as the parameter XML).
+- **`feature/plan`**: an Import button on the toolbar. `PlanImport.kt` (new): the "survey areas or waypoints?"
+  dialog model, the pure group builders, `fitCamera`. `PlanViewModel`: `onImportClicked`, `onImportAsSurveys`,
+  `onImportAsWaypoints`, `onImportDismissed`. `PlanEdit` / `PlanUiState` gained `importChoice` and a camera request.
+  `PlanFiles` gained `openForImport()`.
+- **`app/shared`**: both file-dialog classes implement `openForImport` (desktop reads the file's siblings, such as a
+  shapefile's `.prj`; Android gets one file). `App()` now moves the map for whichever screen asked last (Fly follows
+  the vehicle, Plan shows an import). `app:shared` depends on `core:geo-io`.
+- **`ui/design`**: `KftIcons.Import` (Material Symbols `file_open`).
+- Fixtures: `tools/fixtures/make_import_fixtures.py` writes `core/geo-io/src/jvmTest/resources/import/` (KML, KMZ,
+  GeoJSON ×2, shapefiles in UTM / WGS 84 / without .prj, a zipped shapefile, an Everest-datum .prj).
+
+### How it works
+```
+Import ──▶ PlanFiles.openForImport() ──▶ ImportFile(name, bytes, sibling)
+   ──▶ importGeometry: .kml / .kmz / .geojson / .shp(+.prj) / .zip / .csv   (unknown extension: by content)
+         shapefile, GeoJSON crs ──▶ Crs (.prj / EPSG) ──▶ Projection.toLatLon ──▶ wgs84() range check
+   ──▶ ImportedShapes (areas as open rings, lines, points, notes)
+   ──▶ dialog "It holds 3 areas, 1 line, 2 points" ── Survey areas | Waypoints | Cancel
+         Survey areas: one SurveyGroup per area, default survey settings, named from the file
+         Waypoints: points → one group; each line → a group; (areas' outlines only if nothing else)
+   ──▶ one undoable edit, first new group selected, camera fitted to everything imported, notes in the snackbar
+```
+
+### Engineering learnings
+- **Reproject only what customers send, and refuse the rest by name.** UTM/Transverse Mercator and Web Mercator
+  cover the survey files we'll see. A different datum (Everest/Kalianpur in India, OSGB36, ED50) needs a datum
+  shift of tens to hundreds of metres. We don't do that, so the file is refused with the datum's name and "reproject
+  to WGS 84 in QGIS". A survey placed 100 m off would be worse than no import. WGS 84, ETRS89, NAD83 and GDA are
+  within 1–2 m of each other, below GPS error, so they are treated as one.
+- **Snyder's inverse series, not a library.** There's no PROJ for Kotlin Multiplatform, and the inverse Transverse
+  Mercator is 30 lines. It's checked against the book's own worked example and against PROJ (pyproj) at four
+  places, including 200 km off the central meridian: all within 1e-7° (1 cm).
+- **Fixtures from other tools.** pyproj projected known latitudes/longitudes into UTM, pyshp wrote the shapefiles,
+  and Python's zipfile made the KMZ and zip. The tests expect the original coordinates back. A reader tested only
+  on files we wrote ourselves would only prove it agrees with itself.
+- **Units matter.** A US-survey-foot grid (Florida East) is in the tests: both the coordinates *and* the false
+  easting are in feet.
+- **`LatLon` already refuses impossible values, with a programmer's message.** The first range check came after the
+  conversion, so it never ran. The check now sits where file coordinates become `LatLon` (`wgs84()`), with a sentence
+  for the operator. A missing `.prj` on a UTM file is refused that way, not placed at "latitude 1 926 688".
+- **Tolerant CSV, but no guessing.** It reads comma/semicolon/tab/space separators, decimal commas, header columns
+  in any order, hemisphere letters and degrees-minutes-seconds. Bad rows are skipped *and listed by line*. With no
+  header it reads latitude first, and switches only when a value past ±90 proves the file is longitude first. Two
+  bugs the tests found: a one-line "35.36 S;149.16 W" picked space as the separator (now the first consistent one
+  in a fixed order wins), and `""` inside a quoted cell (now split as RFC 4180 says).
+- **File altitudes are never used for waypoints.** KML altitudes are usually 0 or clamped to the ground, CSV "alt"
+  is often above sea level, and ours are above home. Reading them would put the aircraft into the ground or far
+  too high, so imported waypoints get the default altitude, and the dialog says so.
+- **One camera, two screens.** The map had one camera request (Fly's). `App()` now keeps the latest request from
+  either screen, so returning to Fly doesn't jump back to an old one.
+- **The first fit zoom was wrong on screen.** "700 dp of map" ignored the 360 dp panel, and the imported field ran
+  under it. It's now 500 dp; the run confirms the field fits. Written in the KDoc.
+- **Ponytail review:** nothing cut. Point names are parsed but not shown yet (a waypoint has no name field); kept
+  because they're part of reading the formats faithfully, and it's one field. `ponytail:` .dbf names not read.
+
+### What to look at
+1. `core/geo-io/src/commonMain/kotlin/com/kft/gcs/core/geoio/GeoImport.kt:38`: `importGeometry`, the entry point.
+2. `core/geo-io/src/commonMain/kotlin/com/kft/gcs/core/geoio/Crs.kt:47`: `fromPrj`, what's accepted and refused.
+3. `core/geo/src/commonMain/kotlin/com/kft/gcs/core/geo/Projections.kt:46`: the inverse Transverse Mercator.
+4. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanViewModel.kt:320`: the import flow.
+
+### Tests
+- `ProjectionsTest` (4): Snyder's worked example (Clarke 1866); UTM 43N, 55S, 30N against PROJ; Web Mercator
+  against PROJ; geographic.
+- `ImportFixturesTest` (10, jvmTest, fixture files): KML (Google Earth style: folders, a hole, MultiGeometry, a line,
+  points); KMZ with icons inside; GeoJSON; GeoJSON with an old `crs` (UTM 44N); shapefile in UTM 44N with .prj
+  (and its hole reported); the same zipped in a folder; a WGS 84 polyline; points without .prj (with a note); UTM
+  metres without .prj refused; a Kalianpur .prj refused by name.
+- `GeoImportTest` (13, common, runs on JVM and the Android host): CSV with header in any order, without header,
+  lon-first detection, separators and decimal commas, hemispheres and DMS (by hand), bad rows listed, no
+  coordinates refused; bare GeoJSON geometry; broken GeoJSON; content sniffing; `.prj` UTM (pyproj reference);
+  Transverse Mercator in US feet (pyproj); unsupported projection and EPSG code refused.
+- `PlanImportTest` (8): KML area → survey named "North field", one undo removes it, camera at the middle; CSV
+  points → takeoff + 2 waypoints; unusable file → message, no dialog; cancel; unnamed areas numbered; waypoint
+  grouping and no takeoff for a plane; `fitCamera` zoom by hand.
+- `gradlew.bat check`: passes, no new warnings.
+- **App run (desktop, by me):** Import → `field_utm.zip` → dialog "It holds 1 area" → Survey areas → a 110 ha survey
+  near Hyderabad, map moved there (first try zoomed too close; fixed, see above). Import → `farm.kml` → "3 areas,
+  1 line, 2 points" → Survey areas → "North field", "Twin plots" ×2 in the panel, all on screen.
+
+### Safety
+Nothing about transmission changed. Imports only create plan groups, which go through the existing upload preview
+and gateway. Two guards stop an import from placing a mission in the wrong place: coordinates in an unsupported
+system are refused rather than guessed, and file altitudes are never used for waypoints.
+
+### Open questions / next
+- `ponytail:` .dbf attribute names aren't read, so shapefile areas are named after the file.
+- The camera centres on everything imported; with the panel on the right, a wide area sits a little under it.
+  Shift the target left by half the panel width if that bothers operators.
+- Shapefile → Android: the picker gives one file, so the operator must zip the .shp/.shx/.dbf/.prj. The error for a
+  bare .shp without .prj on Android is the generic "coordinates aren't latitude/longitude" one; a hint to zip them
+  would help. Not run on the tablet yet.
+- Lines import as waypoints today; Pass 25's corridor scan will offer them as corridor centre lines.
+- Next: **Pass 25 — crosshatch and corridor scan.** **Stopped here, as asked.**

@@ -96,6 +96,10 @@ interface PlanActions {
     fun onSaveClicked()
     fun onExportClicked(format: ExportFormat)
     fun onOpenClicked()
+    fun onImportClicked()
+    fun onImportAsSurveys()
+    fun onImportAsWaypoints()
+    fun onImportDismissed()
 }
 
 /**
@@ -171,6 +175,7 @@ fun PlanScreen(state: PlanUiState, actions: PlanActions) {
         )
     }
     state.preview?.let { UploadPreviewDialog(it, actions) }
+    state.importDialog?.let { ImportAsDialog(it, actions) }
 }
 
 /**
@@ -191,6 +196,7 @@ private fun Toolbar(state: PlanUiState, actions: PlanActions, onClear: () -> Uni
                 ToolbarEntry.Action(KftIcons.Redo, "Redo (Ctrl+Shift+Z)", state.canRedo, actions::onRedoClicked),
                 ToolbarEntry.Divider,
                 ToolbarEntry.Action(KftIcons.Open, "Open plan file", onClick = actions::onOpenClicked),
+                ToolbarEntry.Action(KftIcons.Import, "Import area or points (KML, KMZ, GeoJSON, shapefile, CSV)", onClick = actions::onImportClicked),
                 ToolbarEntry.Action(KftIcons.Save, "Save plan file", onClick = actions::onSaveClicked),
                 ToolbarEntry.Menu(
                     KftIcons.Export, "Export",
@@ -478,6 +484,28 @@ private fun CustomCameraDialog(onSave: (Camera) -> Unit, onDismiss: () -> Unit) 
 }
 
 /** Every item the upload will send, then the warnings, then confirm. Nothing is sent before "Upload". */
+/** Survey areas or waypoints: the same file can be either, so the operator says which. */
+@Composable
+private fun ImportAsDialog(dialog: ImportDialog, actions: PlanActions) {
+    AlertDialog(
+        onDismissRequest = actions::onImportDismissed,
+        title = { Text(dialog.title) },
+        text = {
+            Text(
+                "It holds ${dialog.summary}. Add " + (if (dialog.canSurvey) "each area as a survey, or " else "") +
+                    "the points and lines as waypoints? Waypoints get the default altitude above home; altitudes in the file aren't used.",
+            )
+        },
+        confirmButton = {
+            Row {
+                if (dialog.canSurvey) TextButton(onClick = actions::onImportAsSurveys) { Text("Survey areas") }
+                TextButton(onClick = actions::onImportAsWaypoints) { Text("Waypoints") }
+            }
+        },
+        dismissButton = { TextButton(onClick = actions::onImportDismissed) { Text("Cancel") } },
+    )
+}
+
 @Composable
 private fun UploadPreviewDialog(preview: UploadPreview, actions: PlanActions) {
     AlertDialog(

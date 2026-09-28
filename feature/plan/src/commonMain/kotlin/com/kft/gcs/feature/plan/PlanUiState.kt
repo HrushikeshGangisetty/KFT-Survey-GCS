@@ -13,6 +13,7 @@ import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.MissionSyncState
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.sameMission
+import com.kft.gcs.ui.map.CameraRequest
 import com.kft.gcs.ui.map.MapOverlay
 import com.kft.gcs.ui.map.MarkerStyle
 import com.kft.gcs.ui.map.RouteStyle
@@ -46,6 +47,10 @@ data class PlanUiState(
     val canRedo: Boolean,
     /** The upload preview dialog, while it's open. */
     val preview: UploadPreview?,
+    /** "Import as survey areas or waypoints?", after a file is read. */
+    val importDialog: ImportDialog? = null,
+    /** Where the map should look: set after an import, so the imported area is on screen. */
+    val cameraRequest: CameraRequest? = null,
 )
 
 data class GroupHeader(val index: Int, val name: String, val kind: String, val summary: String, val selected: Boolean)
@@ -101,6 +106,8 @@ internal data class PlanEdit(
     val future: List<List<MissionGroup>> = emptyList(),
     val lastEdit: String? = null,
     val preview: UploadPreview? = null,
+    val importChoice: ImportChoice? = null,
+    val camera: CameraRequest? = null,
 )
 
 /** Marker ids for the map: the group index and the row, corner or [EntryCorner] index. */
@@ -220,6 +227,8 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
         canUndo = e.past.isNotEmpty(),
         canRedo = e.future.isNotEmpty(),
         preview = e.preview,
+        importDialog = e.importChoice?.dialog(),
+        cameraRequest = e.camera,
     )
 }
 

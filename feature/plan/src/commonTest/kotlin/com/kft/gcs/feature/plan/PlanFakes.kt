@@ -1,5 +1,6 @@
 package com.kft.gcs.feature.plan
 
+import com.kft.gcs.core.geoio.ImportFile
 import com.kft.gcs.core.mission.Mission
 import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.MissionRepository
@@ -31,8 +32,10 @@ internal class FakeMissions : MissionRepository {
 internal class FakeFiles : PlanFiles {
     var saved: Pair<String, String>? = null
     var toOpen: OpenedFile? = null
+    var toImport: ImportFile? = null
     override suspend fun save(suggestedName: String, text: String): String { saved = suggestedName to text; return suggestedName }
     override suspend fun open() = toOpen
+    override suspend fun openForImport() = toImport
 }
 
 internal class MemoryStore : SettingsStore {

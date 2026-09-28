@@ -1,5 +1,6 @@
 package com.kft.gcs.app
 
+import com.kft.gcs.core.geoio.ImportFile
 import com.kft.gcs.feature.plan.OpenedFile
 import com.kft.gcs.feature.plan.PlanFiles
 import java.awt.FileDialog
@@ -24,6 +25,17 @@ class DesktopPlanFiles(private val io: CoroutineDispatcher) : PlanFiles {
     override suspend fun open(): OpenedFile? {
         val file = choose(FileDialog.LOAD, null) ?: return null
         return OpenedFile(file.name, withContext(io) { file.readText() })
+    }
+
+    /** The picked file's bytes; a sibling is the same name with another extension, in either case (.prj / .PRJ). */
+    override suspend fun openForImport(): ImportFile? {
+        val file = choose(FileDialog.LOAD, null) ?: return null
+        val base = file.path.substringBeforeLast('.')
+        return withContext(io) {
+            ImportFile(file.name, file.readBytes()) { ext ->
+                listOf(ext.lowercase(), ext.uppercase()).map { File("$base.$it") }.firstOrNull { it.isFile }?.readBytes()
+            }
+        }
     }
 
     /** Asks for any file and copies it into [dir] (see [copyInto]). Returns the copy's path. */

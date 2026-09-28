@@ -25,6 +25,7 @@ kotlin {
             implementation(project(":feature:settings"))
             implementation(project(":core:mavlink")) // for mavlinkModule and the IoDispatcher qualifier
             implementation(project(":core:vehicle"))
+            implementation(project(":core:geo-io")) // ImportFile, which the platform file dialogs build
             implementation(libs.jb.navigation.compose)
             implementation(project(":ui:design"))
             implementation(project(":ui:map")) // App() owns the one MapView (ADR-001 F10); DesktopApp gives it a GPU context

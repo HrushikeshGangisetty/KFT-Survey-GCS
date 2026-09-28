@@ -58,6 +58,7 @@ object KftIcons {
     val Undo: ImageVector @Composable get() = vectorResource(Res.drawable.ic_undo)
     val Redo: ImageVector @Composable get() = vectorResource(Res.drawable.ic_redo)
     val Open: ImageVector @Composable get() = vectorResource(Res.drawable.ic_folder_open)
+    val Import: ImageVector @Composable get() = vectorResource(Res.drawable.ic_file_open)
     val Save: ImageVector @Composable get() = vectorResource(Res.drawable.ic_save)
     val Export: ImageVector @Composable get() = vectorResource(Res.drawable.ic_file_export)
     val Upload: ImageVector @Composable get() = vectorResource(Res.drawable.ic_upload)

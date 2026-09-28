@@ -19,6 +19,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,7 @@ import com.kft.gcs.ui.design.RailItem
 import com.kft.gcs.ui.design.Spacing
 import com.kft.gcs.ui.design.ThemeMode
 import com.kft.gcs.ui.design.TooltipIconButton
+import com.kft.gcs.ui.map.CameraRequest
 import com.kft.gcs.ui.map.MapView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.compose.viewmodel.koinViewModel
@@ -119,6 +121,11 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val planning = current?.destination?.route == Destination.PLAN.route
     val mapsTab = current?.destination?.route == Destination.MAPS.route
 
+    // One camera for the map, moved by whichever screen asked last: Fly (follow the vehicle) or Plan (show an import).
+    var camera by remember { mutableStateOf<CameraRequest?>(null) }
+    LaunchedEffect(flyState.cameraRequest) { flyState.cameraRequest?.let { camera = it } }
+    LaunchedEffect(planState.cameraRequest) { planState.cameraRequest?.let { camera = it } }
+
     // The Plan tab's undo/redo keys; the desktop window calls this for every key press (see KeyShortcuts).
     SideEffect { shortcuts.handler = { planning && planShortcut(it, plan) } }
     Box(modifier) {
@@ -126,7 +133,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             Modifier.fillMaxSize(),
             basemap = flyState.selectedBasemap,
             overlays = (if (mapsTab) mapsState.overlays else emptyList()) + planState.overlays + flyState.overlays,
-            cameraRequest = flyState.cameraRequest,
+            cameraRequest = camera,
             onMapClick = if (planning) plan::onMapClick else null,
             onMarkerClick = if (planning) plan::onMarkerClick else null,
             onMarkerDrag = if (planning) plan::onMarkerDragged else null,
