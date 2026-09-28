@@ -9,7 +9,8 @@ import kotlin.math.sqrt
 
 /**
  * Spherical-earth geodesy. Accurate to ~0.3 % over survey-sized areas, which is far below GPS and
- * planning tolerances. Survey maths works on the flat [LocalProjection] built on the same sphere.
+ * planning tolerances. Survey geometry doesn't use it: it works on the flat [LocalProjection], which uses the WGS84
+ * ellipsoid's radii (Pass 22). This sphere is for distances shown to the operator and small checks.
  */
 object Geodesy {
     /** Mean earth radius (IUGG), metres. */

@@ -3,15 +3,14 @@ package com.kft.gcs.feature.plan
 import app.cash.turbine.test
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.planning.altitudeForGsdM
 import com.kft.gcs.core.mission.Home
 import com.kft.gcs.core.mission.Mission
 import com.kft.gcs.core.mission.MissionCommand
 import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.MissionProgress
-import com.kft.gcs.core.vehicle.MissionRepository
 import com.kft.gcs.core.vehicle.MissionSync
-import com.kft.gcs.core.vehicle.MissionTransferException
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.ui.map.MapOverlay
 import com.kft.gcs.ui.map.MarkerStyle
@@ -276,6 +275,44 @@ class PlanViewModelTest {
         assertTrue(vm.state.value.survey!!.stats != before, "the grid is re-planned live")
     }
 
+    /**
+     * The start corner is picked on the map. The 270 m × 220 m rectangle at grid angle 0 starts bottom-left, which is
+     * the south-west corner (EntryCorner's own definition): it's highlighted just outside that corner (south of
+     * −35.3640, west of 149.1650). The other three corners are tappable options; tapping the north-east one moves
+     * the start there, the panel says so, and undo puts it back.
+     */
+    @Test
+    fun startCornerIsPickedOnTheMap() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.onAddSurveyClicked()
+        listOf(LatLon(-35.3620, 149.1650), LatLon(-35.3620, 149.1680), LatLon(-35.3640, 149.1680), LatLon(-35.3640, 149.1650)).forEach(vm::onMapClick)
+        runCurrent()
+        fun chosen() = markers(vm).single { it.style == MarkerStyle.START_CORNER }
+        assertEquals(3, markers(vm).count { it.style == MarkerStyle.START_OPTION })
+        assertEquals("south-west", vm.state.value.survey!!.startCorner)
+        assertTrue(chosen().position.latitude < -35.3640 && chosen().position.longitude < 149.1650, "${chosen().position}")
+
+        val northEast = markers(vm).filter { it.style == MarkerStyle.START_OPTION }
+            .maxBy { it.position.latitude + it.position.longitude } // the most northern and eastern of the options
+        vm.onMarkerClick(northEast.id)
+        runCurrent()
+        assertEquals("north-east", vm.state.value.survey!!.startCorner)
+        assertEquals(northEast.position, chosen().position)
+        assertTrue(chosen().position.latitude > -35.3620 && chosen().position.longitude > 149.1680, "${chosen().position}")
+        assertEquals(EntryCorner.TOP_RIGHT, vm.state.value.survey!!.settings.entry)
+
+        vm.onUndoClicked()
+        runCurrent()
+        vm.onGroupSelected(1)
+        runCurrent()
+        assertEquals("south-west", vm.state.value.survey!!.startCorner, "picking a corner is an undoable edit")
+    }
+
+    @Test
+    fun compassWords() {
+        assertEquals(listOf("north", "north-east", "south-west", "north-west", "north"), listOf(0.0, 44.0, 225.0, 337.4, 359.0).map(::compassWord))
+    }
+
     /** A drag sends many move events but is one undo step; redo puts it back; a new edit clears redo. */
     @Test
     fun undoAndRedo() = runTest(dispatcher) {
@@ -357,38 +394,5 @@ class PlanViewModelTest {
         runCurrent()
         assertIs<SurveyGroup>(decodePlan(saved.second)[1])
         assertEquals(listOf("Waypoints", "Survey"), vm.state.value.groups.map { it.kind })
-    }
-
-    /** A MissionRepository that records uploads and can hold a transfer open or fail it. */
-    private class FakeMissions : MissionRepository {
-        var uploaded: List<MissionItem> = emptyList()
-        var onVehicle = Mission(null, emptyList())
-        var hold: CompletableDeferred<Unit>? = null
-        var failWith: String? = null
-
-        override suspend fun upload(items: List<MissionItem>, onProgress: (Int, Int) -> Unit): Result<Unit> {
-            failWith?.let { return Result.failure(MissionTransferException(it)) }
-            onProgress(2, items.size + 1)
-            hold?.await()
-            uploaded = items
-            return Result.success(Unit)
-        }
-
-        override suspend fun download(onProgress: (Int, Int) -> Unit) = Result.success(onVehicle)
-
-        override suspend fun clear() = Result.success(Unit)
-    }
-
-    private class FakeFiles : PlanFiles {
-        var saved: Pair<String, String>? = null
-        var toOpen: OpenedFile? = null
-        override suspend fun save(suggestedName: String, text: String): String { saved = suggestedName to text; return suggestedName }
-        override suspend fun open() = toOpen
-    }
-
-    private class MemoryStore : SettingsStore {
-        private var text: String? = null
-        override fun read() = text
-        override fun write(text: String) { this.text = text }
     }
 }

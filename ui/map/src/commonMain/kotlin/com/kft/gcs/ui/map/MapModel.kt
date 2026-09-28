@@ -84,8 +84,8 @@ sealed interface MapOverlay {
  * How a [MapOverlay.Route] looks, by what the vehicle does on it:
  * - [PLAN]: a leg between hand-placed waypoints. Normal line.
  * - [PHOTO]: a survey line with the camera on. The part that matters: thick and bright, with direction arrows.
- * - [TURN]: survey flight with the camera off (run-in, run-out, lead-in, the turn to the next line). Thin and faded.
- * - [TRANSIT]: to or from home. Dashed.
+ * - [TURN]: survey flight with the camera off (run-in, run-out, lead-in, the turn to the next line). Thin, faded grey.
+ * - [TRANSIT]: to or from home. Dashed grey.
  */
 enum class RouteStyle { PLAN, PHOTO, TURN, TRANSIT }
 
@@ -93,8 +93,10 @@ enum class RouteStyle { PLAN, PHOTO, TURN, TRANSIT }
  * How a [MapOverlay.Marker] looks. The map decides the colours, so every screen shows the same meaning the same way.
  * [START] and [END] ("S", "E") mark where a survey begins and ends; they're labels only, so the map never lets them
  * be clicked or dragged (a corner or a map click next to them must still work).
+ * [START_OPTION] is a corner of the survey area the operator can tap to start there (small, grey); [START_CORNER] is
+ * the chosen one (large, white like "S"), not clickable, like the labels. Declaration order is drawing order, so "S" stays on top.
  */
-enum class MarkerStyle { HOME, WAYPOINT, SELECTED, CURRENT, CORNER, START, END }
+enum class MarkerStyle { HOME, WAYPOINT, SELECTED, CURRENT, CORNER, START_OPTION, START_CORNER, START, END }
 
 /** "Move the camera here." A new [id] means a new request, even to the same place (e.g. "centre" pressed twice). */
 data class CameraRequest(val target: LatLon, val zoom: Double, val id: Long)

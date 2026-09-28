@@ -12,8 +12,10 @@ import kotlin.test.assertTrue
  * 8 MB photos (made-up values that divide nicely; the preset's own numbers are unverified).
  */
 class SurveyTest {
-    private val metresPerDegree = 111_195.08
-    private fun m(x: Double, y: Double) = LatLon(y / metresPerDegree, x / metresPerDegree)
+    // WGS84 at the equator (see LocalProjectionTest): 1° north = M(0)·π/180, 1° east = N(0)·π/180.
+    private val metresPerDegreeNorth = 6_335_439.327292820 * kotlin.math.PI / 180 // 110 574.28
+    private val metresPerDegreeEast = 6_378_137.0 * kotlin.math.PI / 180 // 111 319.49
+    private fun m(x: Double, y: Double) = LatLon(y / metresPerDegreeNorth, x / metresPerDegreeEast)
     private val rectangle = listOf(m(0.0, 0.0), m(300.0, 0.0), m(300.0, 200.0), m(0.0, 200.0))
     private val camera = Camera(13.2, 8.8, 5472, 3648, 8.8, minTriggerIntervalS = 2.5, mbPerPhoto = 8.0)
 

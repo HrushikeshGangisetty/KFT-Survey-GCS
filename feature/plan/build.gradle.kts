@@ -18,5 +18,13 @@ kotlin {
             implementation(project.dependencies.platform(libs.koin.bom))
             implementation(libs.koin.compose.viewmodel)
         }
+        // Compose UI tests of the key flows, headless on the desktop JVM (skiko renders off screen).
+        jvmTest.dependencies {
+            implementation(libs.compose.ui.test)
+            implementation(compose.desktop.currentOs)
+        }
     }
 }
+
+// Skiko (the UI tests' renderer) loads native code; allowed explicitly, as the desktop app does.
+tasks.named<Test>("jvmTest") { jvmArgs("--enable-native-access=ALL-UNNAMED") }

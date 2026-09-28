@@ -23,7 +23,8 @@ import kotlin.test.assertTrue
  *   the order the corners were clicked in; its photo estimate ⌈L/d⌉ is below what its own mission shoots.
  *
  * Everything is measured in one exact frame, the WGS84 tangent plane at the first corner (QGC's own frame), so the
- * comparison isn't blurred by our flat map, whose single earth radius is ≤ 0.5 % off the ellipsoid (measured below).
+ * comparison isn't blurred by our flat map. Since Pass 22 that map uses the WGS84 radii at its centre, so our spacing
+ * on the ground is within 5 cm of QGC's, 5 km field included (with one mean radius it was up to 0.5 %, 22 cm).
  */
 class QgcParityTest {
     private val home = LatLon(-35.363261, 149.165230) // CMAC, the SITL field: well away from the equator
@@ -70,8 +71,9 @@ class QgcParityTest {
         for (f in fields.filterNot { it.concave }) {
             val c = Compared(f)
             c.qgcAcross.zipWithNext { a, b -> assertEquals(spacing, b - a, 0.05, "${f.name}: QGC spacing") }
-            // Ours is laid out on our flat map; on the ground its spacing is off by that map's scale, ≤ 0.5 %.
-            c.ourAcross.zipWithNext { a, b -> assertEquals(spacing, b - a, spacing * 0.005, "${f.name}: our spacing on the ground") }
+            // Ours is laid out on our flat map (WGS84 radii at its centre). Measured on the ground: ≤ 1.2 mm off 45 m on
+            // the small fields, 42 mm on the 5 × 3 km block (the scale drifts away from the map's centre).
+            c.ourAcross.zipWithNext { a, b -> assertEquals(spacing, b - a, 0.05, "${f.name}: our spacing on the ground") }
             // Clipping: at each QGC line, our scan-line clip of the same polygon gives the same single segment.
             c.qgc.forEach { t ->
                 val a = (c.g(t.entry).across + c.g(t.exit).across) / 2

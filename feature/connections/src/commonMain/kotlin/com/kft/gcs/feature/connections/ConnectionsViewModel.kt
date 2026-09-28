@@ -67,7 +67,8 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
 
     fun onDeleteClicked(profileId: String) = repository.deleteProfile(profileId)
 
-    fun onFormKindChanged(kind: LinkKind) = form.update { it.copy(kind = kind, port = kind.defaultPort.toString(), error = null) }
+    fun onFormKindChanged(kind: LinkKind) =
+        form.update { it.copy(kind = kind, port = kind.defaultPort.toString(), error = null, generation = it.generation + 1) }
 
     fun onFormNameChanged(name: String) = form.update { it.copy(name = name, error = null) }
 
@@ -88,7 +89,7 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
         current.toConfigOrError()
             .onSuccess { config ->
                 repository.addProfile(current.name.trim().ifEmpty { config.summary }, config)
-                form.value = ProfileForm()
+                form.value = ProfileForm(generation = current.generation + 1)
             }
             .onFailure { error -> form.update { it.copy(error = error.message) } }
     }

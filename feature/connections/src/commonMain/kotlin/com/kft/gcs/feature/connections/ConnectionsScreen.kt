@@ -29,7 +29,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -204,10 +206,8 @@ private fun NewProfileForm(
         Column(Modifier.padding(Spacing.l), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
             SectionHeader("New profile")
             SegmentedChoice(LinkKind.entries.map { it.label to it }, form.kind, onKindChanged, Modifier.fillMaxWidth())
-            OutlinedTextField(form.name, onNameChanged, Modifier.fillMaxWidth(), label = { Text("Name (optional)") }, singleLine = true)
-            if (form.needsHost) {
-                OutlinedTextField(form.host, onHostChanged, Modifier.fillMaxWidth(), label = { Text("Host") }, singleLine = true)
-            }
+            OwnTextField(form.name, form.generation, onNameChanged, "Name (optional)")
+            if (form.needsHost) OwnTextField(form.host, form.generation, onHostChanged, "Host")
             if (form.isSerial) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Device", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
@@ -231,14 +231,32 @@ private fun NewProfileForm(
                 }
                 form.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             } else {
-                OutlinedTextField(
-                    form.port, onPortChanged, Modifier.fillMaxWidth(), label = { Text("Port") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    isError = form.error != null,
-                    supportingText = form.error?.let { { Text(it) } },
-                )
+                OwnTextField(form.port, form.generation, onPortChanged, "Port", KeyboardType.Number, form.error)
             }
             Button(onClick = onSave, modifier = Modifier.align(Alignment.End)) { Text("Save profile") }
         }
     }
+}
+
+/**
+ * A form field that keeps its own text and reports each change, like the Params search field. Fed back through the
+ * ViewModel's StateFlow (an async hop), fast typing lost characters: an older value arrived after newer keystrokes
+ * and replaced them. [value] is read again only when [generation] changes, i.e. when the ViewModel rewrote the form.
+ */
+@Composable
+private fun OwnTextField(
+    value: String,
+    generation: Int,
+    onChange: (String) -> Unit,
+    label: String,
+    keyboard: KeyboardType = KeyboardType.Text,
+    error: String? = null,
+) {
+    var text by remember(generation) { mutableStateOf(value) }
+    OutlinedTextField(
+        text, { text = it; onChange(it) }, Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+        isError = error != null,
+        supportingText = error?.let { { Text(it) } },
+    )
 }

@@ -1,22 +1,22 @@
 package com.kft.gcs.core.planning
 
 import com.kft.gcs.core.geo.LatLon
-import kotlin.math.cos
-import kotlin.math.PI
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * Most shapes sit on the equator, so a position converts to metres by hand with one constant:
- * 1° = 6 371 008.8 m × π / 180 = 111 195.08 m, the same on both axes. `m(x, y)` = x metres east, y north of (0, 0).
+ * Most shapes sit on the equator, so a position converts to metres by hand with two WGS84 constants (the radii of
+ * curvature at 0°): 1° north = 6 335 439.33 m × π / 180 = 110 574.28 m, 1° east = 6 378 137 m × π / 180 = 111 319.49 m.
+ * `m(x, y)` = x metres east, y north of (0, 0).
  */
 class SurveyGridTest {
-    private val metresPerDegree = 111_195.08
+    private val metresPerDegreeNorth = 6_335_439.327292820 * kotlin.math.PI / 180 // 110 574.28
+    private val metresPerDegreeEast = 6_378_137.0 * kotlin.math.PI / 180 // 111 319.49
 
-    private fun m(x: Double, y: Double) = LatLon(y / metresPerDegree, x / metresPerDegree)
-    private fun LatLon.xy() = Pair(longitude * metresPerDegree, latitude * metresPerDegree)
+    private fun m(x: Double, y: Double) = LatLon(y / metresPerDegreeNorth, x / metresPerDegreeEast)
+    private fun LatLon.xy() = Pair(longitude * metresPerDegreeEast, latitude * metresPerDegreeNorth)
     private fun Double.round3() = kotlin.math.round(this * 1000) / 1000
     private fun assertAt(x: Double, y: Double, p: LatLon, what: String) {
         val (px, py) = p.xy()
@@ -321,20 +321,44 @@ class SurveyGridTest {
     }
 
     /**
-     * Away from the equator: the same 300 × 200 m rectangle at CMAC (35.3633° S). Longitude degrees shrink by
-     * cos(35.3633°) = 0.815478, so 300 m east = 300 / (111 195.08 × 0.815478) degrees. Area still 60 000 m².
+     * Away from the equator: the same 300 × 200 m rectangle at CMAC (35.3633° S). WGS84 radii there (Snyder eq. 4-18,
+     * 4-20): M = 6 356 808.70 m, N = 6 385 300.08 m, so 1° north = 110 947.24 m and 1° east = N·cos(35.3633°)·π/180
+     * = 90 882.89 m. Area still 60 000 m².
      */
     @Test
     fun areaAtCmacLatitude() {
         val lat0 = -35.363261
-        val lonPerMetre = 1 / (metresPerDegree * cos(lat0 * PI / 180))
-        val latPerMetre = 1 / metresPerDegree
+        val lonPerMetre = 1 / 90_882.8947
+        val latPerMetre = 1 / 110_947.2417
         val rect = listOf(
             LatLon(lat0, 149.0), LatLon(lat0, 149.0 + 300 * lonPerMetre),
             LatLon(lat0 + 200 * latPerMetre, 149.0 + 300 * lonPerMetre), LatLon(lat0 + 200 * latPerMetre, 149.0),
         )
         assertEquals(60_000.0, polygonAreaM2(rect), 5.0) // the projection's centre is 100 m north: 0.001 % scale drift
         assertEquals(7, buildSurveyGrid(GridSpec(rect, 0.0, 45.0, copter)).lineCount)
+    }
+
+    /**
+     * Where the start-corner choices go, by hand from EntryCorner's definition ("up" = the grid angle, "left" = 90°
+     * counter-clockwise from it), on the 300 × 200 m rectangle:
+     * - 0°: up = north, left = west, so bottom-left = south-west (0, 0) … top-right = north-east (300, 200).
+     * - 90°: up = east, left = north, so bottom-left = north-west (0, 200), bottom-right = south-west (0, 0),
+     *   top-left = north-east (300, 200), top-right = south-east (300, 0).
+     * - 10 m outset at 0°: each corner 10 m further out on both axes, e.g. south-west (−10, −10).
+     */
+    @Test
+    fun entryCornerPositionsAreTheAreasCornersInTheGridFrame() {
+        fun check(expected: Map<EntryCorner, Pair<Double, Double>>, angle: Double, outset: Double = 0.0) =
+            entryCornerPositions(rectangle, angle, outset).forEach { (corner, p) ->
+                val (x, y) = expected.getValue(corner)
+                assertAt(x, y, p, "$angle° $corner")
+            }
+        check(mapOf(EntryCorner.BOTTOM_LEFT to (0.0 to 0.0), EntryCorner.BOTTOM_RIGHT to (300.0 to 0.0),
+            EntryCorner.TOP_LEFT to (0.0 to 200.0), EntryCorner.TOP_RIGHT to (300.0 to 200.0)), 0.0)
+        check(mapOf(EntryCorner.BOTTOM_LEFT to (0.0 to 200.0), EntryCorner.BOTTOM_RIGHT to (0.0 to 0.0),
+            EntryCorner.TOP_LEFT to (300.0 to 200.0), EntryCorner.TOP_RIGHT to (300.0 to 0.0)), 90.0)
+        check(mapOf(EntryCorner.BOTTOM_LEFT to (-10.0 to -10.0), EntryCorner.BOTTOM_RIGHT to (310.0 to -10.0),
+            EntryCorner.TOP_LEFT to (-10.0 to 210.0), EntryCorner.TOP_RIGHT to (310.0 to 210.0)), 0.0, outset = 10.0)
     }
 
     @Test

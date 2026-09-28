@@ -14,8 +14,10 @@ import kotlin.test.assertTrue
  * lines at x = 15…285 m, 20 m trigger, 11 photos a line, 77 in all.
  */
 class MissionGroupsTest {
-    private val metresPerDegree = 111_195.08
-    private fun m(x: Double, y: Double) = LatLon(y / metresPerDegree, x / metresPerDegree)
+    // WGS84 at the equator (see LocalProjectionTest): 1° north = M(0)·π/180, 1° east = N(0)·π/180.
+    private val metresPerDegreeNorth = 6_335_439.327292820 * kotlin.math.PI / 180 // 110 574.28
+    private val metresPerDegreeEast = 6_378_137.0 * kotlin.math.PI / 180 // 111 319.49
+    private fun m(x: Double, y: Double) = LatLon(y / metresPerDegreeNorth, x / metresPerDegreeEast)
     private val p4p = Camera(13.2, 8.8, 5472, 3648, 8.8, name = "P4P")
     private val survey = SurveySettings(
         polygon = listOf(m(0.0, 0.0), m(300.0, 0.0), m(300.0, 200.0), m(0.0, 200.0)),
@@ -86,7 +88,7 @@ class MissionGroupsTest {
     }
 
     private fun assertAt(x: Double, y: Double, p: LatLon) {
-        assertEquals(x, p.longitude * metresPerDegree, 1e-3)
-        assertEquals(y, p.latitude * metresPerDegree, 1e-3)
+        assertEquals(x, p.longitude * metresPerDegreeEast, 1e-3)
+        assertEquals(y, p.latitude * metresPerDegreeNorth, 1e-3)
     }
 }

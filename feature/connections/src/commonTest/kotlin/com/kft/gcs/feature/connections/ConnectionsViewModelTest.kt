@@ -25,7 +25,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 
 /** A repository whose link state the test sets by hand. Records what the ViewModel asked for. */
-private class FakeConnectionsRepository : ConnectionsRepository {
+internal class FakeConnectionsRepository : ConnectionsRepository {
     override val profiles = MutableStateFlow(listOf(ConnectionProfile("p0", "SITL", LinkConfig.UdpListen(14550))))
     override val linkState = MutableStateFlow<LinkState>(LinkState.Disconnected)
     override val login = MutableStateFlow<KftLoginStatus?>(null)
@@ -117,7 +117,8 @@ class ConnectionsViewModelTest {
             vm.onSaveProfileClicked()
             val saved = awaitItem()
             assertEquals("TCP 192.168.4.1:5760", saved.profiles.last().name, "a blank name falls back to the summary")
-            assertEquals(ProfileForm(), saved.form)
+            // Kind change and Save each rewrote the form, so the screen's fields reload: generation 0 → 1 → 2.
+            assertEquals(ProfileForm(generation = 2), saved.form)
         }
     }
 

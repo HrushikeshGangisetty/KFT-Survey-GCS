@@ -98,10 +98,17 @@ class PlanViewModel(
         }
     }
 
-    fun onMarkerClick(id: String) = edit.update { e ->
-        val (kind, g, i) = parseMarker(id) ?: return@update e
-        val selected = e.copy(selectedGroup = g, lastEdit = null)
-        if (kind == "wp") selected.selectRow(i) else selected.copy(selectedItem = i, form = null)
+    /** A waypoint or corner: select it. A start-corner option (shown only on the selected survey): start there. */
+    fun onMarkerClick(id: String) {
+        val (kind, g, i) = parseMarker(id) ?: return
+        if (kind == "entry") {
+            EntryCorner.entries.getOrNull(i)?.let(::onEntrySelected)
+            return
+        }
+        edit.update { e ->
+            val selected = e.copy(selectedGroup = g, lastEdit = null)
+            if (kind == "wp") selected.selectRow(i) else selected.copy(selectedItem = i, form = null)
+        }
     }
 
     fun onMarkerDragged(id: String, to: LatLon) = edit.update { e ->
@@ -201,7 +208,7 @@ class PlanViewModel(
 
     override fun onOrientationSelected(orientation: CameraOrientation) = editSurvey(null) { s, _ -> s.copy(orientation = orientation) }
 
-    override fun onEntrySelected(entry: EntryCorner) = editSurvey(null) { s, _ -> s.copy(entry = entry) }
+    fun onEntrySelected(entry: EntryCorner) = editSurvey(null) { s, _ -> s.copy(entry = entry) }
 
     override fun onReturnHomeChanged(on: Boolean) = editSurvey(null) { s, _ -> s.copy(returnHome = on) }
 

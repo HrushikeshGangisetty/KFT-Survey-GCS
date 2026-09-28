@@ -2593,3 +2593,131 @@ could break the lawnmower on east–west lines. At 90° it didn't (the direction
 - **Edge coverage at low side overlap** is fine for ours (centred lines, margins ≤ spacing/2 ≤ half a footprint at
   any overlap). Nothing to do.
 - Pass 21 was the last pass of the batch (Passes 19–21). **Stopped here, as asked.**
+
+## Pass 22 — Fixes: WGS84 flat map, start corner on the map, map colours, Links typing, Compose UI tests (2026-09-28)
+
+### What changed
+- **`core/geo/LocalProjection.kt`**: the flat map uses the WGS84 ellipsoid's two radii of curvature at the origin
+  (meridional M north–south, prime vertical N east–west) instead of one mean-earth radius. `Geodesy` (haversine)
+  stays spherical; its KDoc now says survey geometry doesn't use it.
+- **`core/planning/SurveyGrid.kt`**: new `entryCornerPositions(polygon, gridAngle, outset)`: the four corners of the
+  area's extent in the grid frame, one per `EntryCorner`.
+- **`feature/plan`**: the start corner is chosen on the map. `PlanUiState` adds four start markers to the selected
+  survey (chosen: large white; the others: small grey, tappable) and `SurveyPanel.startCorner` ("north-east").
+  `PlanViewModel.onMarkerClick` handles `entry-<group>-<corner>` ids. `PlanScreen` loses the schematic
+  (`StartCornerPicker`) and says in words which corner it is. `onEntrySelected` left `PlanActions` (only the map
+  calls it now).
+- **`ui/map`**: two marker styles, `START_OPTION` and `START_CORNER`. `TURN` and `TRANSIT` routes are light grey
+  (`MapColors.NEUTRAL`) on a dark casing, faded (turns) and dashed (transit); photo lines stay cyan.
+  `CasedLine` gained `opacity` and `dashed`.
+- **`feature/connections`**: the New profile fields keep their own text (`OwnTextField`), like the Params fields.
+  `ProfileForm.generation` tells them when the ViewModel rewrote the form (new link kind, after Save).
+- **Compose UI tests** (`jvmTest`, headless, in `./gradlew check`): `ConnectionsUiTest`, `PlanUiTest` (2),
+  `ParamsUiTest`. New catalog entry `compose-ui-test` (`org.jetbrains.compose.ui:ui-test`, same version as Compose,
+  no version bump). The three feature modules get it plus `compose.desktop.currentOs` for `jvmTest`. The test JVM
+  gets `--enable-native-access=ALL-UNNAMED`, as the desktop app does (Skia loads native code). The test fakes
+  became `internal` (Plan's moved to `PlanFakes.kt`) so the UI tests share them.
+- Tests updated for the new projection: `LocalProjectionTest` (rewritten), the equator helpers in `SurveyGridTest`,
+  `SurveyTest`, `MissionGroupsTest`, and the spacing tolerance in `QgcParityTest`.
+
+### How it works
+**Projection.** At the origin latitude φ₀, with w = 1 − e²·sin²φ₀:
+```
+M = a(1 − e²) / w^1.5      y = M · Δlat (radians)
+N = a / √w                 x = N · cos φ₀ · Δlon (radians)
+```
+Both scales are exact at the origin. The old single radius (6 371 008.8 m) was 0.22 % long north–south and 0.22 %
+short east–west at 35° S, which skews diagonals. Everything that plans a survey goes through this one class, so
+nothing else changed.
+
+**Start corner.**
+```
+selected survey with a plan ──▶ entryCornerPositions(polygon, grid angle, outset = spacing/2)
+    ──▶ 4 markers: chosen = START_CORNER (white, not clickable), others = START_OPTION (grey, clickable)
+tap a grey one ──▶ App() ──▶ PlanViewModel.onMarkerClick("entry-g-c") ──▶ onEntrySelected ──▶ undoable edit
+    ──▶ re-plan ──▶ "S" moves to the new first point; panel: "Starts at the north-east corner"
+```
+The markers sit at the corners of the area's extent in the grid frame, half a line spacing out. That's what
+`EntryCorner` means, and it gives each choice its own spot.
+
+**Links fields.** A field shows its own text and reports each key. It re-reads the ViewModel's text only when
+`generation` changes.
+
+### Engineering learnings
+- **Two radii, not one.** An ellipsoid has a different radius of curvature north–south (M) and east–west (N). One
+  mean radius is right on average and wrong in both directions at any real latitude. Measured in QGC's exact
+  tangent plane, our 45 m line spacing is now off by at most 1.2 mm on the field-sized areas (was up to 0.5 %). On
+  the 5 × 3 km block it's 42 mm, because the scale drifts away from the map's centre. That's the documented limit of
+  a flat map, now about 5× smaller.
+- **Test helpers use published values, not the code.** The equator helpers are M(0)·π/180 = 110 574.28 m and
+  N(0)·π/180 = 111 319.49 m per degree, the values in the standard "length of a degree" tables.
+  `LocalProjectionTest` checks those tables at 0° and 60°. It also checks the north–south scale against the true
+  meridian arc, integrated with Simpson's rule in the test (0.9 mm off over 1.1 km, as the formula predicts).
+- **The first start-corner design was right on paper and wrong on screen.** Placing each option at that entry's
+  first photo is exact. But with a slanted edge the outermost line is a sliver, so "top-left" and "bottom-left"
+  landed a few metres apart, both near one vertex. The run in the app showed it; the unit test didn't. The
+  grid-frame extent fixes it, and "S" still shows the true first point.
+- **The chosen start isn't yellow.** Yellow already means "selected corner handle", and a freshly added corner sat
+  next to it on screen. The chosen start is white, like the S/E labels it belongs with.
+- **Why fields keep their own text (again).** A `TextField` whose value comes back through a `StateFlow` can get an
+  older value after newer keys. **The UI test proves it:** it holds the screen on a stale state while the host is
+  typed key by key. With the old field put back, the saved host is `"1"`; with the fix it's `192.168.4.1`.
+- **Why the stale-state trick, not a paused dispatcher.** The first try paused `Dispatchers.Main` between keys.
+  The desktop Compose test harness then never went idle and the run hung. Freezing the state handed to the screen
+  models the same lag without touching the harness.
+- **Compose UI tests live in `jvmTest`, not `commonTest`.** `runComposeUiTest` on the Android host would need
+  Robolectric. The desktop one renders off screen with Skia, so it runs headless in `check`. The tests drive the
+  real screen and ViewModel against the existing fakes. The map isn't in them (`App()` owns it), so map clicks go
+  straight to `onMapClick`, as `App()` does.
+- **Ponytail review:** one shrink applied (`compassWord` no longer re-normalises a bearing that is already in
+  [0, 360)). The three identical `jvmTest` blocks are kept: a convention plugin would add UI-test dependencies to
+  modules that have no UI tests.
+
+### What to look at
+1. `core/geo/src/commonMain/kotlin/com/kft/gcs/core/geo/LocalProjection.kt`: the `init` block (M and N).
+2. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanUiState.kt`: `starts` and the start markers in
+   `buildPlanUiState`.
+3. `feature/connections/src/jvmTest/kotlin/com/kft/gcs/feature/connections/ConnectionsUiTest.kt`: the `frozen`
+   state (how a UI test reproduces the keystroke race).
+
+### Tests
+- `LocalProjectionTest` (5): the equator and 60° against the published per-degree lengths; the meridian arc at CMAC;
+  round trip; antimeridian (0.2° = 22 263.9 m).
+- `SurveyGridTest.entryCornerPositionsAreTheAreasCornersInTheGridFrame`: by hand, at 0°, at 90° (bottom-left =
+  north-west), and with a 10 m outset.
+- `PlanViewModelTest.startCornerIsPickedOnTheMap`: 3 options + 1 chosen; south-west outside the area; tapping the
+  north-east option gives `TOP_RIGHT` and "north-east"; undo puts it back. Also `compassWords`.
+- `QgcParityTest`: our spacing on the ground within 5 cm of QGC's (was 0.5 %).
+- UI tests (desktop JVM, headless):
+  - `ConnectionsUiTest.createAndSaveAConnectionProfile`: a TCP profile typed while the screen state is stale; the
+    exact config is saved and listed, and the form is empty again. It fails on the old field (host `"1"`).
+  - `PlanUiTest.addASurveyAndEditAltitudeAndOverlap`: 80 m and 60 % typed; the GSD readout and the pinned line
+    spacing change.
+  - `PlanUiTest.undoAndRedoFromTheToolbar`: two edits, two undos back to 50 m / 80 %, one redo to 80 m; the field
+    follows.
+  - `ParamsUiTest.editAParameterThroughADropdown`: Download, CAM1_TYPE, "1 · Servo", Set, the restart question,
+    Confirm. Exactly one write (1.0), and the row shows "1 · Servo".
+- **App run (desktop, done by me):** a slanted 4-corner survey on the street map and on Esri satellite.
+  - Photo lines are cyan with arrows. Turns are grey on a dark casing: readable on both maps, fainter on bright
+    desert imagery.
+  - Four start options, one at each corner. Tapping north-east moved "S" and changed the panel text.
+  - There was no vehicle, so there was no transit leg (dashed) on screen; it uses the same casing.
+- `gradlew.bat check`: passes. No new compiler warnings (still the old `HttpMetadataSource` URL constructor and
+  `PlanViewModel` `!!`).
+
+### Safety
+Nothing about transmission changed: no gateway, allowlist or protocol edits. The planned geometry moves a little.
+At 35° S, spacing and trigger positions on the ground now match their nominal values to millimetres instead of
+±0.2 %, so uploaded missions differ from Pass 21's by at most about 0.2 % of their size. Optional SITL re-check:
+`uploadCopterFarEdgeField`, then photo_check. Expected: still 54 / 54 photos, offsets from the lines unchanged
+within GPS noise.
+
+### Open questions / next
+- **Transit style not seen on screen** (no vehicle, so no home). Check it in the next SITL session.
+- **Grey turns on bright imagery** are readable but faint. If field feedback says so, raise the turn opacity
+  (`MapView.kt`, `route-turn`).
+- **Plane start options** sit at the area's corners, while "S" is up to 4 turn radii out (the first lead-in).
+  That's intended; worth a look in the next plane run.
+- The UI tests cover the four flows asked for. Next candidates: deleting a survey corner, the upload preview, and
+  opening a file.
+- Pass 22 was a single fix pass. **Stopped here, as asked.**

@@ -345,6 +345,30 @@ internal fun requireSurveyablePolygon(polygon: List<LatLon>) {
     require(polygonAreaM2(polygon) > 1e-3) { "the area has no size: its corners are on one line" }
 }
 
+/**
+ * The four corners of [polygon]'s bounding box in the grid frame, one per [EntryCorner], pushed [outsetM] metres
+ * further out on both axes. These are the places to tap to choose where a survey starts: every entry corner has its
+ * own, even where the area's first line is a short sliver (a slanted edge) and several entries start close together.
+ * At grid angle 0 they're the south-west, south-east, north-west and north-east corners of the area's extent.
+ */
+fun entryCornerPositions(polygon: List<LatLon>, gridAngleDeg: Double, outsetM: Double = 0.0): Map<EntryCorner, LatLon> {
+    requireSurveyablePolygon(polygon)
+    val projection = projectionFor(polygon)
+    val frame = GridFrame(gridAngleDeg)
+    val corners = polygon.map { frame.toGrid(projection.toLocal(it)) }
+    val left = corners.minOf { it.across } - outsetM
+    val right = corners.maxOf { it.across } + outsetM
+    val bottom = corners.minOf { it.along } - outsetM
+    val top = corners.maxOf { it.along } + outsetM
+    fun at(across: Double, along: Double) = projection.toLatLon(frame.fromGrid(across, along))
+    return mapOf(
+        EntryCorner.BOTTOM_LEFT to at(left, bottom),
+        EntryCorner.BOTTOM_RIGHT to at(right, bottom),
+        EntryCorner.TOP_LEFT to at(left, top),
+        EntryCorner.TOP_RIGHT to at(right, top),
+    )
+}
+
 /** Centred on the corners' average, so no corner is far from where the flat map is most exact. */
 private fun projectionFor(polygon: List<LatLon>) =
     LocalProjection(LatLon(polygon.sumOf { it.latitude } / polygon.size, polygon.sumOf { it.longitude } / polygon.size))

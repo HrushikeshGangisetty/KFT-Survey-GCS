@@ -28,7 +28,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 
 /** A vehicle in memory. [locked] parameters keep their value, like a locked KFT parameter. Records every set. */
-private class FakeParamRepository : ParamRepository {
+internal class FakeParamRepository : ParamRepository {
     val vehicle = mutableMapOf(
         "CAM1_TYPE" to Param("CAM1_TYPE", 0f, ParamType.INT8, 0),
         "SERVO9_FUNCTION" to Param("SERVO9_FUNCTION", 0f, ParamType.INT16, 1),
@@ -50,7 +50,7 @@ private class FakeParamRepository : ParamRepository {
     }
 }
 
-private class FakeFiles : ParamFiles {
+internal class FakeFiles : ParamFiles {
     var saved: Pair<String, String>? = null
     var toOpen: Pair<String, String>? = null
     override suspend fun save(suggestedName: String, text: String): String { saved = suggestedName to text; return suggestedName }
@@ -58,7 +58,7 @@ private class FakeFiles : ParamFiles {
 }
 
 /** Our own small metadata (names match the fake vehicle; texts are ours). JSON served at master, XML in the archive. */
-private val META_JSON = """
+internal val META_JSON = """
 {"json": {"version": 0},
  "CAM1": {"CAM1_TYPE": {"DisplayName": "Camera trigger", "Description": "How the camera trigger works", "RebootRequired": "True",
                         "Values": {"0": "None", "1": "Servo", "2": "Relay"}}},
@@ -73,7 +73,7 @@ private val META_XML = """<paramfile><libraries><parameters name="CAM1_">
 </parameters></libraries></paramfile>"""
 
 /** autotest.ardupilot.org in memory: [files] by URL (absent = 404), or no network at all. Records every download. */
-private class FakeMetadataSource : MetadataSource {
+internal class FakeMetadataSource : MetadataSource {
     val files = mutableMapOf<String, String>()
     val saved = mutableMapOf<String, String>()
     val downloads = mutableListOf<String>()

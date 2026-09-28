@@ -91,8 +91,8 @@ fun MapView(
     remember { configureRuntimeOnce }
     // The gesture code below is set up once per map, so it reads the latest markers and callbacks through these.
     val markers by rememberUpdatedState(overlays.filterIsInstance<MapOverlay.Marker>())
-    // What a press can grab: every marker except the S/E labels.
-    val grabbable by rememberUpdatedState(markers.filter { it.style != MarkerStyle.START && it.style != MarkerStyle.END })
+    // What a press can grab: every marker except the S/E labels and the chosen start corner (tapping it changes nothing).
+    val grabbable by rememberUpdatedState(markers.filter { it.style !in NOT_GRABBABLE })
     val lineArrow = rememberVectorPainter(LineArrow)
     val mapClick by rememberUpdatedState(onMapClick)
     val markerClick by rememberUpdatedState(onMarkerClick)
@@ -130,14 +130,10 @@ fun MapView(
         // the plan, the flown path must show on top of the planned one.
         val routes = overlays.filterIsInstance<MapOverlay.Route>()
         fun routeSource(style: RouteStyle) = GeoJsonData.JsonString(routeGeoJson(routes.filter { it.style == style }))
-        LineLayer(
-            id = "route-turn", source = rememberGeoJsonSource(routeSource(RouteStyle.TURN)), color = const(MapColors.ROUTE),
-            width = const(1.5.dp), opacity = const(0.55f), cap = const(LineCap.Round), join = const(LineJoin.Round),
-        )
-        LineLayer(
-            id = "route-transit", source = rememberGeoJsonSource(routeSource(RouteStyle.TRANSIT)), color = const(MapColors.ROUTE),
-            width = const(2.5.dp), dasharray = const(listOf(2, 1.5)),
-        )
+        // Camera-off flight is neutral grey, so the cyan left on the map is exactly where photos are taken. Grey alone
+        // disappears on the pale street map, so both keep a dark casing, faded like the line itself.
+        CasedLine("route-turn", rememberGeoJsonSource(routeSource(RouteStyle.TURN)), MapColors.NEUTRAL, 1.5.dp, opacity = 0.6f)
+        CasedLine("route-transit", rememberGeoJsonSource(routeSource(RouteStyle.TRANSIT)), MapColors.NEUTRAL, 2.dp, opacity = 0.8f, dashed = true)
         CasedLine("route-plan", rememberGeoJsonSource(routeSource(RouteStyle.PLAN)), MapColors.ROUTE, 3.dp)
         val photoLines = rememberGeoJsonSource(routeSource(RouteStyle.PHOTO))
         CasedLine("route-photo", photoLines, MapColors.ROUTE, 4.dp)
@@ -177,8 +173,9 @@ fun MapView(
                 // Corners are handles, not numbered stops: smaller, so a dense polygon doesn't hide its own outline.
                 radius = const(
                     when (style) {
-                        MarkerStyle.CORNER -> CORNER_RADIUS
+                        MarkerStyle.CORNER, MarkerStyle.START_OPTION -> CORNER_RADIUS
                         MarkerStyle.START, MarkerStyle.END -> LABEL_RADIUS
+                        MarkerStyle.START_CORNER -> MARKER_RADIUS
                         else -> MARKER_RADIUS
                     },
                 ),
@@ -269,6 +266,7 @@ private val MARKER_HIT_RADIUS = 24.dp
 private val MARKER_RADIUS = 11.dp
 private val CORNER_RADIUS = 7.dp
 private val LABEL_RADIUS = 9.dp
+private val NOT_GRABBABLE = setOf(MarkerStyle.START, MarkerStyle.END, MarkerStyle.START_CORNER)
 
 /**
  * Overlay colours. The same in every app theme, because the map underneath doesn't change with the theme, and never
@@ -279,7 +277,8 @@ private val LABEL_RADIUS = 9.dp
  */
 private object MapColors {
     val OUTLINE = Color(0xE6101010)
-    val ROUTE = Color(0xFF00E5FF) // cyan: the planned path
+    val ROUTE = Color(0xFF00E5FF) // cyan: the planned path, and the survey lines with the camera on
+    val NEUTRAL = Color(0xFFD0D0D0) // light grey: survey flight with the camera off (lead-ins, turns) and transit
     val TRACK = Color(0xFFFF40C8) // magenta: the path already flown, never mistaken for the plan
     val AREA = Color(0xFFFF9100) // orange: survey areas and their corner handles
     val PHOTO = Color(0xFF76FF03) // lime: photo positions
@@ -296,17 +295,29 @@ private val MarkerStyle.color
         MarkerStyle.CURRENT -> MapColors.TRACK
         MarkerStyle.CORNER -> MapColors.AREA
         MarkerStyle.START, MarkerStyle.END -> Color.White
+        MarkerStyle.START_OPTION -> MapColors.NEUTRAL
+        // White like "S": it's the survey's start. Not yellow, which already means "the selected corner handle".
+        MarkerStyle.START_CORNER -> Color.White
     }
 
 /**
  * A line with a thin dark outline. MapLibre lines have no stroke, so the outline is a second line 2 dp wider, drawn
- * first ("casing", as road maps do it). Both read the same source.
+ * first ("casing", as road maps do it). Both read the same source. [dashed] dashes the line but not the casing, so a
+ * dashed line reads as grey dashes on a dark track, on any basemap.
  */
 @Composable
 @MaplibreComposable
-private fun CasedLine(id: String, source: GeoJsonSource, color: Color, width: Dp) {
-    LineLayer(id = "$id-casing", source = source, color = const(MapColors.OUTLINE), width = const(width + 2.dp), cap = const(LineCap.Round), join = const(LineJoin.Round))
-    LineLayer(id = id, source = source, color = const(color), width = const(width), cap = const(LineCap.Round), join = const(LineJoin.Round))
+private fun CasedLine(id: String, source: GeoJsonSource, color: Color, width: Dp, opacity: Float = 1f, dashed: Boolean = false) {
+    LineLayer(
+        id = "$id-casing", source = source, color = const(MapColors.OUTLINE), width = const(width + 2.dp), opacity = const(opacity),
+        cap = const(LineCap.Round), join = const(LineJoin.Round),
+    )
+    if (dashed) {
+        // A dash array is in line widths: 2 on, 1.5 off.
+        LineLayer(id = id, source = source, color = const(color), width = const(width), opacity = const(opacity), dasharray = const(listOf(2, 1.5)))
+    } else {
+        LineLayer(id = id, source = source, color = const(color), width = const(width), opacity = const(opacity), cap = const(LineCap.Round), join = const(LineJoin.Round))
+    }
 }
 
 /**

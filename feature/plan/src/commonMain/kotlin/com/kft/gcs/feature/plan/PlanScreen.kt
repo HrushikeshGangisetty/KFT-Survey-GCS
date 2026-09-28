@@ -1,6 +1,5 @@
 package com.kft.gcs.feature.plan
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,7 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -44,17 +42,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.CameraOrientation
-import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.ui.design.ConfirmDialog
 import com.kft.gcs.ui.design.KftIcons
 import com.kft.gcs.ui.design.KftTheme
@@ -89,7 +80,6 @@ interface PlanActions {
     fun onHeightModeSelected(mode: HeightMode)
     fun onCameraSelected(name: String)
     fun onOrientationSelected(orientation: CameraOrientation)
-    fun onEntrySelected(entry: EntryCorner)
     fun onReturnHomeChanged(on: Boolean)
     fun onCameraSaved(camera: Camera)
     fun onCameraDeleted(name: String)
@@ -276,7 +266,7 @@ private fun WaypointEditor(state: PlanUiState, actions: PlanActions) {
 
 /**
  * The survey panel, in collapsible sections in the order an operator decides things: camera, height, overlaps and
- * angle, flight, start corner, then the rarely touched battery and GSD limits (collapsed at first). Problems come
+ * angle, flight, start corner (chosen on the map), then the rarely touched battery and GSD limits (collapsed at first). Problems come
  * first, above the sections, so they're seen without scrolling. The stats are the panel's pinned footer.
  */
 @Composable
@@ -317,8 +307,13 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
             Text("Return to launch at the end (mission item)", style = MaterialTheme.typography.bodySmall)
         }
     }
+    // Chosen on the map (the corners of the area); the panel only says which one it is.
     Section("Start corner") {
-        StartCornerPicker(s.entry, actions::onEntrySelected, Modifier.align(Alignment.CenterHorizontally))
+        Text(
+            panel.startCorner?.let { "Starts at the $it corner (highlighted on the map). Tap a grey dot at another corner to start there." }
+                ?: "Add the area's corners first.",
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
     Section("Battery & limits (kept between runs)", startExpanded = false) {
         OptionalNumberField(if (panel.isPlane) "Plane battery, usable" else "Copter battery, usable", "min", panel.batteryMinutes, actions::onBatteryMinutesChanged, Modifier.fillMaxWidth())
@@ -409,63 +404,6 @@ private fun StatsFooter(stats: List<Pair<String, String>>) {
             }
         }
     }
-}
-
-/**
- * The start corner as a picture of what it means: a small area with the flight pattern drawn from the chosen corner
- * (first line up from it, then back and forth). Tap a corner to choose it. Schematic, in the grid's own frame: "up"
- * is along the grid angle and "bottom left" is [EntryCorner.BOTTOM_LEFT] (the south-west corner at grid angle 0).
- * Each corner is a 48 dp target.
- */
-@Composable
-private fun StartCornerPicker(selected: EntryCorner, onSelect: (EntryCorner) -> Unit, modifier: Modifier = Modifier) {
-    val line = MaterialTheme.colorScheme.primary
-    val frame = MaterialTheme.colorScheme.outline
-    Box(modifier.size(width = 200.dp, height = 128.dp)) {
-        Canvas(Modifier.fillMaxSize().padding(MinTouchTarget / 2)) {
-            drawRect(frame, style = Stroke(1.dp.toPx()))
-            val left = selected == EntryCorner.BOTTOM_LEFT || selected == EntryCorner.TOP_LEFT
-            val bottom = selected == EntryCorner.BOTTOM_LEFT || selected == EntryCorner.BOTTOM_RIGHT
-            val columns = 5
-            val xs = List(columns) { size.width * (it + 0.5f) / columns }.let { if (left) it else it.reversed() }
-            val (startY, endY) = if (bottom) size.height to 0f else 0f to size.height
-            val path = Path().apply {
-                moveTo(xs[0], startY)
-                xs.forEachIndexed { i, x ->
-                    val (from, to) = if (i % 2 == 0) startY to endY else endY to startY
-                    if (i > 0) lineTo(x, from)
-                    lineTo(x, to)
-                }
-            }
-            drawPath(path, line, style = Stroke(2.dp.toPx()))
-            EntryCorner.entries.forEach { corner ->
-                val c = cornerOffset(corner, size.width, size.height)
-                if (corner == selected) drawCircle(line, radius = 7.dp.toPx(), center = c)
-                else drawCircle(frame, radius = 6.dp.toPx(), center = c, style = Stroke(1.5.dp.toPx()))
-            }
-        }
-        EntryCorner.entries.forEach { corner ->
-            Box(
-                Modifier.align(
-                    when (corner) {
-                        EntryCorner.BOTTOM_LEFT -> Alignment.BottomStart
-                        EntryCorner.BOTTOM_RIGHT -> Alignment.BottomEnd
-                        EntryCorner.TOP_LEFT -> Alignment.TopStart
-                        EntryCorner.TOP_RIGHT -> Alignment.TopEnd
-                    },
-                ).size(MinTouchTarget)
-                    .selectable(selected = corner == selected, role = Role.RadioButton, onClick = { onSelect(corner) })
-                    .semantics { contentDescription = "Start ${corner.name.lowercase().replace('_', ' ')}" },
-            )
-        }
-    }
-}
-
-private fun cornerOffset(corner: EntryCorner, w: Float, h: Float) = when (corner) {
-    EntryCorner.BOTTOM_LEFT -> Offset(0f, h)
-    EntryCorner.BOTTOM_RIGHT -> Offset(w, h)
-    EntryCorner.TOP_LEFT -> Offset(0f, 0f)
-    EntryCorner.TOP_RIGHT -> Offset(w, 0f)
 }
 
 /**

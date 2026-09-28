@@ -44,7 +44,11 @@ enum class LinkKind(val label: String, val defaultPort: Int) {
     SERIAL("Serial", 0), // no network port: a serial profile picks a device and a baud rate instead
 }
 
-/** The "new profile" form. Fields are raw text so the user can type freely; [error] shows why Save was refused. */
+/**
+ * The "new profile" form. Fields are raw text so the user can type freely; [error] shows why Save was refused.
+ * @property generation goes up whenever the ViewModel itself rewrites the text (a new link kind resets the port, Save
+ *   empties the form). The screen's text fields keep their own text and reload it from here only then.
+ */
 data class ProfileForm(
     val kind: LinkKind = LinkKind.UDP_LISTEN,
     val name: String = "",
@@ -54,6 +58,7 @@ data class ProfileForm(
     val serialPort: String = "",
     val baud: Int = 57600,
     val error: String? = null,
+    val generation: Int = 0,
 ) {
     val needsHost: Boolean get() = kind == LinkKind.UDP_CLIENT || kind == LinkKind.TCP
     val isSerial: Boolean get() = kind == LinkKind.SERIAL

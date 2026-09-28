@@ -1,10 +1,13 @@
 package com.kft.gcs.feature.plan
 
 import androidx.compose.runtime.Immutable
+import com.kft.gcs.core.geo.Geodesy
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.planning.SurveyLimits
 import com.kft.gcs.core.planning.SurveyWarning
+import com.kft.gcs.core.planning.entryCornerPositions
 import com.kft.gcs.core.mission.MissionCommand
 import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.MissionSyncState
@@ -72,6 +75,8 @@ data class SurveyPanel(
     val cornerSelected: Boolean,
     val batteryMinutes: Double?,
     val maxGsdCm: Double?,
+    /** "south-west": where the chosen start corner is, as seen on the map; null until the survey can be planned. */
+    val startCorner: String?,
 )
 
 data class CameraChoice(val name: String, val unverified: Boolean, val custom: Boolean)
@@ -98,15 +103,16 @@ internal data class PlanEdit(
     val preview: UploadPreview? = null,
 )
 
-/** Marker ids for the map: the group index and the row or corner index. */
+/** Marker ids for the map: the group index and the row, corner or [EntryCorner] index. */
 internal const val HOME_MARKER = "home"
 internal fun markerId(group: Int, index: Int) = "wp-$group-$index"
 internal fun cornerId(group: Int, index: Int) = "corner-$group-$index"
+internal fun entryId(group: Int, entry: EntryCorner) = "entry-$group-${entry.ordinal}"
 
 /** (kind, group, index) from a marker id, or null for home or a foreign id. */
 internal fun parseMarker(id: String): Triple<String, Int, Int>? {
     val parts = id.split('-')
-    if (parts.size != 3 || parts[0] !in setOf("wp", "corner")) return null
+    if (parts.size != 3 || parts[0] !in setOf("wp", "corner", "entry")) return null
     return Triple(parts[0], parts[1].toIntOrNull() ?: return null, parts[2].toIntOrNull() ?: return null)
 }
 
@@ -126,6 +132,11 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
     val flying = vehicle.mission?.takeIf { !it.complete }?.current
     val home = vehicle.home?.position
     val selected = e.selectedGroup?.let(flat.groups::getOrNull)
+    val surveyGroup = selected?.group as? SurveyGroup
+    val starts = selected?.plan?.let { plan ->
+        // Half a line spacing out: off the corner handles, and scaled to the survey like everything else on it.
+        surveyGroup?.let { entryCornerPositions(it.survey.polygon, it.survey.gridAngleDeg, outsetM = plan.lineSpacingM / 2) }
+    } ?: emptyMap()
     // "AUTO", not "Auto": the warning names the mode the way the pilot's OSD and MAVProxy show it.
     val armedIn = if (vehicle.connected && vehicle.armed) "Vehicle is ARMED in ${vehicle.flightMode?.uppercase() ?: "an unknown mode"}" else null
 
@@ -158,6 +169,11 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
                         val style = if (i == e.selectedItem) MarkerStyle.SELECTED else MarkerStyle.CORNER
                         add(MapOverlay.Marker(cornerId(g, i), at, "", style, draggable = true))
                     }
+                    // The start corner is chosen on the map: the chosen one highlighted, the others tappable.
+                    if (g == e.selectedGroup) starts.forEach { (entry, at) ->
+                        val style = if (entry == group.survey.entry) MarkerStyle.START_CORNER else MarkerStyle.START_OPTION
+                        add(MapOverlay.Marker(entryId(g, entry), at, "", style))
+                    }
                 }
             }
         }
@@ -178,14 +194,13 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
         else -> SyncUi("Not uploaded", true)
     }
 
-    val surveyGroup = selected?.group as? SurveyGroup
     return PlanUiState(
         groups = flat.groups.mapIndexed { i, fg ->
             GroupHeader(i, fg.group.name, if (fg.group is SurveyGroup) "Survey" else "Waypoints", groupSummary(fg, kind), i == e.selectedGroup)
         },
         rows = rows,
         form = e.form,
-        survey = surveyGroup?.let { surveyPanel(it, selected, e.selectedItem, kind, settings) },
+        survey = surveyGroup?.let { surveyPanel(it, selected, e.selectedItem, kind, settings, starts[it.survey.entry]) },
         overlays = overlays,
         transfer = e.transfer,
         canUpload = !busy && vehicle.connected && flat.items.isNotEmpty(),
@@ -197,7 +212,7 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
             !vehicle.connected -> "No vehicle: plan now, connect on Links to upload."
             selected == null -> "Add a group: + Waypoints or + Survey."
             surveyGroup != null && surveyGroup.survey.polygon.size < 3 -> "Click the map to add the area's corners (at least 3)."
-            surveyGroup != null -> "Click the map to add a corner, drag one to move it."
+            surveyGroup != null -> "Click the map to add a corner, drag one to move it. Tap a grey dot to start there."
             rows.isEmpty() -> "Click the map to add waypoints."
             else -> "Drag a numbered marker to move it. Click one to edit it."
         },
@@ -273,7 +288,7 @@ internal fun uploadPreview(e: PlanEdit, vehicle: VehicleState, settings: PlanSet
     return UploadPreview(lines, warnings)
 }
 
-private fun surveyPanel(group: SurveyGroup, flat: FlatGroup, selectedItem: Int?, kind: VehicleKind?, settings: PlanSettings): SurveyPanel {
+private fun surveyPanel(group: SurveyGroup, flat: FlatGroup, selectedItem: Int?, kind: VehicleKind?, settings: PlanSettings, start: LatLon?): SurveyPanel {
     val plan = flat.plan
     val s = group.survey
     val stats = plan?.let { p ->
@@ -302,8 +317,17 @@ private fun surveyPanel(group: SurveyGroup, flat: FlatGroup, selectedItem: Int?,
         cornerSelected = selectedItem != null && selectedItem in s.polygon.indices,
         batteryMinutes = settings.batteryMinutes[kind.orCopter()],
         maxGsdCm = settings.maxGsdCm,
+        startCorner = start?.let { compassWord(Geodesy.initialBearingDeg(centroid(s.polygon), it)) },
     )
 }
+
+/** The mean corner: good enough as "the middle" of a survey area to say which way a corner lies from it. */
+private fun centroid(polygon: List<LatLon>) = LatLon(polygon.sumOf { it.latitude } / polygon.size, polygon.sumOf { it.longitude } / polygon.size)
+
+private val COMPASS = listOf("north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west")
+
+/** A bearing in [0, 360) as one of 8 compass words; each covers ±22.5° around its direction. */
+internal fun compassWord(bearingDeg: Double) = COMPASS[((bearingDeg + 22.5) / 45).toInt() % 8]
 
 internal fun warningText(w: SurveyWarning): String = when (w) {
     is SurveyWarning.PhotoIntervalTooShort ->
