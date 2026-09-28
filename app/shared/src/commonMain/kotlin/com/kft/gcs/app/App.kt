@@ -46,6 +46,8 @@ import com.kft.gcs.feature.fly.FlyViewModel
 import com.kft.gcs.feature.params.ParamsRoute
 import com.kft.gcs.feature.plan.PlanRoute
 import com.kft.gcs.feature.plan.PlanViewModel
+import com.kft.gcs.feature.settings.OfflineMapsRoute
+import com.kft.gcs.feature.settings.OfflineMapsViewModel
 import com.kft.gcs.ui.design.KftIcons
 import com.kft.gcs.ui.design.KftLogo
 import com.kft.gcs.ui.design.KftNavigationRail
@@ -101,17 +103,21 @@ interface ThemeStore {
  * second Fly→Links), so screens never own a map: Fly and Plan hand their overlays and callbacks to this one, and
  * Links covers it with an opaque Surface.
  *
- * Both map ViewModels are created here, at window scope, and passed to their routes, so the map and the panels read
- * the same instance. The plan's route and markers show on the Fly view too, but only the Plan tab can edit them.
+ * The map ViewModels (Fly, Plan, Maps) are created here, at window scope, and passed to their routes, so the map and
+ * the panels read the same instance. The plan's route and markers show on the Fly view too, but only the Plan tab
+ * can edit them. The Maps tab adds its downloaded areas' outlines and hears where the map is looking.
  */
 @Composable
 private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modifier: Modifier) {
     val fly: FlyViewModel = koinViewModel()
     val plan: PlanViewModel = koinViewModel()
+    val maps: OfflineMapsViewModel = koinViewModel()
+    val mapsState by maps.state.collectAsStateWithLifecycle()
     val flyState by fly.state.collectAsStateWithLifecycle()
     val planState by plan.state.collectAsStateWithLifecycle()
     val current by nav.currentBackStackEntryAsState()
     val planning = current?.destination?.route == Destination.PLAN.route
+    val mapsTab = current?.destination?.route == Destination.MAPS.route
 
     // The Plan tab's undo/redo keys; the desktop window calls this for every key press (see KeyShortcuts).
     SideEffect { shortcuts.handler = { planning && planShortcut(it, plan) } }
@@ -119,17 +125,19 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
         MapView(
             Modifier.fillMaxSize(),
             basemap = flyState.selectedBasemap,
-            overlays = planState.overlays + flyState.overlays,
+            overlays = (if (mapsTab) mapsState.overlays else emptyList()) + planState.overlays + flyState.overlays,
             cameraRequest = flyState.cameraRequest,
             onMapClick = if (planning) plan::onMapClick else null,
             onMarkerClick = if (planning) plan::onMarkerClick else null,
             onMarkerDrag = if (planning) plan::onMarkerDragged else null,
             onMarkerDragEnd = if (planning) { _ -> plan.onMarkerDragFinished() } else null,
+            onViewChanged = maps::onViewChanged,
         )
         NavHost(nav, startDestination = START.route) {
             // Fly and Plan draw only their panels; where they draw nothing, input falls through to the map.
             composable(Destination.FLY.route) { FlyRoute(fly) }
             composable(Destination.PLAN.route) { PlanRoute(plan) }
+            composable(Destination.MAPS.route) { OfflineMapsRoute(maps) }
             // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
             composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute() } }
@@ -166,13 +174,14 @@ internal enum class Destination(val route: String, val label: String) {
     FLY("fly", "Fly"),
     PLAN("plan", "Plan"),
     PARAMS("params", "Params"),
+    MAPS("maps", "Maps"),
     CONNECTIONS("connections", "Links"),
 }
 
 /** The Fly view first, like every GCS: the map is what you want to see when the app opens. */
 private val START = Destination.FLY
 
-/** The rail: logo, the four tabs, and at the bottom the theme menu and About (which holds the version). */
+/** The rail: logo, the tabs, and at the bottom the theme menu and About (which holds the version). */
 @Composable
 private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (ThemeMode) -> Unit) {
     val current by nav.currentBackStackEntryAsState()
@@ -186,6 +195,7 @@ private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (
                     Destination.FLY -> KftIcons.Fly
                     Destination.PLAN -> KftIcons.Plan
                     Destination.PARAMS -> KftIcons.Params
+                    Destination.MAPS -> KftIcons.Maps
                     Destination.CONNECTIONS -> KftIcons.Link
                 },
                 selected = current?.destination?.route == destination.route,

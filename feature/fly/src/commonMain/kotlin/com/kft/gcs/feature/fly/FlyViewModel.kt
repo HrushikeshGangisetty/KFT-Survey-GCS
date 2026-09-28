@@ -22,31 +22,32 @@ import kotlinx.coroutines.launch
  * The Fly view: vehicle on the map, HUD, basemap choice. Monitoring only, by design: the pilot arms, takes
  * off, changes mode and lands on the RC, never from the GCS (spec S9), so this screen has no flight-action buttons.
  *
- * @param basemaps what this build can show; passed in (not read from the platform here) so tests are deterministic.
+ * @param basemaps what this device can show: the built-in maps, then imported MBTiles files, which come and go while
+ *   the app runs (the Maps tab). Passed in, not read from the platform here, so tests are deterministic.
  * @param sync the Plan tab's plan next to what the vehicle holds, for the "≠ plan" warning.
  */
 class FlyViewModel(
     private val vehicles: VehicleRepository,
-    private val basemaps: List<TileSourceConfig>,
+    private val basemaps: StateFlow<List<TileSourceConfig>>,
     private val sync: MissionSync,
 ) : ViewModel() {
 
     /**
-     * Screen-only state: which basemap, the track drawn so far, and the last camera move asked for. [photosCleared]
-     * is how many of the vehicle's photos Clear track hid, so a new flight counts from 0.
+     * Screen-only state: which basemap (by id), the track drawn so far, and the last camera move asked for.
+     * [photosCleared] is how many of the vehicle's photos Clear track hid, so a new flight counts from 0.
      */
     private data class Local(
-        val basemap: TileSourceConfig,
+        val basemapId: String,
         val track: List<LatLon> = emptyList(),
         val photosCleared: Int = 0,
         val camera: CameraRequest? = null,
         val cameraRequests: Long = 0,
     )
 
-    private val local = MutableStateFlow(Local(basemaps.first()))
+    private val local = MutableStateFlow(Local(basemaps.value.first().id))
 
-    val state: StateFlow<FlyUiState> = combine(vehicles.state, local, sync.state, ::build)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), build(VehicleState(), local.value, sync.state.value))
+    val state: StateFlow<FlyUiState> = combine(vehicles.state, local, sync.state, basemaps, ::build)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), build(VehicleState(), local.value, sync.state.value, basemaps.value))
 
     init {
         // The track and the first auto-centre follow the vehicle even while the screen is hidden, so returning to
@@ -67,8 +68,8 @@ class FlyViewModel(
     }
 
     fun onBasemapSelected(id: String) {
-        val chosen = basemaps.firstOrNull { it.id == id } ?: return
-        local.update { it.copy(basemap = chosen) }
+        if (basemaps.value.none { it.id == id }) return
+        local.update { it.copy(basemapId = id) }
     }
 
     fun onCenterClicked() {
@@ -78,7 +79,7 @@ class FlyViewModel(
 
     fun onClearTrackClicked() = local.update { it.copy(track = emptyList(), photosCleared = vehicles.state.value.photos.size) }
 
-    private fun build(v: VehicleState, l: Local, s: MissionSyncState): FlyUiState {
+    private fun build(v: VehicleState, l: Local, s: MissionSyncState, maps: List<TileSourceConfig>): FlyUiState {
         // A new link starts the vehicle's photo list again from 0; then nothing is hidden any more.
         val photos = v.photos.drop(if (l.photosCleared > v.photos.size) 0 else l.photosCleared)
         return FlyUiState(
@@ -94,8 +95,9 @@ class FlyViewModel(
                 MapOverlay.Photos(photos),
                 v.position?.let { MapOverlay.Vehicle(it, v.headingDeg) },
             ),
-            basemaps = basemaps,
-            selectedBasemap = l.basemap,
+            basemaps = maps,
+            // An imported map deleted on the Maps tab while it was showing: back to the first (Street).
+            selectedBasemap = maps.find { it.id == l.basemapId } ?: maps.first(),
             cameraRequest = l.camera,
             canCenter = v.position != null,
         )

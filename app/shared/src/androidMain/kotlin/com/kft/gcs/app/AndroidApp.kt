@@ -8,6 +8,10 @@ import com.kft.gcs.feature.connections.ProfileStore
 import com.kft.gcs.feature.params.MetadataSource
 import com.kft.gcs.feature.plan.PlanFiles
 import com.kft.gcs.feature.plan.SettingsStore
+import com.kft.gcs.feature.settings.MbtilesPicker
+import com.kft.gcs.ui.map.MapLibreOfflineMaps
+import com.kft.gcs.ui.map.OfflineMaps
+import com.kft.gcs.ui.map.TileSources
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import org.koin.dsl.module
@@ -30,6 +34,8 @@ fun AndroidApp(context: Context) {
             single<ThemeStore> { FileTextStore(File(app.filesDir, "theme.txt")) }
             single<MetadataSource> { HttpMetadataSource(File(app.filesDir, "param-metadata"), Dispatchers.IO) }
             single<PlanFiles> { planFiles }
+            single<OfflineMaps> { MapLibreOfflineMaps(File(app.filesDir, "maps").path, TileSources.available()) }
+            single { MbtilesPicker { planFiles.pickAndCopy(File(app.filesDir, "maps")) } }
         }
     }
     RegisterPlanFiles(planFiles)

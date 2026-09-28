@@ -41,6 +41,14 @@ class AndroidPlanFiles(private val context: Context, private val io: CoroutineDi
         return OpenedFile(nameOf(uri), text)
     }
 
+    /** Asks for any file and copies it into [dir] (see [copyInto]). Returns the copy's path. */
+    suspend fun pickAndCopy(dir: java.io.File): String? {
+        val launch = open ?: return null
+        val uri = pick(launch) ?: return null
+        val name = nameOf(uri)
+        return withContext(io) { context.contentResolver.openInputStream(uri)!!.use { copyInto(dir, name, it) } }
+    }
+
     private suspend fun pick(launch: () -> Unit): Uri? {
         val result = CompletableDeferred<Uri?>()
         pending = result

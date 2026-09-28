@@ -21,6 +21,7 @@ import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleRepository
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.ui.map.MapOverlay
+import com.kft.gcs.ui.map.TileSourceConfig
 import com.kft.gcs.ui.map.TileSources
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -50,9 +51,11 @@ class FlyViewModelTest {
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
     /** A real VehicleRepository, driven by scripted link state and frames instead of a socket. */
+    private val basemaps = MutableStateFlow(listOf(TileSources.Street, TileSources.Satellite))
+
     private fun TestScope.viewModel(): FlyViewModel {
         val repo = VehicleRepository(backgroundScope, frames, link, SilentSender, loginKey = null, testScheduler.timeSource)
-        return FlyViewModel(repo, listOf(TileSources.Street, TileSources.Satellite), sync).also {
+        return FlyViewModel(repo, basemaps, sync).also {
             link.value = LinkState.Connected(LinkConfig.UdpListen(), copter, LinkStats())
             runCurrent()
         }
@@ -119,6 +122,22 @@ class FlyViewModelTest {
             assertEquals(TileSources.Satellite, awaitItem().selectedBasemap)
             vm.onBasemapSelected("no-such-map") // ignored
             expectNoEvents()
+        }
+    }
+
+    /** An MBTiles file imported on the Maps tab shows up in the menu; deleting it while shown falls back to Street. */
+    @Test
+    fun importedBasemapComesAndGoes() = runTest(dispatcher) {
+        val imported = TileSourceConfig("mbtiles:farm.mbtiles", "farm", TileSourceConfig.Source.Mbtiles("/maps/farm.mbtiles", 1000), "Imported")
+        val vm = viewModel()
+        vm.state.test {
+            assertEquals(2, awaitItem().basemaps.size)
+            basemaps.value = basemaps.value + imported
+            assertEquals(imported, awaitItem().basemaps.last())
+            vm.onBasemapSelected(imported.id)
+            assertEquals(imported, awaitItem().selectedBasemap)
+            basemaps.value = basemaps.value - imported
+            assertEquals(TileSources.Street, awaitItem().selectedBasemap)
         }
     }
 

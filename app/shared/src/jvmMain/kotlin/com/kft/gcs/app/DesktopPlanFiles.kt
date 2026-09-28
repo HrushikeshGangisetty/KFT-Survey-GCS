@@ -26,6 +26,12 @@ class DesktopPlanFiles(private val io: CoroutineDispatcher) : PlanFiles {
         return OpenedFile(file.name, withContext(io) { file.readText() })
     }
 
+    /** Asks for any file and copies it into [dir] (see [copyInto]). Returns the copy's path. */
+    suspend fun pickAndCopy(dir: File): String? {
+        val file = choose(FileDialog.LOAD, null) ?: return null
+        return withContext(io) { file.inputStream().use { copyInto(dir, file.name, it) } }
+    }
+
     private fun choose(mode: Int, name: String?): File? {
         val dialog = FileDialog(null as Frame?, if (mode == FileDialog.SAVE) "Save" else "Open", mode)
         name?.let { dialog.file = it }

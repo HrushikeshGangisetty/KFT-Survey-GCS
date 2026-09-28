@@ -7,6 +7,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.UiComposable
 import androidx.compose.ui.geometry.Offset
@@ -72,6 +75,7 @@ import kotlin.math.hypot
  *   MapView would bring back the dispose/recreate crash.
  *
  * The callbacks are null when the current screen doesn't edit: then clicks and drags only move the camera.
+ * [onViewChanged] hears the area on screen each time the camera settles (the Maps tab downloads "what you see").
  *
  * `@UiComposable` is explicit because the compiler would otherwise infer MapLibre's applier from the layer calls
  * inside, and every caller would get a "MaplibreComposable where a UI Composable was expected" warning.
@@ -87,6 +91,7 @@ fun MapView(
     onMarkerClick: ((String) -> Unit)? = null,
     onMarkerDrag: ((id: String, to: LatLon) -> Unit)? = null,
     onMarkerDragEnd: ((id: String) -> Unit)? = null,
+    onViewChanged: ((MapViewport) -> Unit)? = null,
 ) {
     remember { configureRuntimeOnce }
     // The gesture code below is set up once per map, so it reads the latest markers and callbacks through these.
@@ -98,6 +103,7 @@ fun MapView(
     val markerClick by rememberUpdatedState(onMarkerClick)
     val markerDrag by rememberUpdatedState(onMarkerDrag)
     val markerDragEnd by rememberUpdatedState(onMarkerDragEnd)
+    val viewChanged by rememberUpdatedState(onViewChanged)
     val vehicleArrow = rememberVectorPainter(VehicleArrow)
 
     val mapState = rememberMapState(
@@ -105,16 +111,19 @@ fun MapView(
         initialCameraPosition = CameraPosition(zoom = 2.0),
     ) {
         // Declaration order is drawing order: basemap, planned route, flown track, markers, and the vehicle on top.
-        val raster = basemap.source as? TileSourceConfig.Source.RasterTiles
-        if (raster != null) {
-            RasterLayer(
+        when (val source = basemap.source) {
+            is TileSourceConfig.Source.RasterTiles -> RasterLayer(
                 id = "basemap-${basemap.id}",
                 source = rememberRasterTileSource(
-                    tiles = listOf(raster.urlTemplate),
-                    options = TileSetOptions(maxZoom = raster.maxZoom, attributionHtml = basemap.attribution),
-                    tileSize = raster.tileSize,
+                    tiles = listOf(source.urlTemplate),
+                    options = TileSetOptions(maxZoom = source.maxZoom, attributionHtml = basemap.attribution),
+                    tileSize = source.tileSize,
                 ),
             )
+            // The mbtiles:// URL is a TileJSON URL: MapLibre reads the file's own zoom range and bounds from it.
+            is TileSourceConfig.Source.Mbtiles ->
+                RasterLayer(id = "basemap-${basemap.id}", source = rememberRasterTileSource(mbtilesUrl(source.path), tileSize = 256))
+            is TileSourceConfig.Source.VectorStyle -> Unit // the street style is always underneath (F1)
         }
         // Always declared, even when empty, so the layer list (and each remembered source) keeps its place. Areas go
         // lowest, so the route and the markers inside them stay readable.
@@ -211,6 +220,17 @@ fun MapView(
         }
     }
 
+    // Waits for the camera to rest for a moment, so a pan reports once, not on every frame of it.
+    LaunchedEffect(mapState) {
+        snapshotFlow { mapState.cameraPosition }.collectLatest {
+            delay(VIEW_SETTLE_MS)
+            val handler = viewChanged ?: return@collectLatest
+            // Null until the map has a size on screen.
+            val box = runCatching { mapState.getVisibleBounds() }.getOrNull() ?: return@collectLatest
+            handler(MapViewport(GeoBounds(south = box.south, west = box.west, north = box.north, east = box.east), it.zoom))
+        }
+    }
+
     LaunchedEffect(cameraRequest) {
         val request = cameraRequest ?: return@LaunchedEffect
         mapState.animateCameraPosition(CameraPosition(target = request.target.toPosition(), zoom = request.zoom))
@@ -264,6 +284,7 @@ fun MapView(
 /** How close (on screen) a press must be to a marker to grab it. 24 dp is a fingertip, per the spike (ADR-001 M3). */
 private val MARKER_HIT_RADIUS = 24.dp
 private val MARKER_RADIUS = 11.dp
+private const val VIEW_SETTLE_MS = 300L
 private val CORNER_RADIUS = 7.dp
 private val LABEL_RADIUS = 9.dp
 private val NOT_GRABBABLE = setOf(MarkerStyle.START, MarkerStyle.END, MarkerStyle.START_CORNER)
@@ -338,7 +359,7 @@ private fun Density.toDp(offset: Offset) = DpOffset(offset.x.toDp(), offset.y.to
  * Runs once per process, before the first map exists (maplibre-compose fixes request hooks at runtime creation).
  * Adds the Esri token to Esri tile requests only; every other host gets the URL unchanged.
  */
-private val configureRuntimeOnce: Unit by lazy {
+internal val configureRuntimeOnce: Unit by lazy {
     val key = esriApiKey() ?: return@lazy
     val esriHost = "https://ibasemaps-api.arcgis.com/"
     DefaultMapRuntime.configure(

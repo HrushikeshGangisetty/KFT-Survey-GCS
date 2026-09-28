@@ -2721,3 +2721,135 @@ within GPS noise.
 - The UI tests cover the four flows asked for. Next candidates: deleting a survey corner, the upload preview, and
   opening a file.
 - Pass 22 was a single fix pass. **Stopped here, as asked.**
+
+## Pass 23 — Offline maps: download an area, MBTiles import, the Maps tab, GS-1 terms (2026-09-28)
+
+### What changed
+- **`docs/decisions/GS-1-offline-tiles.md`** (new): what Esri and OpenFreeMap allow for offline tiles, with quotes and
+  links. Esri satellite **may not** be downloaded in our app; OpenFreeMap street may, started by the operator and capped.
+- **`ui/map/MapModel.kt`**: `TileSourceConfig.offline` (`OfflinePolicy`: allowed, the reason in words, bytes per tile,
+  style bytes). Street: allowed. Satellite: not allowed, with Esri's reason. New source kind `Source.Mbtiles(path,
+  sizeBytes)`. `VectorStyle` gained `tileMaxZoom` (14 for OpenFreeMap). `mbtilesUrl()` is a new `expect`.
+- **`ui/map/OfflineTiles.kt`** (new): `GeoBounds`, `MapViewport`, `TileMath` (slippy-tile maths: tile x/y, tile count
+  for a box and zoom range, and what a download of a source actually fetches).
+- **`ui/map/Mbtiles.kt`** (new): `mbtilesKind(head)`: raster, vector or unknown, from the file's first 1 MB.
+- **`ui/map/OfflineMaps.kt`** (new): the `OfflineMaps` interface (regions, basemaps, download, pause, resume, delete,
+  clear cache, import, delete import) and `MapLibreOfflineMaps`, built on MapLibre's own offline packs plus a
+  folder of MBTiles files.
+- **`ui/map/MapView.kt`**: draws an `Mbtiles` basemap; new callback `onViewChanged(MapViewport)` when the camera
+  settles.
+- **`ui/map/MapPlatform.{jvm,android}.kt`**: renamed from `EsriKey.*.kt`; now also the `mbtilesUrl` actual.
+- **`feature/settings`** (was empty): the **Maps** tab. `OfflineMapsViewModel`, `OfflineMapsUiState`,
+  `OfflineMapsScreen`, `MbtilesPicker`, `di/SettingsModule`.
+- **`feature/fly`**: the basemap list is a `StateFlow` from `OfflineMaps`, so imported files appear in the menu, and
+  deleting the one on screen falls back to Street.
+- **`app/shared`**: `Destination.MAPS` on the rail; `App()` owns the Maps ViewModel (overlays + view reports), like
+  Fly and Plan. Both shells bind `OfflineMaps` (maps folder: `%APPDATA%\KFT-GCS\maps`, Android `filesDir/maps`) and
+  an `MbtilesPicker`. `copyInto()` (jvmCommon) copies a picked file without overwriting; both file-dialog classes
+  gained `pickAndCopy(dir)` (Pass 24 can reuse it for KMZ/Shapefile).
+- **`ui/design`**: icons `Maps`, `Pause`, `Resume` (Material Symbols `map`, `pause`, `play_arrow`, same tint edit).
+- Tests and fixtures: `OfflineTilesTest`, `MbtilesTest`, `MbtilesUrlTest`, `OfflineMapsViewModelTest`, one new
+  `FlyViewModelTest` case, and `tools/fixtures/make_mbtiles_fixtures.py` with the three fixtures it writes.
+
+### How it works
+**Download.**
+```
+map camera settles ──onViewChanged──▶ OfflineMapsViewModel.form.view
+form (source, zooms, view) ──TileMath.downloadTiles──▶ "83 tiles, about 2 MB, plus 60 MB of map fonts…"
+    ▶ blockReason: provider's terms? no view yet? > 10 000 tiles?
+Download ──▶ OfflineMaps.download ──▶ OfflineManager.create(TilePyramid(style, box, z10–16), metadata) + resume
+MapLibre packs (StateFlow) ──flatMapLatest + combine(progress)──▶ regions ──▶ rows ("Done · 83 tiles · 62 MB")
+```
+**No network.** Nothing switches mode. A pack's tiles live in MapLibre's tile database, and MapLibre serves every
+request it can from that database when the network fails. So the ordinary Street map keeps working over a
+downloaded area.
+
+**Import.**
+```
+Import MBTiles… ──▶ platform file dialog ──copyInto(maps folder)──▶ path
+    ──▶ importMbtiles: sniff first 1 MB ── raster: listed as a basemap ── vector/unknown: deleted, message
+Fly basemap menu ──▶ Source.Mbtiles ──▶ RasterLayer(rememberRasterTileSource("mbtiles://C:/…/x.mbtiles"))
+```
+MapLibre reads the file's own zoom range and bounds from the `mbtiles://` URL (it serves it as TileJSON).
+
+### Engineering learnings
+- **The terms decided the design, not the code.** Esri's help says ArcGIS tiles go offline only in Esri software,
+  and "systematically requesting ArcGIS tiles for offline use through other apps or services is prohibited". So
+  Satellite has `offline.allowed = false`, and the screen shows that reason instead of a Download button. The policy
+  is data on `TileSourceConfig`, so a licensed imagery source later is a config entry plus a test, not new code.
+- **MapLibre's offline packs over our own downloader.** maplibre-compose 0.17 ships `OfflineManager` on Android *and*
+  desktop, in common code. It downloads the style's tiles, fonts and icons, pauses and resumes, keeps packs across
+  restarts, and serves them with no network. Writing our own downloader plus an MBTiles writer plus a "switch to
+  offline" rule would repeat all of that. The price: a pack is always "a style over an area", so a raster source
+  would need a small style written for it (`ponytail:` note in `download`).
+- **Our id in the pack metadata.** `OfflinePack`'s region id is internal to maplibre-compose, so we store
+  `kft1 / id / name` lines in the pack's metadata bytes. That also skips packs made by anything else.
+- **The estimate is a real calculation.** Tile counts use the OpenStreetMap wiki formulas; the tests check them
+  against analytic values (the whole world is 4^z tiles; a box at 0°, 0° is 1 × 2 tiles at every zoom) and a hand
+  calculation at CMAC. The app run downloaded **exactly the 83 tiles the estimate said**.
+- **The run found what tests couldn't (twice).**
+  1. The download was 62 MB for 83 tiles. The tiles are about 2 MB; the rest is the style's fonts and icons. The
+     estimate now says so (`OfflinePolicy.styleBytes`, measured).
+  2. The imported MBTiles didn't draw: MapLibre logged "MBTilesFileSource only supports absolute path urls". Its
+     check (`mbtiles_file_source.cpp`) is `std::filesystem::path(p).is_absolute()` on the text after `://`.
+     maplibre-compose's helper left Windows backslashes in; a `/C:/…` path isn't absolute on Windows either. We now
+     build `mbtiles://C:/…` ourselves (`MbtilesUrlTest`).
+- **MBTiles format without a SQLite library.** SQLite stores a row's text columns back to back, so the required
+  `format` row appears in the file as `formatpng` / `formatpbf`. The metadata table is written first, so it's in the
+  first pages. The fixtures are written by Python's own `sqlite3`, so the test isn't checking bytes we made up.
+  `ponytail:` in `Mbtiles.kt`: add a real SQLite reader if a file with late metadata shows up.
+- **Vector MBTiles are refused, with a message.** Drawing one needs a style that matches its layers; a raster file
+  just needs a raster layer. Raster covers the field case (own drone orthomosaic, licensed imagery).
+- **The download area is the map view** (as QGC does it). No rectangle to draw; the panel says "the area on screen".
+- **`onDownloadClicked` builds from the form, not `state.value`.** `stateIn(WhileSubscribed)` only updates while
+  someone collects; an event handler reading it can see a stale value.
+- **Ponytail review:** one shrink applied (the store kept an `imported` flow next to `all`; now only `all`). Kept on
+  purpose: the `OfflineMaps` interface (the ViewModel tests need a fake), and the policy data on each source.
+
+### What to look at
+1. `ui/map/src/commonMain/kotlin/com/kft/gcs/ui/map/OfflineMaps.kt:92`: `MapLibreOfflineMaps` (packs → regions,
+   download, import).
+2. `feature/settings/src/commonMain/kotlin/com/kft/gcs/feature/settings/OfflineMapsViewModel.kt:115`: `build`, where
+   the estimate and the block reasons come from.
+3. `ui/map/src/commonMain/kotlin/com/kft/gcs/ui/map/MapModel.kt`: `TileSources` (the GS-1 policy per source) and the
+   `mbtilesUrl` KDoc.
+
+### Tests
+- `OfflineTilesTest` (8): world tile counts (1, 21, 2^20); the origin box (analytic); CMAC by hand at z10 and z14;
+  edge clamping at ±180° and the poles; Street stops at z14, Satellite at z19; GS-1 policy per source; MapLibre
+  progress → ours; pack metadata round trip and foreign packs ignored.
+- `MbtilesTest` (3, jvmTest, real SQLite fixtures): raster / vector / not MBTiles; SQLite without a format row;
+  import through the real folder logic (raster listed with its size, vector refused and deleted, delete removes it).
+- `MbtilesUrlTest`: `C:\maps\my farm.mbtiles` → `mbtiles://C:/maps/my%20farm.mbtiles` (Windows only).
+- `OfflineMapsViewModelTest` (9): the estimate follows the view ("10 tiles, about 250 KB, plus 60 MB of map fonts…",
+  "11 × 11 m" by hand); Satellite blocked with Esri's reason and never downloaded; too many tiles blocked; Download
+  sends the view and zooms; the zoom slider clamps; rows for downloading/done regions and imported files; import
+  messages and cancel; pause/resume/delete/clear reach the store; byte formatting.
+- `FlyViewModelTest.importedBasemapComesAndGoes`: an import appears in the menu; deleting it while shown → Street.
+- `gradlew.bat check`: passes. No new compiler warnings.
+- **App run (desktop, by me):** Maps tab at world zoom: "Too big: 96 269 472 tiles". Zoomed to Bondoukou
+  (Côte d'Ivoire), 19.3 × 12.7 km, z10–16: estimate 83 tiles; Download → progress bar → "Done · 83 tiles · 62 MB";
+  still listed after a restart. Import of the spike's raster MBTiles → listed (258 KB) → chosen on Fly → its tiles
+  draw (after the URL fix above). Satellite shows its reason, no Download.
+- **Not checked: the map with no network.** Pointing the app at a dead proxy (`HTTPS_PROXY`) didn't cut MapLibre
+  off (it still loaded Brazil), and switching off Wi-Fi is a system setting I don't change. **Manual step:**
+  Maps → Clear browsing cache → close the app → Wi-Fi off → start the app → zoom to Bondoukou (the orange outline on
+  the Maps tab). Expected: the street map draws there at z10–16, and elsewhere is blank.
+
+### Safety
+Nothing transmits to the vehicle: no gateway, allowlist, protocol or mission changes. The only new network traffic is
+tile downloads from OpenFreeMap, started by the operator and capped at 10 000 tiles.
+
+### Open questions / next
+- **OpenFreeMap permission:** their terms forbid automated collection "without permission". Email
+  info@openfreemap.org describing operator-started, capped area downloads (GS-1 doc, "Open item").
+- **Offline check with Wi-Fi off** (above), and the same on the Android tablet (airplane mode). Android's MapLibre
+  offline manager and the document-picker import are compiled, not yet run.
+- `ponytail:` (listed here as the rules ask): raster sources can't be downloaded yet (a pack needs a style);
+  MBTiles metadata must sit in the first 1 MB. Also: boxes crossing ±180° aren't handled by `TileMath`
+  (`GeoBounds` KDoc).
+- The font download (60 MB) happens with the first area. Whether MapLibre counts it again for later areas wasn't
+  checked.
+- Vector MBTiles (e.g. an OpenFreeMap regional extract) would need a style pointing at the file: a later pass if the
+  OpenFreeMap answer is no.
+- Next: **Pass 24 — imports** (KML/KMZ, GeoJSON, Shapefile with .prj, CSV points). **Stopped here, as asked.**

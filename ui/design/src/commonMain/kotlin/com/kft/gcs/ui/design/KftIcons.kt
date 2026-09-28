@@ -31,6 +31,7 @@ object KftIcons {
     val Fly: ImageVector @Composable get() = vectorResource(Res.drawable.ic_flight)
     val Plan: ImageVector @Composable get() = vectorResource(Res.drawable.ic_route)
     val Params: ImageVector @Composable get() = vectorResource(Res.drawable.ic_tune)
+    val Maps: ImageVector @Composable get() = vectorResource(Res.drawable.ic_map)
     val Theme: ImageVector @Composable get() = vectorResource(Res.drawable.ic_contrast)
     val About: ImageVector @Composable get() = vectorResource(Res.drawable.ic_info)
 
@@ -62,6 +63,8 @@ object KftIcons {
     val Upload: ImageVector @Composable get() = vectorResource(Res.drawable.ic_upload)
     val Download: ImageVector @Composable get() = vectorResource(Res.drawable.ic_download)
     val Delete: ImageVector @Composable get() = vectorResource(Res.drawable.ic_delete)
+    val Pause: ImageVector @Composable get() = vectorResource(Res.drawable.ic_pause)
+    val Resume: ImageVector @Composable get() = vectorResource(Res.drawable.ic_play_arrow)
 
     // General
     val More: ImageVector @Composable get() = vectorResource(Res.drawable.ic_more_vert)
