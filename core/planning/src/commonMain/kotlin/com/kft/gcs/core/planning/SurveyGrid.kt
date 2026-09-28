@@ -242,17 +242,16 @@ internal fun planeLineOrder(lineCount: Int, skip: Int): List<Int>? {
 
 /**
  * Totals for a grid.
- * - Photos: a distance trigger (ArduPilot `DO_SET_CAM_TRIGG_DIST`) fires once when it's switched on at the start of a
- *   pass and then every [triggerDistanceM], so a pass of length L takes ⌊L / d⌋ + 1 photos.
+ * - Photos: [photosOnPass] for each pass ([alongFootprintM] is one photo's ground length along the line).
  * - Flight time: distance / [speedMs], at survey speed throughout.
  */
-fun surveyStats(spec: GridSpec, grid: SurveyGrid, triggerDistanceM: Double, speedMs: Double): SurveyStats {
+fun surveyStats(spec: GridSpec, grid: SurveyGrid, triggerDistanceM: Double, speedMs: Double, alongFootprintM: Double): SurveyStats {
     require(triggerDistanceM > 0 && speedMs > 0) { "trigger distance and speed must be positive" }
     val distance = grid.passes.sumOf { it.runInM + it.photoLengthM + it.runOutM } + grid.connectorsM.sum()
     return SurveyStats(
         areaM2 = polygonAreaM2(spec.polygon),
         lineCount = grid.lineCount,
-        photoCount = grid.passes.sumOf { floor(it.photoLengthM / triggerDistanceM + 1e-9).toInt() + 1 },
+        photoCount = grid.passes.sumOf { photosOnPass(it.photoLengthM, triggerDistanceM, alongFootprintM) },
         distanceM = distance,
         // ponytail: constant speed, no slow-down in copter turns or wind. Add a per-turn allowance once SITL/field
         // logs show how far off it is.
@@ -261,20 +260,38 @@ fun surveyStats(spec: GridSpec, grid: SurveyGrid, triggerDistanceM: Double, spee
 }
 
 /**
+ * How many photos a pass of [photoLengthM] needs, and ArduPilot takes, with a distance trigger every
+ * [triggerDistanceM]: it fires once when switched on at the start of the pass, then every d, so ⌊L/d⌋ + 1 photos, the
+ * last at ⌊L/d⌋·d. The strip after it, up to the far edge, is shorter than d.
+ *
+ * That strip is photographed only if the last photo reaches it: half a footprint, [alongFootprintM] / 2. With front
+ * overlap o the footprint is d / (1 − o), so half of it covers any strip shorter than d when o ≥ 50 %. Below 50 % a
+ * strip of up to d − footprint/2 at the far edge of every line would get no photo, so one more photo is planned
+ * there, one trigger distance on, just past the edge. Found comparing with QGC (Pass 21), which instead takes an
+ * extra photo at the exit edge on every line.
+ */
+fun photosOnPass(photoLengthM: Double, triggerDistanceM: Double, alongFootprintM: Double): Int {
+    val onTheWay = floor(photoLengthM / triggerDistanceM + 1e-9).toInt()
+    val farStrip = photoLengthM - onTheWay * triggerDistanceM
+    return onTheWay + 1 + if (farStrip > alongFootprintM / 2 + 1e-9) 1 else 0
+}
+
+/**
  * Where to switch the distance trigger off on this pass: half a trigger distance after the last photo the pass should
- * take, (⌊L/d⌋ + ½)·d from [Pass.photoStart], on the line. That's never more than d/2 past the far edge.
+ * take ([photosOnPass]: n photos, the last at (n − 1)·d), so at (n − ½)·d from [Pass.photoStart], on the line.
  *
  * Why not at the edge itself (Pass 16, ArduPlane SITL): ArduPilot takes each distance-triggered photo a little late
  * (it checks the distance 50 times a second, so at 18 m/s up to 0.36 m past the mark) and counts a waypoint as reached
  * slightly early. On 408.9 m lines with a 24 m trigger, the 18th photo was due 1 m before the edge, and 6 of 7 lines
  * lost it. With the switch-off d/2 after the last photo, that photo has d/2 of margin, and the next (unplanned) one
- * d/2 the other way, so [surveyStats]' ⌊L/d⌋ + 1 is what the vehicle does.
+ * d/2 the other way, so [photosOnPass] is what the vehicle does.
  *
- * It lies on the pass's run-out, which [planSurvey] makes at least d/2 long. Where the run-out is shorter (the inner
- * pieces of a concave line have none), it's capped at the end of the run-out.
+ * It lies on the pass's run-out, which [planSurvey] makes long enough (d/2, or up to 1.5·d − footprint/2 when the
+ * extra far-edge photo is planned). Where the run-out is shorter (the inner pieces of a concave line have none), it's
+ * capped at the end of the run-out.
  */
-fun Pass.cameraOff(triggerDistanceM: Double): LatLon {
-    val along = (floor(photoLengthM / triggerDistanceM + 1e-9) + 0.5) * triggerDistanceM
+fun Pass.cameraOff(triggerDistanceM: Double, alongFootprintM: Double): LatLon {
+    val along = (photosOnPass(photoLengthM, triggerDistanceM, alongFootprintM) - 0.5) * triggerDistanceM
     // photoStart → exit is one straight line on the flat local map, and over a survey field lat/lon are linear on it.
     val f = min(along, photoLengthM + runOutM) / (photoLengthM + runOutM)
     return LatLon(photoStart.latitude + f * (exit.latitude - photoStart.latitude), photoStart.longitude + f * (exit.longitude - photoStart.longitude))

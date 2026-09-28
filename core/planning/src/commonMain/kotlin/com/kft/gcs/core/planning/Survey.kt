@@ -83,14 +83,17 @@ fun planSurvey(params: SurveyParams, limits: SurveyLimits = SurveyLimits()): Sur
     val footprint = camera.footprint(altitude, params.orientation)
     val spacing = lineSpacingM(footprint, params.sideOverlap)
     val trigger = triggerDistanceM(footprint, params.frontOverlap)
-    // The camera switches off d/2 after each pass's last photo ([cameraOff]), so the run-out must reach that far.
+    // The camera switches off d/2 after each pass's last photo ([cameraOff]), so the run-out must reach that far. With
+    // front overlap under 50 % the last photo can be up to d − footprint/2 past the far edge ([photosOnPass]); then
+    // the run-out must reach 1.5·d − footprint/2. At 50 % and above that is ≤ d/2, so d/2 it stays.
+    val minRunOut = max(trigger / 2, 1.5 * trigger - footprint.alongM / 2)
     val turnaround = when (val t = params.turnaround) {
-        is Turnaround.Copter -> t.copy(extensionM = max(t.extensionM, trigger / 2))
-        is Turnaround.Plane -> t.copy(leadOutM = max(t.leadOutM, trigger / 2))
+        is Turnaround.Copter -> t.copy(extensionM = max(t.extensionM, minRunOut))
+        is Turnaround.Plane -> t.copy(leadOutM = max(t.leadOutM, minRunOut))
     }
     val spec = GridSpec(params.polygon, params.gridAngleDeg, spacing, turnaround, params.entry)
     val grid = buildSurveyGrid(spec)
-    val stats = surveyStats(spec, grid, trigger, params.speedMs)
+    val stats = surveyStats(spec, grid, trigger, params.speedMs, footprint.alongM)
 
     val warnings = buildList {
         val interval = trigger / params.speedMs

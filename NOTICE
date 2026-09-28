@@ -11,3 +11,16 @@ Material Symbols (icons)
   Licence: Apache License, Version 2.0 (licenses/Apache-2.0.txt). Copyright Google LLC.
   Changes: the android:tint attribute was removed and the fill colour set to black (#FF000000), so the same
            files render on desktop; the app tints them at draw time. Paths are unchanged.
+
+--------------------------------------------------------------------------------
+QGroundControl survey algorithm (test reference only, not in the app)
+  Files:   core/planning/src/commonTest/kotlin/com/kft/gcs/core/planning/QgcSurveyReference.kt
+  Source:  https://github.com/mavlink/qgroundcontrol, commit a1b54d85 (master, 2026-09):
+           src/MissionManager/CameraCalc.cc, SurveyComplexItem.cc, TransectStyleComplexItem.cc,
+           src/Utilities/Geo/QGCGeo.cc
+  Licence: Copyright the QGroundControl project. QGroundControl is dual-licensed Apache-2.0 / GPL-3.0
+           (.github/COPYING.md: "You may choose either license"); used here under the Apache License,
+           Version 2.0 (licenses/Apache-2.0.txt).
+  Changes: translated from C++/Qt to Kotlin for use as a comparison reference in tests; Qt geometry and
+           GeographicLib replaced by equivalent code; only the single-polygon survey path; logging removed.
+           The header of the file lists the functions ported.

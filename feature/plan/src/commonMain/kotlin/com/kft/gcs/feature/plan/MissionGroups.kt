@@ -171,7 +171,7 @@ internal fun surveyItems(plan: SurveyPlan, survey: SurveySettings, takeoff: Bool
         if (p.runInM > 0) waypoint(p.entry)
         waypoint(p.photoStart)
         trigger(plan.triggerDistanceM, shootNow = true)
-        val off = p.cameraOff(plan.triggerDistanceM)
+        val off = p.cameraOff(plan.triggerDistanceM, plan.footprint.alongM)
         waypoint(off)
         trigger(0.0, shootNow = false)
         if (Geodesy.distanceMeters(off, p.exit) > 0.01) waypoint(p.exit)

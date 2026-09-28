@@ -35,12 +35,38 @@ import kotlinx.coroutines.withTimeout
  * grid 0°, default 120 m lead-in, RTL at the end.
  *
  * Run: `start-sitl.ps1 -Vehicle plane -Wipe`, then
- * `KFT_SITL=127.0.0.1:5762 KFT_SITL_OUT=<dir> gradlew :feature:plan:jvmTest --tests '*PlaneSurveySitlRun*'`,
+ * `KFT_SITL=127.0.0.1:5762 KFT_SITL_OUT=<dir> gradlew :feature:plan:jvmTest --tests '*PlaneSurveySitlRun.uploadPass16PlaneField'`,
  * then fly it with `sitl_pilot.py tcp:127.0.0.1:5763 --photos <dir>/photos.csv`.
+ *
+ * [uploadCopterFarEdgeField] is the Copter check of Pass 21's far-edge photo, run the same way against Copter SITL.
  */
 class PlaneSurveySitlRun {
     @Test
-    fun uploadPass16PlaneField() {
+    fun uploadPass16PlaneField() = upload(VehicleKind.PLANE) { home ->
+        val camera = bundledCameras.first { it.name.startsWith("Sony RX1R II") }
+        defaultSurvey(VehicleKind.PLANE, camera).copy(
+            polygon = listOf(offset(home, -453.6, -231.5), offset(home, -175.2, -231.5), offset(home, -175.2, 177.4), offset(home, -453.6, 177.4)),
+            sideOverlapPct = 60.0, frontOverlapPct = 65.0, speedMs = 18.0,
+        )
+    }
+
+    /**
+     * Pass 21: a Copter field where every line needs the extra far-edge photo ([com.kft.gcs.core.planning.photosOnPass]).
+     * Phantom 4 Pro at 50 m: footprint 75 × 50 m; 40 % front overlap gives a 30 m trigger. Lines 148 m long
+     * (grid 0°): photos on the way at 0, 30, …, 120 m, leaving a 28 m strip, more than half the 50 m footprint, so a
+     * 6th photo at 150 m. 70 % side overlap (22.5 m lines) over 200 m east–west: 9 lines, 54 photos expected.
+     */
+    @Test
+    fun uploadCopterFarEdgeField() = upload(VehicleKind.COPTER) { home ->
+        val camera = bundledCameras.first { it.name.startsWith("DJI Phantom 4 Pro") }
+        defaultSurvey(VehicleKind.COPTER, camera).copy(
+            polygon = listOf(offset(home, 40.0, 30.0), offset(home, 240.0, 30.0), offset(home, 240.0, 178.0), offset(home, 40.0, 178.0)),
+            sideOverlapPct = 70.0, frontOverlapPct = 40.0,
+        )
+    }
+
+    /** Connects to KFT_SITL, plans [survey] (given home) with the Plan screen's [flatten], uploads, writes the export. */
+    private fun upload(kind: VehicleKind, survey: (LatLon) -> SurveySettings) {
         val (host, port) = System.getenv("KFT_SITL")?.split(":") ?: return println("KFT_SITL not set: skipped")
         val out = File(System.getenv("KFT_SITL_OUT") ?: ".")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -51,13 +77,7 @@ class PlaneSurveySitlRun {
             runBlocking {
                 manager.connect(LinkConfig.TcpClient(host, port.toInt()))
                 val home = withTimeout(90.seconds) { vehicles.state.first { it.home != null } }.home!!
-                val camera = bundledCameras.first { it.name.startsWith("Sony RX1R II") }
-                val survey = defaultSurvey(VehicleKind.PLANE, camera).copy(
-                    polygon = listOf(offset(home.position, -453.6, -231.5), offset(home.position, -175.2, -231.5),
-                        offset(home.position, -175.2, 177.4), offset(home.position, -453.6, 177.4)),
-                    sideOverlapPct = 60.0, frontOverlapPct = 65.0, speedMs = 18.0,
-                )
-                val flat = flatten(listOf(SurveyGroup("Survey", survey)), VehicleKind.PLANE, SurveyLimits())
+                val flat = flatten(listOf(SurveyGroup("Survey", survey(home.position))), kind, SurveyLimits())
                 val plan = flat.groups.single().plan!!
                 println("lines ${plan.stats.lineCount}, spacing ${plan.lineSpacingM}, trigger ${plan.triggerDistanceM}, planned photos ${plan.stats.photoCount}, items ${flat.items.size}")
                 missions.upload(flat.items).getOrThrow()

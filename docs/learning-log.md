@@ -2451,3 +2451,145 @@ Check: search a KFT_ parameter; its row should have a display name.
   guaranteed.
 - The Links form's keystroke issue has its own task chip.
 - Next: **Pass 21, survey maths compared with QGC.**
+
+## Pass 21 — Survey maths compared with QGC (2026-09-28)
+
+### Licence check (done first, as asked)
+QGroundControl master, commit `a1b54d85` (2026-09):
+- `.github/COPYING.md`: "QGroundControl is dual-licensed under **Apache 2.0** and **GPL v3**. You may choose either
+  license." Contributions must be compatible with both licences.
+- `src/MissionManager/CameraCalc.cc`, `SurveyComplexItem.cc` and `TransectStyleComplexItem.cc` carry **no per-file
+  licence header** on master (they start with `#include`), so nothing in them narrows the repository-wide dual
+  licence. **The Apache-2.0 option applies to them.** There's no NOTICE file and no explicit copyright line; the old
+  per-file headers credited "the QGroundControl project", which is the attribution used.
+- Mission Planner and ArduDeck (GPL-3.0): not opened for this pass. Ideas only, and none were needed.
+
+So porting with attribution is allowed. The port here is a **test reference only**
+(`core/planning/src/commonTest/.../QgcSurveyReference.kt`). It carries a header naming the files and functions
+ported, the copyright, the licence and the changes, and it has a `NOTICE` entry. **No QGC code went into the app**,
+because nothing in QGC's approach turned out better than ours (below).
+
+### What changed
+- **`core/planning/SurveyGrid.kt`**:
+  - New `photosOnPass(L, d, footprintAlong)`: ⌊L/d⌋ + 1, plus **one far-edge photo when front overlap < 50 %**
+    (the bug below).
+  - `surveyStats(…, alongFootprintM)` and `Pass.cameraOff(d, alongFootprintM)` use it.
+- **`core/planning/Survey.kt`**: the minimum run-out is max(d/2, 1.5·d − footprint/2), which reaches the switch-off
+  point after the extra photo. It equals d/2 at 50 % front overlap and above, so nothing changes there.
+- **`feature/plan/MissionGroups.kt`**: `cameraOff` gets the footprint.
+- **Tests**:
+  - `QgcSurveyReference.kt` (the port: camera calc, transects, shot estimate, WGS84 tangent plane).
+  - `QgcParityTest.kt` (6).
+  - `SurveyGridTest.lowFrontOverlapAddsAPhotoWhereTheFarEdgeWouldBeMissed`; existing calls pass an 80 %-overlap
+    footprint, so their hand values are unchanged.
+- **`feature/plan/src/jvmTest/PlaneSurveySitlRun.kt`**: the upload is shared; there's a new
+  `uploadCopterFarEdgeField`.
+- **`NOTICE`**: the QGC entry.
+
+### How the comparison works
+```
+same polygon, grid angle, spacing, turnaround, entry ─┬─▶ buildSurveyGrid (ours)
+                                                      └─▶ qgcTransects   (QGC, ported step by step)
+both outputs ─▶ one exact frame: the WGS84 tangent plane at the first corner (QGC's own), rotated to the grid
+            ─▶ compare: spacing, clipping at QGC's lines, line count and margins, turnarounds, photos per line,
+               entry corner vs vertex order, camera formulas
+```
+Eight fields at the CMAC SITL site (−35.36°, deliberately not the equator):
+- a 300 × 200 m rectangle at 0°, 30° and 90°;
+- a rotated quadrilateral;
+- a triangle at 45°;
+- a 30 m strip (narrower than one spacing);
+- a 5 × 3 km block at 17°;
+- an L shape and a U shape (concave).
+
+### Every difference, and whose it is
+| # | What | Ours | QGC | Verdict |
+|---|---|---|---|---|
+| 1 | GSD, line spacing, trigger distance (square pixels) | pinhole | same formulas | **Agree** to 1e-9 |
+| 2 | Non-square pixels | footprint from each sensor side | both sides from the width's GSD | **Ours deliberate**: QGC's trigger is 11 % short on a 2.41 × 2.71 µm-pixel sensor |
+| 3 | Clipping a convex area | scan-line crossings | intersection with polygon edges | **Agree**: same segment ends within 5 cm on every line of every convex field, 5 km included |
+| 4 | Where the lines go | centred: equal margins, ≤ spacing/2 | swept from the bounding box's centre − 0.75 × diagonal | **QGC quirk**: margins land anywhere in 0…spacing (44.5 m / 0.7 m on the 30° rectangle); below 50 % side overlap that can leave an edge unphotographed. Line counts differ by ≤ 1 (triangle: ours 9, QGC 8) |
+| 5 | Concave area (notch) | split into passes; straight on without photos over the gap | the two outermost crossings: one line over the gap, photos included | **Ours deliberate** (Pass 13) |
+| 6 | Turnaround / run-in | straight extension, both ends | same | **Agree** (15.00 m both) |
+| 7 | Entry corner | from the grid frame | from the first line's direction, which depends on the polygon's vertex order | **QGC quirk**: the same rectangle's "bottom left" starts at the top when clicked from the south-west, at the bottom when clicked from the north-east. Ours: the south-west corner either way |
+| 8 | Photos per line, planned | ⌊L/d⌋ + 1 (+1 far-edge photo below 50 % front overlap) | estimate ⌈L/d⌉ | **QGC quirk**: its estimate is below its own mission (next row) |
+| 9 | Photos per line, flown on ArduPilot | = planned (SITL: 54/54 Copter, 126/126 Plane) | ⌊L/d⌋ + 2: the stop item `DO_SET_CAM_TRIGG_DIST(0, …, param3 = 1)` also shoots | **Different designs**: QGC always adds an exit-edge photo; ours stops d/2 after the last photo (Pass 16, SITL-proven) and adds one only when the edge would otherwise be missed |
+| 10 | Far-edge coverage at front overlap < 50 % | **was a gap**: the last strip (up to d − footprint/2) had no photo | covered by its exit photo | **Bug in ours, fixed** (below) |
+| 11 | Plane turns, line order, first-line lead-in, camera-off margin | turn radius, skip-lines, 4r first lead-in, d/2 margin | none of these | **Ours deliberate** (Passes 14, 16, 17) |
+| 12 | Projection | one spherical radius on a flat map at the centre | exact WGS84 tangent plane at the first corner | **Measured**: our ground spacing is within 0.5 % (≈ ±0.1 m at 45 m) at −35°. Not a bug for surveys; see open questions |
+
+The QGC direction check (`_adjustLineDirection` compares `QLineF::angle()` without wrapping 0/360°) looked like it
+could break the lawnmower on east–west lines. At 90° it didn't (the directions alternated), so it's not listed.
+
+### The bug, and the fix
+- **Bug.** ArduPilot shoots at 0, d, 2d, … ⌊L/d⌋·d. The strip between the last photo and the far edge is shorter than
+  d, and it's photographed only if half a footprint reaches it. The footprint is d / (1 − o), so that holds for
+  front overlap o ≥ 50 %.
+  - Below 50 %, up to d − footprint/2 of every line's far end got no photo.
+  - Example: 40 % front overlap on a 148 m line with a 30 m trigger and a 50 m footprint leaves 145–148 m uncovered.
+  - Nobody flies mapping at 40 %, which is why SITL never showed it, but the panel accepts it.
+- **Fix.** When that strip is wider than half a footprint, plan one more photo, a trigger distance on (just past the
+  edge), and move the switch-off and the minimum run-out to match.
+  - At 50 % and above the plan is **unchanged**; every SITL-proven run was at 65–80 %.
+  - Why not QGC's "extra photo at every exit": it would add a photo to every line of every survey, and re-open the
+    Pass 16 question of a photo landing on the switch-off point. Ours adds one only where needed.
+- **Where to look:** `photosOnPass` in `SurveyGrid.kt`, and `minRunOut` in `Survey.kt`.
+
+### Engineering learnings
+- **Compare in one exact frame.** The first report measured QGC's lines on *our* flat map and showed QGC spacings
+  wandering from 44.3 to 45.7 m, and ±5 m on the 5 km field. That was our map, not QGC: one spherical radius is
+  about 0.2 % short east–west and 0.2 % long north–south of the ellipsoid at −35°, which skews long diagonal lines.
+  Measured in QGC's own tangent plane, QGC's spacing is 45.00 m everywhere, and ours is within 0.5 %. The residual
+  0.12 m on 5 km disappeared by using QGC's own origin (its first corner) rather than the centre.
+- **Port the reference faithfully, quirks included.** The value of a reference is that it behaves like QGC, so
+  vertex-0 origin, the bounding-box sweep, the furthest-pair clip and the unwrapped angle compare are all kept. The
+  assertions then say "agree" or "differs, and here's whose it is", rather than hiding QGC's behaviour.
+- **What ArduPilot does with QGC's items isn't what QGC predicts.** QGC's own estimate ⌈L/d⌉ is up to two photos per
+  line below what its mission shoots (param3 = 1 on the stop item). That's worth knowing whenever someone compares our
+  photo count with QGC's.
+- **Ponytail review:** the fix is one function plus one line; the reference and parity tests are test code
+  (required by §5). Nothing to cut.
+
+### What to look at
+1. `core/planning/src/commonTest/kotlin/com/kft/gcs/core/planning/QgcParityTest.kt`: the class KDoc (the verdicts)
+   and each test's KDoc.
+2. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/SurveyGrid.kt`: `photosOnPass`.
+3. `core/planning/src/commonTest/kotlin/com/kft/gcs/core/planning/QgcSurveyReference.kt`: the header (what was
+   ported, and the licence).
+
+### Tests
+- `QgcParityTest` (6, desktop JVM and Android host):
+  - `convexAreasAgreeOnSpacingClippingAndTurnarounds`.
+  - `oursCentresTheLinesQgcsMarginsDependOnTheBoundingBox`.
+  - `concaveNotchIsSplitByUsSpannedByQgc` (U-shape: QGC 300 m straight over a 100 m gap; ours two passes).
+  - `qgcEntryCornerDependsOnVertexOrderOursDoesNot`.
+  - `photoCountsQgcEstimateOursAndQgcsActualMission` (L = 200, d = 20: 10 / 11 / 12).
+  - `cameraMathsAgreeForSquarePixels`.
+- `SurveyGridTest.lowFrontOverlapAddsAPhotoWhereTheFarEdgeWouldBeMissed`, by hand:
+  - L = 110, d = 40, footprint 50: photos at 0/40/80 cover to 105 m, so a 4th at 120 m and the switch-off at 140 m.
+  - L = 100: 3 photos.
+  - Footprint 80 (50 %): 3 photos.
+- **SITL photo_check, run by me** (scripted, no GCS window):
+  - **Copter** (ArduCopter 4.8.0-dev, `-Wipe`), `uploadCopterFarEdgeField`: P4P at 50 m, 70 % side / **40 %
+    front**, 200 × 148 m.
+    - Planned 9 lines, 30 m trigger, **54 photos**; flown **54 / 54**.
+    - Every line has 6 photos, and the max offset from its line is 0.3 m.
+    - Positions along the lines: northbound 0, 30, 60, 90, 120, **150** m; southbound 148 … 28, **−2** m. The new
+      photo lands 2 m past the far edge, as designed.
+  - **Plane** (ArduPlane 4.8.0-dev, `-Wipe`), `uploadPass16PlaneField` (Pass 18's field, 65 % front overlap):
+    - The plan is identical to Pass 18: 7 lines, 41.03 m spacing, 24 m trigger, 126 photos, 44 items.
+    - Flown **126 / 126**.
+    - Line 1's worst photo is 5.5 m off (Pass 18: 5.4 m).
+    - Lines 2–7: first photo 16.7–17.8 m off, second about 10 m, then under 5 m (Pass 18: the same).
+    - 9 photos more than 10 m off a line (Pass 18: 10).
+    - **The SITL-proven Plane behaviour is unchanged.**
+- `gradlew.bat check` and `:app:android:assembleDebug`: pass. The one compiler warning is still the old `PlanViewModel.kt:398`.
+
+### Open questions / next
+- **Projection accuracy.** Our flat map uses one spherical radius: ≤ 0.5 % scale error at −35° (about 0.1 m on a 45 m
+  spacing, about 1 m along a 400 m line). ArduPilot itself uses a spherical approximation for distance triggering, so
+  this is below what the aircraft resolves. If it ever matters, the upgrade is to use the ellipsoid's two radii of
+  curvature at the origin latitude in `LocalProjection`: one line, but many hand values in tests change.
+- **Edge coverage at low side overlap** is fine for ours (centred lines, margins ≤ spacing/2 ≤ half a footprint at
+  any overlap). Nothing to do.
+- Pass 21 was the last pass of the batch (Passes 19–21). **Stopped here, as asked.**

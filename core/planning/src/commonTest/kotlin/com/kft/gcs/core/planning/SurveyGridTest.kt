@@ -32,6 +32,25 @@ class SurveyGridTest {
         GridSpec(polygon, angle, spacing, turn, entry).let { it to buildSurveyGrid(it) }
 
     /**
+     * Far-edge coverage (Pass 21), by hand. Photos cover footprint/2 either side of where they're taken.
+     * - L = 110 m, d = 40 m, footprint 50 m (front overlap 20 %): photos at 0, 40, 80; the last covers to 105 m, so
+     *   105–110 m has no photo. One more, at 120 m (covering 95–145 m): 4 photos, and the switch-off at 3.5·d = 140 m.
+     * - L = 100 m, same camera: photos at 0, 40, 80 cover to 105 m ≥ 100 m, so 3 photos, no extra.
+     * - Front overlap ≥ 50 % never adds one: footprint 80 m (50 %), L = 110 m: the 80 m photo covers to 120 m.
+     */
+    @Test
+    fun lowFrontOverlapAddsAPhotoWhereTheFarEdgeWouldBeMissed() {
+        assertEquals(4, photosOnPass(110.0, 40.0, 50.0))
+        assertEquals(3, photosOnPass(100.0, 40.0, 50.0))
+        assertEquals(3, photosOnPass(110.0, 40.0, 80.0))
+        assertEquals(11, photosOnPass(200.0, 20.0, 100.0), "the usual case: ⌊200/20⌋ + 1")
+        // The switch-off follows: 3.5 × 40 = 140 m from photoStart, on a pass with a long enough run-out.
+        val (_, g) = grid(listOf(m(0.0, 0.0), m(30.0, 0.0), m(30.0, 110.0), m(0.0, 110.0)), 0.0, 45.0, turn = Turnaround.Copter(35.0))
+        assertAt(15.0, 140.0, g.passes[0].cameraOff(40.0, 50.0), "3.5 d")
+        assertAt(15.0, 100.0, g.passes[0].cameraOff(40.0, 80.0), "2.5 d, no extra photo")
+    }
+
+    /**
      * THE worked example (pass summary). Grid angle 0 = north–south lines, spacing 45 m (P4P at 100 m, 70 % side).
      * Width across the lines = 300 m → n = ⌈300 / 45⌉ = ⌈6.67⌉ = 7 lines. They span 6 × 45 = 270 m, leaving
      * (300 − 270) / 2 = 15 m each side: lines at x = 15, 60, 105, 150, 195, 240, 285 m, each 200 m long.
@@ -52,7 +71,7 @@ class SurveyGridTest {
         }
         g.connectorsM.forEach { assertEquals(45.0, it, 1e-3, "copter hop to the next line") }
 
-        val stats = surveyStats(spec, g, triggerDistanceM = 20.0, speedMs = 10.0)
+        val stats = surveyStats(spec, g, triggerDistanceM = 20.0, speedMs = 10.0, alongFootprintM = 100.0)
         assertEquals(60_000.0, stats.areaM2, 0.01)
         assertEquals(7, stats.lineCount)
         assertEquals(77, stats.photoCount)
@@ -73,7 +92,7 @@ class SurveyGridTest {
             assertAt(if (eastbound) 0.0 else 300.0, y, g.passes[i].photoStart, "line $i start")
             assertEquals(300.0, g.passes[i].photoLengthM, 1e-3)
         }
-        assertEquals(1680.0, surveyStats(spec, g, 20.0, 10.0).distanceM, 0.01)
+        assertEquals(1680.0, surveyStats(spec, g, 20.0, 10.0, 100.0).distanceM, 0.01)
     }
 
     /**
@@ -114,7 +133,7 @@ class SurveyGridTest {
         assertAt(100.0, 190.0, g.passes[0].photoEnd, "first arm ends at the notch")
         assertAt(200.0, 190.0, g.passes[1].photoStart, "second arm starts after the notch")
         assertEquals(100.0, g.connectorsM[0], 1e-3, "straight on across the notch")
-        assertEquals(1380.0, surveyStats(spec, g, 20.0, 10.0).distanceM, 0.01)
+        assertEquals(1380.0, surveyStats(spec, g, 20.0, 10.0, 100.0).distanceM, 0.01)
     }
 
     /** A strip narrower than one spacing gets one line down the middle: 1000 × 10 m, spacing 45 → 1 line at y = 5. */
@@ -124,7 +143,7 @@ class SurveyGridTest {
         val (spec, g) = grid(strip, angle = 90.0, spacing = 45.0)
         assertEquals(1, g.lineCount)
         assertAt(0.0, 5.0, g.passes.single().photoStart, "centre line")
-        assertEquals(51, surveyStats(spec, g, 20.0, 10.0).photoCount, "⌊1000/20⌋ + 1")
+        assertEquals(51, surveyStats(spec, g, 20.0, 10.0, 100.0).photoCount, "⌊1000/20⌋ + 1")
     }
 
     /** Smaller than one photo: still one line and at least one photo (the trigger fires when switched on). */
@@ -134,7 +153,7 @@ class SurveyGridTest {
         val (spec, g) = grid(tiny, angle = 0.0, spacing = 45.0)
         assertEquals(1, g.lineCount)
         assertEquals(5.0, g.passes.single().photoLengthM, 1e-3)
-        val stats = surveyStats(spec, g, 20.0, 10.0)
+        val stats = surveyStats(spec, g, 20.0, 10.0, 100.0)
         assertEquals(1, stats.photoCount)
         assertEquals(25.0, stats.areaM2, 1e-3)
     }
@@ -158,7 +177,7 @@ class SurveyGridTest {
         assertAt(15.0, -10.0, g.passes[0].entry, "run-in starts outside")
         assertAt(15.0, 210.0, g.passes[0].exit, "run-out ends outside")
         assertAt(15.0, 0.0, g.passes[0].photoStart, "photos still start at the edge")
-        assertEquals(1810.0, surveyStats(spec, g, 20.0, 10.0).distanceM, 0.01)
+        assertEquals(1810.0, surveyStats(spec, g, 20.0, 10.0, 100.0).distanceM, 0.01)
     }
 
     /**
@@ -188,7 +207,7 @@ class SurveyGridTest {
         }
         listOf(202.0796, 202.0796, 247.0796, 202.0796, 247.0796, 202.0796)
             .zip(g.connectorsM).forEach { (want, got) -> assertEquals(want, got, 1e-3) }
-        assertEquals(3222.4778, surveyStats(spec, g, 20.0, 20.0).distanceM, 1e-3)
+        assertEquals(3222.4778, surveyStats(spec, g, 20.0, 20.0, 100.0).distanceM, 1e-3)
     }
 
     /**
@@ -269,11 +288,11 @@ class SurveyGridTest {
     @Test
     fun cameraSwitchesOffHalfATriggerDistanceAfterTheLastPhoto() {
         val (_, g) = grid(rectangle, 0.0, 45.0, turn = Turnaround.Copter(extensionM = 12.0))
-        assertAt(15.0, 210.0, g.passes[0].cameraOff(20.0), "northbound, 200 m")
-        assertAt(60.0, -10.0, g.passes[1].cameraOff(20.0), "southbound: 10 m south of the edge")
+        assertAt(15.0, 210.0, g.passes[0].cameraOff(20.0, 100.0), "northbound, 200 m")
+        assertAt(60.0, -10.0, g.passes[1].cameraOff(20.0, 100.0), "southbound: 10 m south of the edge")
         val taller = listOf(m(0.0, 0.0), m(300.0, 0.0), m(300.0, 205.0), m(0.0, 205.0))
-        assertAt(15.0, 210.0, grid(taller, 0.0, 45.0, turn = Turnaround.Copter(12.0)).second.passes[0].cameraOff(20.0), "205 m")
-        assertAt(15.0, 204.0, grid(rectangle, 0.0, 45.0, turn = Turnaround.Copter(4.0)).second.passes[0].cameraOff(20.0), "capped")
+        assertAt(15.0, 210.0, grid(taller, 0.0, 45.0, turn = Turnaround.Copter(12.0)).second.passes[0].cameraOff(20.0, 100.0), "205 m")
+        assertAt(15.0, 204.0, grid(rectangle, 0.0, 45.0, turn = Turnaround.Copter(4.0)).second.passes[0].cameraOff(20.0, 100.0), "capped")
     }
 
     /**
