@@ -213,7 +213,9 @@ private fun NewProfileForm(
                     Text("Device", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
                     TextButton(onClick = onRefreshSerialPorts) { Text("Refresh") }
                 }
-                if (serialPorts.isEmpty()) Text("No serial ports found. Plug in the radio or flight controller, then Refresh.", style = MaterialTheme.typography.bodySmall)
+                if (serialPorts.isEmpty()) {
+                    Text("No serial ports found. Plug in the radio or flight controller, or pair a Bluetooth module in the system settings, then Refresh.", style = MaterialTheme.typography.bodySmall)
+                }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
                     serialPorts.forEach { p ->
                         FilterChip(
@@ -223,10 +225,16 @@ private fun NewProfileForm(
                         )
                     }
                 }
-                Text("Baud rate (57600 for a SiK radio; ignored over the FC's own USB)", style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
-                    STANDARD_BAUD_RATES.forEach { baud ->
-                        FilterChip(selected = form.baud == baud, onClick = { onBaudChanged(baud) }, label = { Text("$baud") })
+                val note = serialPorts.firstOrNull { it.name == form.serialPort }?.let(::bluetoothNote)
+                if (note != null) {
+                    // Over Bluetooth the tablet or PC side has no baud rate; the module's own UART setting is what counts.
+                    Text(note, style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("Baud rate (57600 for a SiK radio; ignored over the FC's own USB)", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                        STANDARD_BAUD_RATES.forEach { baud ->
+                            FilterChip(selected = form.baud == baud, onClick = { onBaudChanged(baud) }, label = { Text("$baud") })
+                        }
                     }
                 }
                 form.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }

@@ -3074,3 +3074,99 @@ below the ground is refused, and the upload preview lists every item with its al
 - Corridors from imported lines (Pass 24): an imported line could offer "as corridor". Small follow-up.
 - The ArduCopter SITL started at 11:35 was left running, untouched.
 - Next: **Pass 26 — Bluetooth SPP on Android.** **Stopped here, as asked.**
+
+## Pass 26 — Bluetooth SPP on Android; desktop Bluetooth as a COM port (2026-09-28)
+
+### What changed
+- **`core/mavlink/SerialTransport.kt`**: `SerialPortInfo.bluetooth`; `bluetoothPortName(address)` ("bt:<address>")
+  and `bluetoothAddressOf(name)`. A paired Bluetooth device is listed and saved as a serial port.
+- **`core/mavlink/LinkConfig.kt`**: a Bluetooth serial profile reads "Bluetooth <address>" (the file format is
+  unchanged: it's still `serial`).
+- **`core/mavlink/androidMain/SerialPorts.android.kt`**: `list()` adds the tablet's paired Bluetooth devices;
+  `open()` of a `bt:` port connects an RFCOMM socket on the SPP UUID. `requestBluetoothPermission`, set by the shell,
+  asks for "Nearby devices" (BLUETOOTH_CONNECT) the first time the port list is read without it.
+- **`core/mavlink/jvmCommonMain/StreamSerialLink.kt`** (new): a `SerialLink` over a blocking stream pair (what an
+  RFCOMM socket gives), shared code so it's tested on the desktop JVM.
+- **`core/mavlink/jvmMain/SerialPorts.jvm.kt`**: marks Windows' "Standard Serial over Bluetooth link" COM ports.
+- **`app/android/AndroidManifest.xml`**: `BLUETOOTH` (API ≤ 30), `BLUETOOTH_CONNECT`, Bluetooth feature not required.
+- **`app/shared/androidMain/AndroidApp.kt`**: one `SerialPorts` instance shared with Koin, and
+  `RegisterBluetoothPermission` (the permission launcher, like `RegisterPlanFiles`).
+- **`feature/connections`**: for a Bluetooth port the form shows a note instead of baud chips (`bluetoothNote`):
+  on Android "no baud rate here, the module's must match SERIALn_BAUD"; on Windows "use the Outgoing COM port" and
+  where Windows shows it. The empty-list text mentions pairing.
+- Tests: `StreamSerialLinkTest` (5), `ProfileFileTest` (Bluetooth round trip + `bluetoothNotes`).
+
+### How it works
+```
+Android Links → Refresh → SerialPorts.list() = USB-OTG drivers + adapter.bondedDevices ("bt:00:21:13:0A:BC:DE")
+   no permission yet → post the "Nearby devices" prompt, list USB only; Allow → Refresh → paired devices appear
+Save profile → LinkConfig.Serial("bt:…") → connect
+   ConnectionManager → createTransport → SerialTransport { serialPorts.open("bt:…") }
+      → device.createRfcommSocketToServiceRecord(SPP UUID).connect()      (blocking, IO thread)
+      → StreamSerialLink(socket.in, socket.out) → same framing, gateway, reconnect loop as USB/UDP/TCP
+Desktop: pair in Windows → a COM port → the existing Serial link (jSerialComm), unchanged
+```
+
+### Engineering learnings
+- **Bluetooth SPP is a serial port, so it's modelled as one.** No new `LinkConfig`, transport, screen or repository:
+  a paired device is one more entry in the serial list, and everything behind `SerialTransport` (framing, the TX
+  gateway, reconnect, link stats) is shared. That's also how the desktop does it: Windows turns the pairing into a
+  COM port. One mental model on both platforms.
+- **What was reused from the old KFT GCS** (`AndroidStudioProjects/kftgcs`, `BluetoothMavConnection.kt`): the SPP
+  UUID, a secure RFCOMM socket from `createRfcommSocketToServiceRecord`, a blocking `connect()`, paired devices only
+  (no discovery), `BLUETOOTH_CONNECT` on Android 12+ and `BLUETOOTH` up to 11, and a reconnect after a drop (its
+  2 s delay; ours is the connection manager's loop). **What wasn't:** its `BLUETOOTH_SCAN` and location permissions.
+  Connecting to a paired device needs neither, and asking for location in a GCS invites questions.
+- **A socket read blocks, and close unblocks it.** USB and COM-port libraries don't reliably abort a blocked read, so
+  `SerialTransport` polls with a timeout. An RFCOMM socket does abort (Android: `close()` "will immediately abort
+  ongoing operations"), so `StreamSerialLink` just blocks. The test found that a `PipedInputStream` does **not**
+  wake on close, so it now uses a localhost TCP socket as the stand-in: the same close semantics as RFCOMM.
+- **The permission prompt is posted, not launched.** The Links ViewModel first reads the port list while it is being
+  composed, and an activity-result launch mustn't happen mid-composition. `Handler(mainLooper).post` runs it just
+  after. It's asked for when Links first lists ports, not at app start, so a tablet that only uses UDP isn't asked.
+- **Windows' two COM ports per pairing.** On this laptop Windows lists COM26 and COM27, both "Standard Serial over
+  Bluetooth link". Its device IDs tell them apart: the Outgoing port carries the module's address
+  (`…000CBF172152`), the Incoming one zeros. jSerialComm can't see that (right now it listed only COM27), so the form
+  points the operator to Windows' COM Ports tab. The upgrade path, if it trips people up, is reading the device ID
+  (WMI/registry) to mark or hide the Incoming port.
+- **Ponytail review:** nothing cut; the new code is two small functions, one class and a flag. `ponytail:` notes:
+  no reflective `createRfcommSocket(1)` fallback for modules with a broken SDP record (the old app never needed it).
+
+### What to look at
+1. `core/mavlink/src/androidMain/kotlin/com/kft/gcs/core/mavlink/SerialPorts.android.kt`: `bluetoothPorts()` and
+   `openBluetooth()`.
+2. `core/mavlink/src/jvmCommonMain/kotlin/com/kft/gcs/core/mavlink/StreamSerialLink.kt`.
+3. `app/shared/src/androidMain/kotlin/com/kft/gcs/app/AndroidApp.kt`: `RegisterBluetoothPermission`.
+
+### Tests
+- `StreamSerialLinkTest` (5, desktop JVM, no radio): a MAVLink heartbeat decoded through `SerialTransport` over the
+  stream link; frames written whole; the other end hanging up ends the link with an IOException; a disconnect
+  unblocks a read that is waiting (localhost socket); `bt:` names and the "Bluetooth <address>" summary.
+- `ProfileFileTest`: a Bluetooth profile survives the profile file round trip; `bluetoothNotes` (USB none, Android
+  "no baud rate", Windows "Outgoing").
+- `gradlew.bat check` and `:app:android:assembleDebug`: pass; the merged manifest has `BLUETOOTH` (max SDK 30),
+  `BLUETOOTH_CONNECT`, and `android.hardware.bluetooth` not required. No new warnings.
+- Desktop, checked read-only on this laptop: jSerialComm lists COM27 as "Standard Serial over Bluetooth link
+  (COM27)", which is now flagged as Bluetooth.
+- **Not tested on hardware** (no tablet or Bluetooth module here). **Manual steps:**
+  1. Android tablet: pair the module (HC-05/HC-06, or a Bluetooth telemetry bridge) in Android's Bluetooth settings
+     (PIN usually 1234 or 0000). The module's UART to the flight controller must match that port's SERIALn_BAUD
+     (e.g. SERIAL2_BAUD = 57 for 57600; HC-05 default is 9600: set the module with AT commands, or the FC to 9).
+  2. Links → Serial → Refresh. Expected: the "Nearby devices" prompt on Android 12+; Allow; Refresh again: "bt:… ·
+     Bluetooth · HC-05" in the list, and the note instead of baud rates.
+  3. Save, Connect. Expected: "Link open on Bluetooth 00:…", heartbeat within a few seconds, the HUD fills. Switch the
+     module off: the status drops to reconnecting; switch it on: it reconnects by itself.
+  4. Desktop: pair the module in Windows, note the Outgoing COM port (Settings → Bluetooth & devices → Devices →
+     More Bluetooth settings → COM Ports), Links → Serial → that COM port → Connect. Expected: the same heartbeat.
+
+### Safety
+Bluetooth is one more byte stream under `SerialTransport`: every outgoing message still goes through `MavTxGateway`,
+with the same allowlist. No allowlist, protocol or mission change. Bluetooth Classic SPP links are short range
+(about 10–30 m) and slower than a SiK radio; they suit bench work and a tablet next to the pilot, not long-range
+telemetry.
+
+### Open questions / next
+- Hardware check with a real module (steps above), on the tablet and on Windows.
+- If an operator picks Windows' Incoming COM port, the connect just fails: mark it using the device ID (see above).
+- `ponytail:` no fallback for modules with a broken SDP record.
+- This was the last pass of the batch (23–26). **Stopped here, as asked.**

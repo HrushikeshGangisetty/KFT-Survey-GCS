@@ -37,11 +37,14 @@ sealed interface LinkConfig {
         override val summary get() = "TCP $host:$port"
     }
 
-    /** A serial port: a telemetry radio or the flight controller's own USB. See [STANDARD_BAUD_RATES]. */
+    /**
+     * A serial port: a telemetry radio, the flight controller's own USB, or a paired Bluetooth SPP module
+     * ([bluetoothPortName]; [baud] is then unused). See [STANDARD_BAUD_RATES].
+     */
     @Serializable @SerialName("serial")
     data class Serial(val port: String, val baud: Int = 57600) : LinkConfig {
         init { require(port.isNotBlank()) { "port is blank" }; require(baud > 0) { "baud must be positive: $baud" } }
-        override val summary get() = "Serial $port @ $baud"
+        override val summary get() = bluetoothAddressOf(port)?.let { "Bluetooth $it" } ?: "Serial $port @ $baud"
     }
 }
 

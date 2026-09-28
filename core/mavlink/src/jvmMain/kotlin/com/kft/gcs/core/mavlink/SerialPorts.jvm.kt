@@ -9,7 +9,10 @@ import okio.IOException
  */
 actual class SerialPorts {
     actual fun list(): List<SerialPortInfo> =
-        SerialPort.getCommPorts().map { SerialPortInfo(it.systemPortName, it.descriptivePortName) }
+        SerialPort.getCommPorts().map {
+            // Windows names them "Standard Serial over Bluetooth link (COM26)".
+            SerialPortInfo(it.systemPortName, it.descriptivePortName, bluetooth = it.descriptivePortName.contains("Bluetooth", ignoreCase = true))
+        }
 
     internal actual fun open(name: String, baud: Int): SerialLink {
         val port = SerialPort.getCommPort(name)

@@ -2,6 +2,7 @@ package com.kft.gcs.feature.connections
 
 import androidx.compose.runtime.Immutable
 import com.kft.gcs.core.mavlink.LinkConfig
+import com.kft.gcs.core.mavlink.bluetoothAddressOf
 import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.VehicleInfo
@@ -131,4 +132,21 @@ fun ProfileForm.toConfigOrError(): Result<LinkConfig> {
             },
         )
     }
+}
+
+/**
+ * What to tell the operator about a Bluetooth port, or null for any other port.
+ * - Android lists the paired device itself ("bt:…"): no baud rate to pick; the module's UART must match the flight
+ *   controller's SERIALn_BAUD.
+ * - Windows makes two COM ports for each paired SPP device: "Outgoing" (the PC calls the module: the one to use) and
+ *   "Incoming" (waits to be called). jSerialComm names both the same, so the operator is pointed at where Windows
+ *   says which is which.
+ */
+fun bluetoothNote(port: SerialPortInfo): String? = when {
+    !port.bluetooth -> null
+    bluetoothAddressOf(port.name) != null ->
+        "Bluetooth: no baud rate to set here. The module's own baud rate must match the flight controller's SERIAL port (SERIALn_BAUD)."
+    else ->
+        "Bluetooth COM port: Windows makes two per paired module. Use the one marked \"Outgoing\" (Settings → Bluetooth & devices → Devices → " +
+            "More Bluetooth settings → COM Ports). The baud rate here isn't used; the module's own setting must match the flight controller."
 }

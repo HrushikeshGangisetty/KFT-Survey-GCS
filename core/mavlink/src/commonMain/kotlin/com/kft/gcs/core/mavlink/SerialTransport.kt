@@ -8,18 +8,33 @@ import okio.Source
 import okio.Timeout
 import okio.buffer
 
-/** A serial port the OS offers. [name] is what a [LinkConfig.Serial] stores: "COM7" on Windows, a USB device path on Android. */
-data class SerialPortInfo(val name: String, val description: String)
+/**
+ * A serial port the OS offers. [name] is what a [LinkConfig.Serial] stores: "COM7" on Windows, a USB device path or a
+ * paired Bluetooth device ("bt:00:21:13:0A:BC:DE", [bluetoothPortName]) on Android. [bluetooth]: the port is a
+ * Bluetooth SPP link (on desktop, a COM port Windows made for a paired device), where the baud rate isn't used.
+ */
+data class SerialPortInfo(val name: String, val description: String, val bluetooth: Boolean = false)
 
 /**
- * Lists and opens this platform's serial ports: jSerialComm on desktop, usb-serial-for-android over USB-OTG on
- * Android. Each shell creates one (Android needs a Context) and hands it to Koin; see `app:shared`.
+ * Bluetooth Classic SPP ("Serial Port Profile") is a serial port carried over radio, so a paired device is listed
+ * and saved like any other serial port, under this name. Only Android lists them itself; on desktop Windows gives
+ * each paired SPP device a COM port, which jSerialComm lists already (spec §2.1).
+ */
+fun bluetoothPortName(address: String) = "bt:$address"
+
+/** The device address in a [bluetoothPortName], or null for any other port. */
+fun bluetoothAddressOf(portName: String): String? = portName.removePrefix("bt:").takeIf { portName.startsWith("bt:") }
+
+/**
+ * Lists and opens this platform's serial ports: jSerialComm on desktop (Bluetooth included, as COM ports),
+ * usb-serial-for-android over USB-OTG plus paired Bluetooth SPP devices on Android. Each shell creates one (Android
+ * needs a Context) and hands it to Koin; see `app:shared`.
  */
 expect class SerialPorts {
     /** Ports present right now. Cheap enough to call when the user taps "Refresh". */
     fun list(): List<SerialPortInfo>
 
-    /** Opens [name] at [baud], 8N1. Throws [IOException] with an operator-readable message if it can't. */
+    /** Opens [name] at [baud], 8N1 (a Bluetooth port ignores [baud]). Throws [IOException] with an operator-readable message if it can't. */
     internal fun open(name: String, baud: Int): SerialLink
 }
 
