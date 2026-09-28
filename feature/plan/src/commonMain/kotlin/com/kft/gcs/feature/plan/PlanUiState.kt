@@ -7,6 +7,9 @@ import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.planning.SurveyLimits
 import com.kft.gcs.core.planning.SurveyWarning
+import com.kft.gcs.core.planning.SurveyPlan
+import com.kft.gcs.core.planning.MIN_CORRIDOR_SIDE_OVERLAP
+import com.kft.gcs.core.planning.corridorOutline
 import com.kft.gcs.core.planning.entryCornerPositions
 import com.kft.gcs.core.mission.MissionCommand
 import com.kft.gcs.core.mission.MissionItem
@@ -140,7 +143,7 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
     val home = vehicle.home?.position
     val selected = e.selectedGroup?.let(flat.groups::getOrNull)
     val surveyGroup = selected?.group as? SurveyGroup
-    val starts = selected?.plan?.let { plan ->
+    val starts = selected?.plan?.takeIf { surveyGroup?.survey?.isCorridor == false }?.let { plan ->
         // Half a line spacing out: off the corner handles, and scaled to the survey like everything else on it.
         surveyGroup?.let { entryCornerPositions(it.survey.polygon, it.survey.gridAngleDeg, outsetM = plan.lineSpacingM / 2) }
     } ?: emptyMap()
@@ -165,7 +168,9 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
                     }
                 }
                 is SurveyGroup -> {
-                    add(MapOverlay.Polygon(group.survey.polygon, selected = g == e.selectedGroup))
+                    // An area's outline is its corners; a corridor's is its edges, worked out from the centre line.
+                    val outline = group.survey.corridorShape()?.let { corridorOutline(group.survey.polygon, it) } ?: group.survey.polygon.takeIf { !group.survey.isCorridor }
+                    outline?.let { add(MapOverlay.Polygon(it, selected = g == e.selectedGroup)) }
                     // Where the survey starts and ends: its first and last position (entry of the first line, exit
                     // of the last). Labels only; the map doesn't let them be grabbed.
                     val path = fg.items.mapNotNull { it.position }
@@ -203,7 +208,7 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
 
     return PlanUiState(
         groups = flat.groups.mapIndexed { i, fg ->
-            GroupHeader(i, fg.group.name, if (fg.group is SurveyGroup) "Survey" else "Waypoints", groupSummary(fg, kind), i == e.selectedGroup)
+            GroupHeader(i, fg.group.name, groupKind(fg.group), groupSummary(fg, kind), i == e.selectedGroup)
         },
         rows = rows,
         form = e.form,
@@ -218,6 +223,8 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
         hint = when {
             !vehicle.connected -> "No vehicle: plan now, connect on Links to upload."
             selected == null -> "Add a group: + Waypoints or + Survey."
+            surveyGroup != null && surveyGroup.survey.isCorridor && surveyGroup.survey.polygon.size < 2 -> "Click the map to draw the corridor's centre line, point by point."
+            surveyGroup != null && surveyGroup.survey.isCorridor -> "Click the map to extend the centre line, drag a point to move it."
             surveyGroup != null && surveyGroup.survey.polygon.size < 3 -> "Click the map to add the area's corners (at least 3)."
             surveyGroup != null -> "Click the map to add a corner, drag one to move it. Tap a grey dot to start there."
             rows.isEmpty() -> "Click the map to add waypoints."
@@ -303,8 +310,10 @@ private fun surveyPanel(group: SurveyGroup, flat: FlatGroup, selectedItem: Int?,
     val stats = plan?.let { p ->
         listOf(
             "Area" to "${oneDecimalText(p.stats.areaM2 / 10_000)} ha",
-            "Lines" to "${p.stats.lineCount}${if (p.grid.lineSkip > 1) ", flown every ${ordinal(p.grid.lineSkip)} line" else ""}",
+            "Lines" to linesText(p),
             "Line spacing" to "${oneDecimalText(p.lineSpacingM)} m",
+            // A corridor's side overlap follows from its width and line count, so it's shown, not typed.
+            *(if (s.isCorridor) arrayOf("Side overlap" to "${(100 * (1 - p.lineSpacingM / p.footprint.acrossM)).roundToInt()} %") else emptyArray()),
             "Photo every" to "${oneDecimalText(p.triggerDistanceM)} m (${oneDecimalText(p.triggerDistanceM / s.speedMs)} s)",
             "Photos" to "${p.stats.photoCount}",
             "Distance" to distanceText(p.stats.distanceM),
@@ -344,6 +353,20 @@ internal fun warningText(w: SurveyWarning): String = when (w) {
             "Fly at most ${oneDecimalText(w.maxSpeedMs)} m/s, or lower the front overlap."
     is SurveyWarning.GsdAboveLimit -> "GSD ${oneDecimalText(w.gsdM * 100)} cm/px is coarser than your ${oneDecimalText(w.limitM * 100)} cm/px limit."
     is SurveyWarning.PlaneLoopTurns -> "${w.count} turns are tighter than the plane's turn radius and need a loop. Widen the spacing or add lines."
+    is SurveyWarning.CorridorSideOverlapLow ->
+        "the lines give only ${(w.overlap * 100).roundToInt()} % side overlap (${(MIN_CORRIDOR_SIDE_OVERLAP * 100).roundToInt()} % is the least for mapping). Add lines or fly higher."
+}
+
+/** "Survey", "Corridor" or "Waypoints", for the group list. */
+internal fun groupKind(group: MissionGroup) = when (group) {
+    is WaypointGroup -> "Waypoints"
+    is SurveyGroup -> if (group.survey.isCorridor) "Corridor" else "Survey"
+}
+
+/** "7", "7, flown every 2nd line", or with a crosshatch "7 + 5" (first pass + crossing pass). */
+private fun linesText(p: SurveyPlan): String {
+    val first = "${p.grid.lineCount}${if (p.grid.lineSkip > 1) ", flown every ${ordinal(p.grid.lineSkip)} line" else ""}"
+    return p.crosshatch?.let { "${p.grid.lineCount} + ${it.grid.lineCount}" } ?: first
 }
 
 private fun ordinal(n: Int) = when (n) { 2 -> "2nd"; 3 -> "3rd"; else -> "${n}th" }

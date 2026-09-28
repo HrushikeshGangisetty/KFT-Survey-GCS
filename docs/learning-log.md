@@ -2963,3 +2963,114 @@ system are refused rather than guessed, and file altitudes are never used for wa
   would help. Not run on the tablet yet.
 - Lines import as waypoints today; Pass 25's corridor scan will offer them as corridor centre lines.
 - Next: **Pass 25 — crosshatch and corridor scan.** **Stopped here, as asked.**
+
+## Pass 25 — Crosshatch and corridor scan (2026-09-28)
+
+### What changed
+- **`core/planning/Corridor.kt`** (new): `CorridorShape` (left/right width, number of lines, centre line or not),
+  `corridorOffsets` (where the lines sit across the corridor), `offsetLine` (a parallel copy of the centre line, miter
+  joins, bends over 120° refused), `buildCorridorGrid` (the corridor's lines as a `SurveyGrid`), `corridorOutline`
+  (its edges, for the map), `corridorAreaM2`.
+- **`core/planning/Survey.kt`**: `SurveyParams.crosshatch` (`Crosshatch(altitudeOffsetM)`) and `.corridor`.
+  `planSurvey` now plans one or two `GridLeg`s (altitude, footprint, spacing, trigger, grid). The crosshatch's second
+  leg is at +90°, its own altitude, and starts at the corner nearest the first leg's end. `SurveyPlan.crosshatch` and
+  `.legs`; the stats cover both legs and the hop between them. New warning `CorridorSideOverlapLow` (under 60 %).
+- **`core/planning/SurveyGrid.kt`**: `Pass.via` (the bends of a corridor line). `cameraOff` walks the whole path
+  (`pointAlong`); new `cameraOffDistanceM`, `viaDistancesM`, and `SurveyGrid.distanceM` (shared by both stats paths).
+- **`feature/plan`**: `SurveySettings` gains `pattern` (AREA / CORRIDOR), `crosshatch`, `crosshatchOffsetM`, the
+  corridor fields, `corridorShape()`, `minPoints`. `surveyItems` writes every leg at its own altitude and trigger,
+  plus a waypoint at each bend. The panel: an "Add corridor scan" button; a Crosshatch checkbox with its altitude
+  offset; for corridors a "Corridor" section (widths, lines, centre line) instead of overlap/angle/start corner.
+  "Side overlap" in a corridor's stats; "Lines 8 + 5" for a crosshatch. The map: a corridor's outline, no start options.
+  Map clicks extend a corridor's centre line at its end. Plan files keep the new fields (optional, so older files
+  read as area surveys).
+- **`tools/sitl/photo_check.py`**: a photo line now follows the waypoints until the camera goes off, so photos round a
+  corridor's bend count as on the line. Straight lines give the same numbers as before.
+- **`PlaneSurveySitlRun`**: two more SITL cases, `uploadCopterCrosshatchField` and `uploadCopterCorridor`.
+- `ui/design`: `KftIcons.AddCorridor` (Material Symbols `polyline`).
+
+### How it works
+```
+SurveySettings ──toParams──▶ SurveyParams(crosshatch?, corridor?)
+  planSurvey
+    ├─ first leg: area → buildSurveyGrid(angle)        corridor → corridorOffsets + buildCorridorGrid
+    ├─ crosshatch: 4 × buildSurveyGrid(angle + 90°, altitude + offset, each entry corner) → the one nearest the end
+    └─ stats (both legs + hop), warnings (every leg)
+  surveyItems: for each leg, for each pass:
+    WP entry → WP photoStart → CAM on (leg's d) → WP each bend → WP camera-off → CAM off → WP exit   (leg's altitude)
+```
+**Corridor lines.** Offsets from the centre line, left negative. Without the centre line: n equal strips,
+s = (L + R)/n. With it: lines at k·s, a to the left and b to the right; the strips must reach both edges, so
+s = max(L/(a + ½), R/(b + ½)), with the split a/b that gives the smallest s. Each line is the centre line moved
+sideways: every segment along its normal, meeting at a bend on the bisector at offset / cos(turn/2).
+
+### Engineering learnings
+- **One survey type with two patterns, not a new group type.** A corridor is a survey whose "polygon" is a centre
+  line. Stats, mission items, the upload preview, the photo count on Fly, the route overlays, plan files and the SITL
+  harness all work for it without new code. The only thing the grid needed was `Pass.via`, the bends.
+- **The crosshatch keeps the overlap at its own altitude.** 10 m higher means a 20 % bigger footprint, so its spacing
+  and trigger are 20 % longer. The SITL mission shows 32 waypoints at 50 m and 20 at 60 m, and every photo is on its
+  line.
+- **Why 120° is the limit for a corridor bend.** The miter point is offset / cos(θ/2) from the vertex: 2× the offset
+  at 120°, and it runs off to infinity near 180°. Past 120° the offset lines fold over themselves. The operator gets
+  "add a point to round the bend", not a strange mission. The first map-click test hit it by accident (a 146° hairpin).
+- **Knife-edge photo counts.** A line that is an exact number of trigger distances (300 m / 20 m) gets 15 or 16
+  photos depending on micrometres of projection. Coverage is the same either way (the far strip is covered by half a
+  footprint), so the tests use 310 m lines to keep hand counts off that edge. It's a test-design point, not a bug.
+- **The SITL check found a tool gap, not a planner gap.** `photo_check.py` treated a photo line as one segment. On a
+  bent corridor that would have reported every photo after the bend as "off the line". It now follows the waypoints
+  until the camera goes off.
+- **SITL without disturbing what's running.** An ArduCopter SITL (instance 0, started at 11:35, not by me) was
+  already running. The checks used a second instance (`-I1`, ports 5770–5773, its own folder) with a tiny
+  keep-alive client on SERIAL0 instead of a MAVProxy window. The script is in the session scratchpad; the
+  steps are below.
+- **Ponytail review:** one shrink applied (the stats duplicated the grid-distance formula; now `SurveyGrid.distanceM`).
+  `ponytail:` notes: the crosshatch hop is a straight line at survey speed, also for Plane.
+
+### What to look at
+1. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/Corridor.kt:37`: `corridorOffsets`, and `:106`
+   `offsetLine` (the geometry).
+2. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/Survey.kt:121`: `planSurvey` with legs.
+3. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/MissionGroups.kt:200`: `surveyItems` for both.
+
+### Tests
+- `CorridorCrosshatchTest` (10, by hand on the Pass 13 P4P example): offsets without/with the centre line and
+  one-sided; the offset line round a right angle (outside and inside, miter at 10·√2); a hairpin refused; a straight
+  corridor (48 photos, 1090 m, 46 500 m², line order and run-in); the side-overlap warning (50 %); a bent corridor
+  (440 m path, 23 photos, camera off past the bend); crosshatch (12 lines, 157 photos, 3676.06 m, second entry at
+  the nearest corner); the altitude offset (67.5 m spacing, 30 m trigger, 110 photos); a crosshatch below ground
+  refused.
+- `PlanPatternsTest` (5): crosshatch items at 50 m then 70 m with each leg's trigger; a corridor on the map (click
+  order, 8-point outline, side overlap stat, no start options); corridor items with the bend waypoint while the camera
+  is on; whole lines only; plan files round trip, and a Pass 24 file reads as an area.
+- `PlanUiTest` (2 new, headless Compose): crosshatch from the panel (offset field appears, "Lines x + y");
+  corridor from the panel (2 points, no start corner or grid angle, Lines → 5 and centre line on change the side overlap).
+- All earlier planning tests unchanged and passing (cameraOff now walks the path; straight passes are the same).
+- `gradlew.bat check`: passes. No new warnings (the old `PlanViewModel` `!!` one moved to line 467).
+- **SITL photo_check, run by me** (ArduCopter SITL instance 1, `--wipe`, scripted: upload through `flatten` and the
+  mission protocol, fly with `sitl_pilot.py`, `photo_check.py`):
+  - **Crosshatch** (`uploadCopterCrosshatchField`: P4P, 160 × 110 m, 70 %/70 %, +10 m): planned 13 lines (8 at 50 m,
+    5 at 60 m), 109 photos, 81 items. **Flown 109 / 109**, max 0.3 m off a line, 0 photos in turns.
+  - **Corridor** (`uploadCopterCorridor`: L-shaped 220 m + 150 m, 20 m each side, 3 lines with the centre line,
+    13.3 m spacing): planned 75 photos, 24 items. **Flown 75 / 75**, max 0.6 m off a line (round the bend), 0 in
+    turns; the inside line 23 photos, the centre 25, the outside 27.
+  - To repeat by hand: `start-sitl.ps1 -Vehicle copter -Wipe`, then
+    `KFT_SITL=127.0.0.1:5762 KFT_SITL_OUT=<dir> gradlew :feature:plan:jvmTest --tests '*PlaneSurveySitlRun.uploadCopterCorridor'`,
+    `sitl_pilot.py tcp:127.0.0.1:5763 --photos <dir>/photos.csv`, then
+    `photo_check.py <dir>/mission.waypoints <dir>/photos.csv --planned <n>` (the same for the crosshatch case).
+
+### Safety
+Nothing about transmission changed: no gateway, allowlist or protocol edits. The missions contain the same item types
+as before (NAV_WAYPOINT, DO_SET_CAM_TRIGG_DIST, DO_CHANGE_SPEED, TAKEOFF, RTL), so the upload path and the S11 home
+rule are untouched. A crosshatch's second leg changes altitude between legs (a plain waypoint altitude). An offset
+below the ground is refused, and the upload preview lists every item with its altitude.
+
+### Open questions / next
+- **Plane crosshatch and corridor not flown in SITL** (Copter only this pass). The hop to the second leg is modelled
+  as a straight line (`ponytail:` in `planSurvey`); a plane's first lead-in (4 turn radii) should settle it. Worth a
+  plane run next SITL session.
+- Corridor side overlap is shown and warned about but not a setting. If operators want "70 % side overlap, work out
+  the lines", add it as a mode.
+- Corridors from imported lines (Pass 24): an imported line could offer "as corridor". Small follow-up.
+- The ArduCopter SITL started at 11:35 was left running, untouched.
+- Next: **Pass 26 — Bluetooth SPP on Android.** **Stopped here, as asked.**

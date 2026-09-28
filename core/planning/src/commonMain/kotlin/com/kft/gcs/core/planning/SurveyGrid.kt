@@ -65,9 +65,11 @@ data class GridSpec(
 )
 
 /**
- * One straight run, in flight order: [entry] → [photoStart] (inside the area, cameras on) → [photoEnd] → [exit].
+ * One run, in flight order: [entry] → [photoStart] (inside the area, cameras on) → [via] → [photoEnd] → [exit].
  * Entry/exit add the run-in/run-out outside the area. A concave area can give one line several passes, with the
  * same [line] number; the vehicle flies straight on between them and only the first/last have a run-in/out.
+ * An area survey's passes are straight ([via] empty); a corridor's follow the centre line's bends ([via]).
+ * [photoLengthM] is the length flown with the camera on, bends included.
  */
 data class Pass(
     /** Sweep line number in flight order, 0 = first. */
@@ -79,6 +81,7 @@ data class Pass(
     val runInM: Double,
     val photoLengthM: Double,
     val runOutM: Double,
+    val via: List<LatLon> = emptyList(),
 )
 
 /**
@@ -247,7 +250,7 @@ internal fun planeLineOrder(lineCount: Int, skip: Int): List<Int>? {
  */
 fun surveyStats(spec: GridSpec, grid: SurveyGrid, triggerDistanceM: Double, speedMs: Double, alongFootprintM: Double): SurveyStats {
     require(triggerDistanceM > 0 && speedMs > 0) { "trigger distance and speed must be positive" }
-    val distance = grid.passes.sumOf { it.runInM + it.photoLengthM + it.runOutM } + grid.connectorsM.sum()
+    val distance = grid.distanceM
     return SurveyStats(
         areaM2 = polygonAreaM2(spec.polygon),
         lineCount = grid.lineCount,
@@ -258,6 +261,9 @@ fun surveyStats(spec: GridSpec, grid: SurveyGrid, triggerDistanceM: Double, spee
         flightTimeS = distance / speedMs,
     )
 }
+
+/** From the first entry to the last exit: every pass with its run-in/out, and the legs between them. */
+val SurveyGrid.distanceM: Double get() = passes.sumOf { it.runInM + it.photoLengthM + it.runOutM } + connectorsM.sum()
 
 /**
  * How many photos a pass of [photoLengthM] needs, and ArduPilot takes, with a distance trigger every
@@ -290,11 +296,43 @@ fun photosOnPass(photoLengthM: Double, triggerDistanceM: Double, alongFootprintM
  * extra far-edge photo is planned). Where the run-out is shorter (the inner pieces of a concave line have none), it's
  * capped at the end of the run-out.
  */
-fun Pass.cameraOff(triggerDistanceM: Double, alongFootprintM: Double): LatLon {
-    val along = (photosOnPass(photoLengthM, triggerDistanceM, alongFootprintM) - 0.5) * triggerDistanceM
-    // photoStart → exit is one straight line on the flat local map, and over a survey field lat/lon are linear on it.
-    val f = min(along, photoLengthM + runOutM) / (photoLengthM + runOutM)
-    return LatLon(photoStart.latitude + f * (exit.latitude - photoStart.latitude), photoStart.longitude + f * (exit.longitude - photoStart.longitude))
+fun Pass.cameraOff(triggerDistanceM: Double, alongFootprintM: Double): LatLon =
+    pointAlong(listOf(photoStart) + via + listOf(photoEnd, exit), cameraOffDistanceM(triggerDistanceM, alongFootprintM))
+
+/** How far from [Pass.photoStart], along the pass, [cameraOff] is. */
+fun Pass.cameraOffDistanceM(triggerDistanceM: Double, alongFootprintM: Double): Double =
+    min((photosOnPass(photoLengthM, triggerDistanceM, alongFootprintM) - 0.5) * triggerDistanceM, photoLengthM + runOutM)
+
+/** Each bend ([Pass.via]) with its distance from [Pass.photoStart] along the pass. */
+fun Pass.viaDistancesM(): List<Pair<LatLon, Double>> {
+    val projection = LocalProjection(photoStart)
+    var at = LocalPoint(0.0, 0.0)
+    var total = 0.0
+    return via.map { v ->
+        val p = projection.toLocal(v)
+        total += hypot(p.x - at.x, p.y - at.y)
+        at = p
+        v to total
+    }
+}
+
+/**
+ * The point [distanceM] along [path], walking it segment by segment. Each segment is straight on the flat local map,
+ * and over a survey field lat/lon are linear along it, so a point within a segment is a plain interpolation.
+ */
+internal fun pointAlong(path: List<LatLon>, distanceM: Double): LatLon {
+    val projection = LocalProjection(path.first())
+    val pts = path.map(projection::toLocal)
+    var left = distanceM
+    for (i in 0 until pts.lastIndex) {
+        val len = hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y)
+        if (left <= len || i == pts.lastIndex - 1) {
+            val f = if (len == 0.0) 0.0 else min(left / len, 1.0)
+            return projection.toLatLon(LocalPoint(pts[i].x + f * (pts[i + 1].x - pts[i].x), pts[i].y + f * (pts[i + 1].y - pts[i].y)))
+        }
+        left -= len
+    }
+    return path.last()
 }
 
 /** Polygon area in m², by the shoelace formula on the local flat map. */

@@ -47,6 +47,14 @@ private data class SurveyEntry(
     val speedMs: Double,
     val turnaroundM: Double,
     val returnHome: Boolean,
+    // Pass 25. Defaults, so plans saved before read as they were (area surveys without crosshatch).
+    val pattern: SurveyPattern = SurveyPattern.AREA,
+    val crosshatch: Boolean = false,
+    val crosshatchOffsetM: Double = 0.0,
+    val leftWidthM: Double = 25.0,
+    val rightWidthM: Double = 25.0,
+    val corridorLines: Int = 3,
+    val includeCentreLine: Boolean = false,
 ) : GroupEntry
 
 /** An editor row. A passthrough row (read from the vehicle, not editable) keeps its raw mission item fields. */
@@ -90,6 +98,7 @@ private fun MissionGroup.toEntry(): GroupEntry = when (this) {
         SurveyEntry(
             name, polygon.map { listOf(it.latitude, it.longitude) }, camera.toEntry(), heightMode, altitudeM, gsdCm,
             orientation, sideOverlapPct, frontOverlapPct, gridAngleDeg, entry, speedMs, turnaroundM, returnHome,
+            pattern, crosshatch, crosshatchOffsetM, leftWidthM, rightWidthM, corridorLines, includeCentreLine,
         )
     }
 }
@@ -101,6 +110,7 @@ private fun GroupEntry.toGroup(): MissionGroup = when (this) {
         SurveySettings(
             polygon.map { LatLon(it[0], it[1]) }, camera.toCamera(), heightMode, altitudeM, gsdCm, orientation,
             sideOverlapPct, frontOverlapPct, gridAngleDeg, entry, speedMs, turnaroundM, returnHome,
+            pattern, crosshatch, crosshatchOffsetM, leftWidthM, rightWidthM, corridorLines, includeCentreLine,
         ),
     )
 }

@@ -42,6 +42,10 @@ enum class SurveyField(val range: ClosedFloatingPointRange<Double>) {
     GRID_ANGLE(-360.0..360.0),
     SPEED(1.0..50.0),
     TURNAROUND(0.0..500.0),
+    CROSSHATCH_OFFSET(-500.0..500.0),
+    LEFT_WIDTH(0.0..2000.0),
+    RIGHT_WIDTH(0.0..2000.0),
+    CORRIDOR_LINES(1.0..50.0),
 }
 
 enum class ExportFormat(val extension: String) { QGC_PLAN("plan"), WAYPOINTS("waypoints") }
@@ -92,7 +96,8 @@ class PlanViewModel(
                 e.changed(null, e.groups.replace(g, group.copy(items = items))).selectRow(items.lastIndex)
             }
             is SurveyGroup -> {
-                val polygon = insertCorner(group.survey.polygon, at)
+                // A corridor's centre line grows at its end, in click order; an area's corner goes into the nearest side.
+                val polygon = if (group.survey.isCorridor) group.survey.polygon + at else insertCorner(group.survey.polygon, at)
                 e.changed(null, e.groups.replace(g, group.withSurvey { it.copy(polygon = polygon) }))
                     .copy(selectedItem = polygon.indexOf(at), form = null)
             }
@@ -137,6 +142,15 @@ class PlanViewModel(
     override fun onAddWaypointsClicked() = addGroup(WaypointGroup(nextName("Waypoints")))
 
     override fun onAddSurveyClicked() = addGroup(SurveyGroup(nextName("Survey"), defaultSurvey(vehicle.value.vehicleKind, settings.settings.value.cameras.first())))
+
+    /** A corridor: the survey defaults, 25 m each side and 3 lines; the panel shows the side overlap that gives. */
+    override fun onAddCorridorClicked() = addGroup(
+        SurveyGroup(nextName("Corridor"), defaultSurvey(vehicle.value.vehicleKind, settings.settings.value.cameras.first()).copy(pattern = SurveyPattern.CORRIDOR)),
+    )
+
+    override fun onCrosshatchChanged(on: Boolean) = editSurvey(null) { s, _ -> s.copy(crosshatch = on) }
+
+    override fun onCentreLineChanged(on: Boolean) = editSurvey(null) { s, _ -> s.copy(includeCentreLine = on) }
 
     override fun onGroupSelected(index: Int) = edit.update { e ->
         if (index !in e.groups.indices) e else e.copy(selectedGroup = index, selectedItem = null, form = null, lastEdit = null)
@@ -188,6 +202,11 @@ class PlanViewModel(
                 SurveyField.GRID_ANGLE -> s.copy(gridAngleDeg = value)
                 SurveyField.SPEED -> s.copy(speedMs = value)
                 SurveyField.TURNAROUND -> s.copy(turnaroundM = value)
+                SurveyField.CROSSHATCH_OFFSET -> s.copy(crosshatchOffsetM = value)
+                SurveyField.LEFT_WIDTH -> s.copy(leftWidthM = value)
+                SurveyField.RIGHT_WIDTH -> s.copy(rightWidthM = value)
+                // Whole lines only: 3.7 isn't a number of lines, so it waits for the operator to finish typing.
+                SurveyField.CORRIDOR_LINES -> if (value % 1.0 == 0.0) s.copy(corridorLines = value.toInt()) else s
             }
         }
     }

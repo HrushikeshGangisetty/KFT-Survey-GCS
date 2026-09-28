@@ -55,6 +55,7 @@ object KftIcons {
     // so "save to a file" and "send to the aircraft" never look alike.
     val AddWaypoint: ImageVector @Composable get() = vectorResource(Res.drawable.ic_add_location_alt)
     val AddSurvey: ImageVector @Composable get() = vectorResource(Res.drawable.ic_grid_on)
+    val AddCorridor: ImageVector @Composable get() = vectorResource(Res.drawable.ic_polyline)
     val Undo: ImageVector @Composable get() = vectorResource(Res.drawable.ic_undo)
     val Redo: ImageVector @Composable get() = vectorResource(Res.drawable.ic_redo)
     val Open: ImageVector @Composable get() = vectorResource(Res.drawable.ic_folder_open)

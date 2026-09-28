@@ -68,6 +68,9 @@ import kotlin.math.roundToLong
 interface PlanActions {
     fun onAddWaypointsClicked()
     fun onAddSurveyClicked()
+    fun onAddCorridorClicked()
+    fun onCrosshatchChanged(on: Boolean)
+    fun onCentreLineChanged(on: Boolean)
     fun onGroupSelected(index: Int)
     fun onGroupRenamed(index: Int, name: String)
     fun onGroupDeleted(index: Int)
@@ -191,6 +194,7 @@ private fun Toolbar(state: PlanUiState, actions: PlanActions, onClear: () -> Uni
             listOf(
                 ToolbarEntry.Action(KftIcons.AddWaypoint, "Add waypoints", onClick = actions::onAddWaypointsClicked),
                 ToolbarEntry.Action(KftIcons.AddSurvey, "Add survey", onClick = actions::onAddSurveyClicked),
+                ToolbarEntry.Action(KftIcons.AddCorridor, "Add corridor scan", onClick = actions::onAddCorridorClicked),
                 ToolbarEntry.Divider,
                 ToolbarEntry.Action(KftIcons.Undo, "Undo (Ctrl+Z)", state.canUndo, actions::onUndoClicked),
                 ToolbarEntry.Action(KftIcons.Redo, "Redo (Ctrl+Shift+Z)", state.canRedo, actions::onRedoClicked),
@@ -280,9 +284,10 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
     val s = panel.settings
     panel.error?.let { WarningLine(it) }
     panel.warnings.forEach { WarningLine(it) }
+    val point = if (s.isCorridor) "point" else "corner"
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("${panel.cornerCount} corners", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        TextButton(onClick = actions::onDeleteCornerClicked, enabled = panel.cornerSelected) { Text("Delete selected corner") }
+        Text("${panel.cornerCount} ${point}s", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = actions::onDeleteCornerClicked, enabled = panel.cornerSelected) { Text("Delete selected $point") }
     }
 
     Section("Camera") { CameraSection(panel, actions) }
@@ -296,25 +301,43 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
             panel.altitudeM?.let { Readout("Altitude above home", "${oneDecimalText(it)} m") }
         }
     }
-    Section("Overlap & angle") {
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
-            SurveyNumber("Side overlap", "%", s.sideOverlapPct, SurveyField.SIDE_OVERLAP, group, actions, Modifier.weight(1f))
-            SurveyNumber("Front overlap", "%", s.frontOverlapPct, SurveyField.FRONT_OVERLAP, group, actions, Modifier.weight(1f))
+    if (s.isCorridor) {
+        // Side overlap follows from the width and the number of lines here; the footer shows it.
+        Section("Corridor") {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                SurveyNumber("Left width", "m", s.leftWidthM, SurveyField.LEFT_WIDTH, group, actions, Modifier.weight(1f))
+                SurveyNumber("Right width", "m", s.rightWidthM, SurveyField.RIGHT_WIDTH, group, actions, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                SurveyNumber("Lines", "", s.corridorLines.toDouble(), SurveyField.CORRIDOR_LINES, group, actions, Modifier.weight(1f))
+                SurveyNumber("Front overlap", "%", s.frontOverlapPct, SurveyField.FRONT_OVERLAP, group, actions, Modifier.weight(1f))
+            }
+            CheckRow("A line on the centre line itself", s.includeCentreLine, actions::onCentreLineChanged)
+            Text("Left and right as seen flying from the first point to the last.", style = MaterialTheme.typography.bodySmall)
         }
-        SurveyNumber("Grid angle", "°", s.gridAngleDeg, SurveyField.GRID_ANGLE, group, actions, Modifier.fillMaxWidth())
+    } else {
+        Section("Overlap & angle") {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                SurveyNumber("Side overlap", "%", s.sideOverlapPct, SurveyField.SIDE_OVERLAP, group, actions, Modifier.weight(1f))
+                SurveyNumber("Front overlap", "%", s.frontOverlapPct, SurveyField.FRONT_OVERLAP, group, actions, Modifier.weight(1f))
+            }
+            SurveyNumber("Grid angle", "°", s.gridAngleDeg, SurveyField.GRID_ANGLE, group, actions, Modifier.fillMaxWidth())
+            CheckRow("Crosshatch: fly it again at 90°", s.crosshatch, actions::onCrosshatchChanged)
+            if (s.crosshatch) {
+                SurveyNumber("Second pass higher by", "m", s.crosshatchOffsetM, SurveyField.CROSSHATCH_OFFSET, group, actions, Modifier.fillMaxWidth())
+            }
+        }
     }
     Section("Flight") {
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
             SurveyNumber("Speed", "m/s", s.speedMs, SurveyField.SPEED, group, actions, Modifier.weight(1f))
             SurveyNumber(if (panel.isPlane) "Lead-in" else "Run-in / out", "m", s.turnaroundM, SurveyField.TURNAROUND, group, actions, Modifier.weight(1f))
         }
-        Row(Modifier.fillMaxWidth().heightIn(min = MinTouchTarget).clickable { actions.onReturnHomeChanged(!s.returnHome) }, verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(s.returnHome, actions::onReturnHomeChanged)
-            Text("Return to launch at the end (mission item)", style = MaterialTheme.typography.bodySmall)
-        }
+        CheckRow("Return to launch at the end (mission item)", s.returnHome, actions::onReturnHomeChanged)
     }
-    // Chosen on the map (the corners of the area); the panel only says which one it is.
-    Section("Start corner") {
+    // Chosen on the map (the corners of the area); the panel only says which one it is. A corridor starts at its
+    // centre line's first point.
+    if (!s.isCorridor) Section("Start corner") {
         Text(
             panel.startCorner?.let { "Starts at the $it corner (highlighted on the map). Tap a grey dot at another corner to start there." }
                 ?: "Add the area's corners first.",
@@ -324,6 +347,15 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
     Section("Battery & limits (kept between runs)", startExpanded = false) {
         OptionalNumberField(if (panel.isPlane) "Plane battery, usable" else "Copter battery, usable", "min", panel.batteryMinutes, actions::onBatteryMinutesChanged, Modifier.fillMaxWidth())
         OptionalNumberField("Warn above GSD", "cm/px", panel.maxGsdCm, actions::onMaxGsdChanged, Modifier.fillMaxWidth())
+    }
+}
+
+/** A checkbox with its label, the whole row a 48 dp touch target. */
+@Composable
+private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = MinTouchTarget).clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked, onChange)
+        Text(label, style = MaterialTheme.typography.bodySmall)
     }
 }
 

@@ -38,7 +38,8 @@ import kotlinx.coroutines.withTimeout
  * `KFT_SITL=127.0.0.1:5762 KFT_SITL_OUT=<dir> gradlew :feature:plan:jvmTest --tests '*PlaneSurveySitlRun.uploadPass16PlaneField'`,
  * then fly it with `sitl_pilot.py tcp:127.0.0.1:5763 --photos <dir>/photos.csv`.
  *
- * [uploadCopterFarEdgeField] is the Copter check of Pass 21's far-edge photo, run the same way against Copter SITL.
+ * [uploadCopterFarEdgeField] is the Copter check of Pass 21's far-edge photo; [uploadCopterCrosshatchField] and
+ * [uploadCopterCorridor] are Pass 25's. All run the same way against Copter SITL.
  */
 class PlaneSurveySitlRun {
     @Test
@@ -62,6 +63,33 @@ class PlaneSurveySitlRun {
         defaultSurvey(VehicleKind.COPTER, camera).copy(
             polygon = listOf(offset(home, 40.0, 30.0), offset(home, 240.0, 30.0), offset(home, 240.0, 178.0), offset(home, 40.0, 178.0)),
             sideOverlapPct = 70.0, frontOverlapPct = 40.0,
+        )
+    }
+
+    /**
+     * Pass 25, crosshatch: a 160 × 110 m Copter field east of home, P4P at 50 m, 70 % side / 70 % front, flown again at
+     * 90° 10 m higher (60 m: spacing and trigger scale by 60/50). photo_check: every photo on one of the two sets of lines.
+     */
+    @Test
+    fun uploadCopterCrosshatchField() = upload(VehicleKind.COPTER) { home ->
+        val camera = bundledCameras.first { it.name.startsWith("DJI Phantom 4 Pro") }
+        defaultSurvey(VehicleKind.COPTER, camera).copy(
+            polygon = listOf(offset(home, 40.0, 30.0), offset(home, 200.0, 30.0), offset(home, 200.0, 140.0), offset(home, 40.0, 140.0)),
+            sideOverlapPct = 70.0, frontOverlapPct = 70.0, crosshatch = true, crosshatchOffsetM = 10.0,
+        )
+    }
+
+    /**
+     * Pass 25, corridor: an L-shaped centre line (220 m east, then 150 m north), 20 m each side, 3 lines with one on the
+     * centre line, P4P at 50 m, 70 % front. photo_check: every photo on its line, including round the bend.
+     */
+    @Test
+    fun uploadCopterCorridor() = upload(VehicleKind.COPTER) { home ->
+        val camera = bundledCameras.first { it.name.startsWith("DJI Phantom 4 Pro") }
+        defaultSurvey(VehicleKind.COPTER, camera).copy(
+            polygon = listOf(offset(home, 30.0, 40.0), offset(home, 250.0, 40.0), offset(home, 250.0, 190.0)),
+            pattern = SurveyPattern.CORRIDOR, leftWidthM = 20.0, rightWidthM = 20.0, corridorLines = 3, includeCentreLine = true,
+            frontOverlapPct = 70.0,
         )
     }
 

@@ -5,6 +5,8 @@ import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.CameraOrientation
+import com.kft.gcs.core.planning.CorridorShape
+import com.kft.gcs.core.planning.Crosshatch
 import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.planning.SurveyHeight
 import com.kft.gcs.core.planning.SurveyLimits
@@ -12,6 +14,8 @@ import com.kft.gcs.core.planning.SurveyParams
 import com.kft.gcs.core.planning.SurveyPlan
 import com.kft.gcs.core.planning.Turnaround
 import com.kft.gcs.core.planning.cameraOff
+import com.kft.gcs.core.planning.cameraOffDistanceM
+import com.kft.gcs.core.planning.viaDistancesM
 import com.kft.gcs.core.planning.gsdM
 import com.kft.gcs.core.planning.planSurvey
 import com.kft.gcs.core.planning.planeTurnRadiusM
@@ -33,13 +37,19 @@ data class WaypointGroup(override val name: String, val items: List<PlanItem> = 
     override fun renamed(name: String) = copy(name = name)
 }
 
-/** An area survey: its settings, from which the lines and mission items are generated. */
+/** An area survey or a corridor scan: its settings, from which the lines and mission items are generated. */
 data class SurveyGroup(override val name: String, val survey: SurveySettings) : MissionGroup {
     override fun renamed(name: String) = copy(name = name)
 }
 
 /** Which of altitude and GSD the operator typed; the other one is computed ([SurveyHeight]). */
 enum class HeightMode { ALTITUDE, GSD }
+
+/**
+ * What a survey group covers: an AREA (a polygon, lawn-mower lines, optionally crosshatched) or a CORRIDOR (a centre
+ * line with a width each side, lines that follow it: roads, pipelines, rivers, power lines).
+ */
+enum class SurveyPattern { AREA, CORRIDOR }
 
 /**
  * A survey as the operator edits it: plain numbers in the units the panel shows (percent, cm/px). [toParams] turns
@@ -49,6 +59,9 @@ enum class HeightMode { ALTITUDE, GSD }
  *   least half a trigger distance, where the camera switches off ([com.kft.gcs.core.planning.cameraOff]).
  * @property returnHome end the survey with a Return-to-launch mission item (flown only when the pilot has put the
  *   vehicle in AUTO; it's a plan, not a command, spec S9).
+ * @property polygon the area's corners, or for a [SurveyPattern.CORRIDOR] its centre line, in order.
+ * @property crosshatch area only: fly it again with the lines at 90°, [crosshatchOffsetM] higher (negative: lower).
+ * @property leftWidthM / [rightWidthM] / [corridorLines] / [includeCentreLine] corridor only ([CorridorShape]).
  */
 data class SurveySettings(
     val polygon: List<LatLon> = emptyList(),
@@ -64,7 +77,23 @@ data class SurveySettings(
     val speedMs: Double,
     val turnaroundM: Double,
     val returnHome: Boolean = true,
+    val pattern: SurveyPattern = SurveyPattern.AREA,
+    val crosshatch: Boolean = false,
+    val crosshatchOffsetM: Double = 0.0,
+    val leftWidthM: Double = 25.0,
+    val rightWidthM: Double = 25.0,
+    val corridorLines: Int = 3,
+    val includeCentreLine: Boolean = false,
 ) {
+    val isCorridor: Boolean get() = pattern == SurveyPattern.CORRIDOR
+
+    /** The corridor's shape; null for an area. */
+    fun corridorShape(): CorridorShape? =
+        if (isCorridor) CorridorShape(leftWidthM, rightWidthM, corridorLines, includeCentreLine) else null
+
+    /** Corners (area) or centre-line points (corridor) needed before it can be planned. */
+    val minPoints: Int get() = if (isCorridor) 2 else 3
+
     fun toParams(kind: VehicleKind?) = SurveyParams(
         polygon = polygon,
         camera = camera,
@@ -81,6 +110,8 @@ data class SurveySettings(
         } else {
             Turnaround.Copter(turnaroundM)
         },
+        crosshatch = if (crosshatch && !isCorridor) Crosshatch(crosshatchOffsetM) else null,
+        corridor = corridorShape(),
     )
 }
 
@@ -131,10 +162,14 @@ fun flatten(groups: List<MissionGroup>, kind: VehicleKind?, limits: SurveyLimits
         val result = when (group) {
             is WaypointGroup -> FlatGroup(group, toMissionItems(group.items), first, null, null)
             is SurveyGroup -> {
-                val plan = if (group.survey.polygon.size < 3) null else runCatching { planSurvey(group.survey.toParams(kind), limits) }
+                val survey = group.survey
+                val plan = if (survey.polygon.size < survey.minPoints) null else runCatching { planSurvey(survey.toParams(kind), limits) }
                 val takeoff = first == 1 && kind != VehicleKind.PLANE
                 when {
-                    plan == null -> FlatGroup(group, emptyList(), first, null, "Click the map to add at least 3 corners.")
+                    plan == null -> FlatGroup(
+                        group, emptyList(), first, null,
+                        if (survey.isCorridor) "Click the map to draw the centre line (at least 2 points)." else "Click the map to add at least 3 corners.",
+                    )
                     plan.isFailure -> FlatGroup(group, emptyList(), first, null, plan.exceptionOrNull()?.message)
                     else -> plan.getOrThrow().let { FlatGroup(group, surveyItems(it, group.survey, takeoff), first, it, null) }
                 }
@@ -150,8 +185,11 @@ fun flatten(groups: List<MissionGroup>, kind: VehicleKind?, limits: SurveyLimits
  * A survey's mission items. Per pass:
  * ```
  * WAYPOINT entry (run-in start, if any) → WAYPOINT photoStart → CAM_TRIGG_DIST(d, shoot now)
- *   → WAYPOINT camera-off point → CAM_TRIGG_DIST(0 = stop) → WAYPOINT exit (run-out end, if further on)
+ *   → WAYPOINT at each bend (corridors) → WAYPOINT camera-off point → CAM_TRIGG_DIST(0 = stop)
+ *   → WAYPOINT exit (run-out end, if further on)
  * ```
+ * A crosshatch repeats this for its second set of lines, at its own altitude and trigger distance ([SurveyPlan.legs]):
+ * the vehicle climbs or descends on the way to the second set's first waypoint.
  * A DO_ command runs when the vehicle reaches the NAV item before it (ArduPilot AP_Mission), so the camera starts on
  * the area's edge and stops half a trigger distance after the last photo ([cameraOff], within d/2 of the far edge):
  * no photos in the turns. ArduPilot takes the first photo at once (param3
@@ -160,21 +198,25 @@ fun flatten(groups: List<MissionGroup>, kind: VehicleKind?, limits: SurveyLimits
  * an optional RETURN_TO_LAUNCH item. All altitudes are relative to home.
  */
 internal fun surveyItems(plan: SurveyPlan, survey: SurveySettings, takeoff: Boolean): List<MissionItem> = buildList {
-    val alt = plan.altitudeM
-    fun waypoint(at: LatLon) = add(MissionItem(MissionCommand.WAYPOINT, at, alt))
     fun trigger(distanceM: Double, shootNow: Boolean) =
         add(MissionItem(MissionCommand.DO_SET_CAM_TRIGG_DIST, param1 = distanceM.toFloat(), param3 = if (shootNow) 1f else 0f))
 
-    if (takeoff) add(MissionItem(MissionCommand.TAKEOFF, altitudeM = alt))
+    if (takeoff) add(MissionItem(MissionCommand.TAKEOFF, altitudeM = plan.altitudeM))
     add(speedItem(survey.speedMs))
-    plan.grid.passes.forEach { p ->
-        if (p.runInM > 0) waypoint(p.entry)
-        waypoint(p.photoStart)
-        trigger(plan.triggerDistanceM, shootNow = true)
-        val off = p.cameraOff(plan.triggerDistanceM, plan.footprint.alongM)
-        waypoint(off)
-        trigger(0.0, shootNow = false)
-        if (Geodesy.distanceMeters(off, p.exit) > 0.01) waypoint(p.exit)
+    plan.legs.forEach { leg ->
+        fun waypoint(at: LatLon) = add(MissionItem(MissionCommand.WAYPOINT, at, leg.altitudeM))
+        leg.grid.passes.forEach { p ->
+            if (p.runInM > 0) waypoint(p.entry)
+            waypoint(p.photoStart)
+            trigger(leg.triggerDistanceM, shootNow = true)
+            val off = p.cameraOff(leg.triggerDistanceM, leg.footprint.alongM)
+            // The bends the camera-off point lies beyond (it is past the last one unless the pass is very short).
+            val offAt = p.cameraOffDistanceM(leg.triggerDistanceM, leg.footprint.alongM)
+            p.viaDistancesM().filter { (_, d) -> d < offAt }.forEach { (at, _) -> waypoint(at) }
+            waypoint(off)
+            trigger(0.0, shootNow = false)
+            if (Geodesy.distanceMeters(off, p.exit) > 0.01) waypoint(p.exit)
+        }
     }
     if (survey.returnHome) add(MissionItem(MissionCommand.RETURN_TO_LAUNCH))
 }

@@ -5,8 +5,9 @@
 mission.waypoints: the GCS's own export of the uploaded plan (Plan -> Export -> Mission Planner .waypoints).
 photos.csv: from `sitl_pilot.py --photos`.
 
-A "photo line" is the stretch between the waypoint followed by DO_SET_CAM_TRIGG_DIST(d > 0) and the next waypoint
-(followed by the camera switched off). Every photo should lie on one of them: its distance from the nearest photo line
+A "photo line" is the path from the waypoint followed by DO_SET_CAM_TRIGG_DIST(d > 0) through every waypoint after it
+until the camera is switched off (d = 0): one straight segment on an area survey, several on a corridor with bends
+(Pass 25). Every photo should lie on one of them: its distance from the nearest photo line
 is reported, and a photo more than --tolerance metres off any line (in a turn, on a run-in) counts as out of place.
 Plain Python, no dependencies: a flat local map is exact enough over a survey field (as in core:geo).
 """
@@ -23,16 +24,18 @@ def read_waypoints(path):
 
 
 def photo_lines(items):
-    """The (start, end) positions between which the camera is on."""
-    lines, start, last_wp = [], None, None
+    """Each path flown with the camera on, as a list of waypoint positions."""
+    lines, current, last_wp = [], None, None
     for cmd, lat, lon, p1 in items:
         if cmd == 16:  # NAV_WAYPOINT
-            if start is not None:
-                lines.append((start, (lat, lon)))
-                start = None
+            if current is not None:
+                current.append((lat, lon))
             last_wp = (lat, lon)
         elif cmd == 206 and p1 > 0:  # DO_SET_CAM_TRIGG_DIST on: from the waypoint just reached
-            start = last_wp
+            current = [last_wp]
+        elif cmd == 206 and current is not None:  # off: the path ends at the waypoint just reached
+            lines.append(current)
+            current = None
     return lines
 
 
@@ -51,13 +54,16 @@ def main():
     def xy(p):
         return (math.radians(p[1]) * R * math.cos(math.radians(lat0)), math.radians(p[0]) * R)
 
-    def distance_to_segment(p, s):
-        (px, py), (ax, ay), (bx, by) = xy(p), xy(s[0]), xy(s[1])
+    def distance_to_segment(p, a, b):
+        (px, py), (ax, ay), (bx, by) = xy(p), xy(a), xy(b)
         dx, dy = bx - ax, by - ay
         t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
         return math.hypot(px - ax - t * dx, py - ay - t * dy)
 
-    off = [min(distance_to_segment(p, s) for s in lines) for p in photos]
+    def distance_to_line(p, line):
+        return min(distance_to_segment(p, a, b) for a, b in zip(line, line[1:]))
+
+    off = [min(distance_to_line(p, line) for line in lines) for p in photos]
     outside = [d for d in off if d > a.tolerance]
     print(f"photo lines: {len(lines)}, photos: {len(photos)}" + (f", planned: {a.planned} (difference {len(photos) - a.planned:+d})" if a.planned else ""))
     print(f"distance from the nearest photo line: max {max(off):.1f} m, mean {sum(off) / len(off):.1f} m")
@@ -65,7 +71,7 @@ def main():
 
     # Per line, in flight order: where a plane is still settling after its turn shows in the first photos (Pass 16/18).
     # Photos are logged in time order, so each line's first entries are the ones taken first.
-    nearest = [min(range(len(lines)), key=lambda i: distance_to_segment(p, lines[i])) for p in photos]
+    nearest = [min(range(len(lines)), key=lambda i: distance_to_line(p, lines[i])) for p in photos]
     for i in range(len(lines)):
         d = [off[k] for k in range(len(photos)) if nearest[k] == i]
         if d:

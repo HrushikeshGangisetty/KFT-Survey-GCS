@@ -3,6 +3,7 @@ package com.kft.gcs.feature.plan
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -22,6 +23,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -74,6 +76,45 @@ class PlanUiTest {
         val spacingAfter = vm.state.value.survey!!.stats.toMap().getValue("Line spacing")
         assertNotEquals(spacingBefore, spacingAfter, "the line spacing follows the side overlap")
         onNodeWithText(spacingAfter).assertExists() // the pinned stats footer shows the new value
+    }
+
+    /** Crosshatch: ticking it shows the altitude offset, and the Lines stat becomes "first + crossing". */
+    @Test
+    fun crosshatchFromThePanel() = runDesktopComposeUiTest(width = 1400, height = 1000) {
+        val vm = planWithASurvey()
+        onNodeWithText("Crosshatch: fly it again at 90°").performScrollTo().performClick()
+        onNodeWithText("Second pass higher by").performScrollTo().performTextReplacement("10")
+        waitForIdle()
+        assertEquals(true to 10.0, vm.survey().crosshatch to vm.survey().crosshatchOffsetM)
+        val lines = vm.state.value.survey!!.stats.toMap().getValue("Lines")
+        assertTrue(" + " in lines, lines)
+        onNodeWithText(lines).assertExists()
+    }
+
+    /**
+     * Corridor: drawn with two map clicks; its own section (widths, lines, centre line) replaces overlap/angle and the
+     * start corner, and the side overlap it gives is in the stats, following the number of lines.
+     */
+    @Test
+    fun corridorFromThePanel() = runDesktopComposeUiTest(width = 1400, height = 1000) {
+        val vm = PlanViewModel(vehicle, FakeMissions(), MissionSync(), PlanSettingsRepository(MemoryStore()), FakeFiles())
+        setContent { KftTheme(ThemeMode.DARK) { PlanRoute(vm) } }
+        onNodeWithContentDescription("Add corridor scan").performClick()
+        vm.onMapClick(area[0])
+        vm.onMapClick(area[1])
+        waitForIdle()
+        onNodeWithText("2 points").assertExists()
+        onNodeWithText("Start corner").assertDoesNotExist()
+        onNodeWithText("Grid angle").assertDoesNotExist()
+        val overlapBefore = vm.state.value.survey!!.stats.toMap().getValue("Side overlap")
+
+        onNode(hasText("Lines") and hasSetTextAction()).performScrollTo().performTextReplacement("5") // the field, not the stats label
+        onNodeWithText("A line on the centre line itself").performScrollTo().performClick()
+        waitForIdle()
+        assertEquals(5 to true, vm.survey().corridorLines to vm.survey().includeCentreLine)
+        val overlapAfter = vm.state.value.survey!!.stats.toMap().getValue("Side overlap")
+        assertNotEquals(overlapBefore, overlapAfter, "more lines, more side overlap")
+        onNodeWithText(overlapAfter).assertExists()
     }
 
     /** Two edits, two undos back to the start, one redo forward: the fields follow the plan each time. */
