@@ -5,7 +5,10 @@ import com.kft.gcs.feature.params.ParamsViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
-/** Params bindings. The app provides the [com.kft.gcs.feature.params.ParamFiles] (the platform's file dialogs). */
+/**
+ * Params bindings. The app provides the [com.kft.gcs.feature.params.ParamFiles] (the platform's file dialogs) and the
+ * [com.kft.gcs.feature.params.MetadataSource] (HTTP and a folder for the downloaded descriptions).
+ */
 val paramsModule = module {
-    viewModel { ParamsViewModel(get<VehicleRepository>().state, get(), get()) }
+    viewModel { ParamsViewModel(get<VehicleRepository>().state, get(), get(), get()) }
 }

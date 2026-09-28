@@ -6,6 +6,7 @@ import androidx.compose.ui.window.FrameWindowScope
 import com.kft.gcs.core.mavlink.SerialPorts
 import com.kft.gcs.core.mavlink.di.IoDispatcher
 import com.kft.gcs.feature.connections.ProfileStore
+import com.kft.gcs.feature.params.MetadataSource
 import com.kft.gcs.feature.plan.PlanFiles
 import com.kft.gcs.feature.plan.SettingsStore
 import com.kft.gcs.ui.design.kftAppIcon
@@ -30,6 +31,7 @@ private val desktopModule = module {
     single<ProfileStore> { FileTextStore(File(dir, "connection-profiles.json")) }
     single<SettingsStore> { FileTextStore(File(dir, "plan-settings.json")) }
     single<ThemeStore> { FileTextStore(File(dir, "theme.txt")) }
+    single<MetadataSource> { HttpMetadataSource(File(dir, "param-metadata"), get(IoDispatcher)) }
     single<PlanFiles> { DesktopPlanFiles(get(IoDispatcher)) }
 }
 

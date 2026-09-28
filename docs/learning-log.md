@@ -2308,3 +2308,146 @@ MapView: route-turn (faded) → route-transit (dashed) → route-plan → route-
   Say if you'd rather the photo lines were a second colour (for example yellow).
 - **Tooltips on the tablet** are long-press (M3). Checked on desktop only (hover).
 - Next: **Pass 20, parameter metadata.**
+
+## Pass 20 — Parameter metadata: descriptions, units, ranges, value lists and bitmasks (2026-09-28)
+
+### What changed
+- **`core/geo-io/ParamMetadata.kt`** (new):
+  - `ParamMeta`: display name, description, units, range, increment, values, bitmask, reboot-required, read-only.
+  - `parsePdef` recognises JSON or XML by the first character.
+  - The JSON reader (kotlinx-serialization, already a dependency here).
+  - `PdefVehicle`, `pdefUrls(vehicle, version)` and `pdefCacheKey`.
+- **`core/geo-io/src/jvmCommonMain/ParamMetadataXml.kt`** (new): the XML reader, using the platform's SAX parser
+  (`javax.xml.parsers`, present on Android and the desktop JVM).
+  - `core/geo-io/build.gradle.kts` gains the `jvmCommon` source set that holds it (same set-up as `app:shared`).
+- **`feature/params`**:
+  - `MetadataSource` (cached / save / download) is the interface the app backs.
+  - `ParamsViewModel` loads metadata after every parameter download, handles the import, the range check with its
+    one override, and search by display name and description.
+  - `ParamsUiState`: `metadata` status line; `ParamRow` gets group, displayName, valueLabel, units and the two
+    flags; `ParamEdit` gets description, facts, readOnly, choices and bits.
+  - `ParamsScreen`:
+    - an import button (the Material Symbol `description`);
+    - a sticky header for each group;
+    - rows with the display name, value · units · value name, and "restart" / "read-only" chips;
+    - the edit dialog with the description, facts, a values dropdown and bitmask checkboxes.
+  - **Fix:** the search field and the value field keep their own text. Fed back through the StateFlow, fast typing
+    dropped characters (found on the Pass 20 SITL run).
+- **`app/shared/jvmCommonMain/HttpMetadataSource.kt`** (new): `HttpURLConnection` GET plus one cache file per key.
+  - Desktop keeps them in `%APPDATA%\KFT-GCS\param-metadata\`, Android in `filesDir/param-metadata/`. Both shells
+    bind it.
+- **Tests:**
+  - `ParamMetadataTest` (3, common).
+  - `ParamMetadataXmlTest` (2, desktop JVM and Android host).
+  - 8 new `ParamsViewModelTest` cases.
+- `ui/design`: the `description` icon. `docs/design/20-desktop-params-cam1-type-set.png`.
+
+### How it works
+```
+Download parameters ─▶ ParamsViewModel.loadMetadata(vehicle kind, AUTOPILOT_VERSION text)
+    key = "Copter-4.5.7"  ─▶ MetadataSource.cached(key)? ─yes─▶ parsePdef ─▶ "Descriptions: …, saved on this device"
+                                                        └no─▶ for url in pdefUrls(): download
+                                                                 404 ─▶ next url
+                                                                 no network ─▶ "couldn't reach … Import a file"
+                                                                 parses ─▶ save(key) ─▶ "…, downloaded"
+    pdefUrls:  "4.5.7"        → versioned/Copter/stable-4.5.7/apm.pdef.json, then .xml   (archive: XML only)
+               "4.8.0-dev" …  → ArduCopter/apm.pdef.json, then .xml                     (latest build)
+Import file ─▶ parsePdef ─▶ empty? "not a metadata file" : save(key) ─▶ used from then on (it's "the cache")
+
+Edit ─▶ Set: read-only? refuse · out of range and the vehicle's value in range? refuse ("Not sent")
+            out of range and the vehicle's value also out? allowed: "Warning: …" in the question · restart note
+       ─▶ Confirm ─▶ PARAM_SET as before (disarmed only, echo-checked; Pass 18)
+```
+
+### Engineering learnings
+- **What autotest.ardupilot.org actually serves (checked 2026-09-26).**
+  - `Parameters/ArduCopter/apm.pdef.json` (2.2 MB) and `.xml` (2.8 MB) are the **latest** build.
+  - `Parameters/versioned/Copter/stable-4.1.0 … stable-4.7.1/` hold **only `apm.pdef.xml`**, and there's no beta
+    archive.
+  - So for released firmware the ".xml fallback" is the normal path. The XML reader is not an edge case, and it's
+    tested as such: both fixtures must parse to the identical map.
+- **SAX, not a DOM, and not a hand-written parser.** The platform already has a streaming XML parser on both targets,
+  so writing our own would be code with no gain. A DOM of a 2.8 MB file is tens of MB, a lot on a tablet.
+  - Security: external entities are switched off (XXE), because imported files come from the operator.
+  - Each flag has its own guard, because Android's parser rejects them. A single `runCatching` around both would
+    have made every Android parse fail silently.
+- **No HTTP library.** One GET of a public file: `HttpURLConnection` exists on Android and the desktop JVM, so it
+  sits in `jvmCommon` next to `FileTextStore`, and the file write reuses `FileTextStore`'s temporary-file-plus-rename.
+- **Never bundled, cached on the device.** Pass 18 left the files' licence as unclear (generated from GPL-3.0 source).
+  Downloading at runtime keeps them out of the app and the repository. The test fixtures are our own text shaped
+  like the real files; only the parameter names are ArduPilot's.
+- **An unknown release is not silently given master's metadata.** A 4.0.x vehicle (not in the archive) gets "No
+  descriptions … Import a file", not the latest build's ranges, which could be wrong for it.
+- **The range override, exactly as asked.** Out of range is refused unless the vehicle already holds an
+  out-of-range value. That case means the documented range doesn't fit this aircraft or firmware (a KFT build, an
+  old file). Then it's allowed, with the warning spelled out in the confirm question. The check allows for float
+  storage: 0.1 is stored as 0.10000000149…, which must still count as "≤ 0.1" (`rangeAllowsForFloatStorage`).
+- **Text fields keep their own text.** A `TextField` whose value makes a round trip through a ViewModel StateFlow
+  (an async hop) loses keystrokes when typing is fast: an older value lands after newer keys and replaces them. In
+  the SITL run, "ARMING_CHECK" came out as "ARMICHECK". Now the field holds the text and reports each change, as the
+  Plan number fields already did. The bitmask checkboxes work on the same local text through two pure functions
+  (`toggleBit`, `hasBit`), which removed a ViewModel event. The Links form has the same old pattern; it's flagged as
+  a separate task.
+- **Groups sort by (prefix, name).** A plain name sort can split a group: "AB" < "ABC_Y" < "AB_X".
+- **Ponytail review:** nothing to cut. The `MetadataSource` interface is the platform/test seam; the bit helpers
+  replaced a ViewModel event.
+
+### What to look at
+1. `core/geo-io/src/commonMain/kotlin/com/kft/gcs/core/geoio/ParamMetadata.kt`: `pdefUrls` (the site layout) and the
+   two readers.
+2. `feature/params/src/commonMain/kotlin/com/kft/gcs/feature/params/ParamsViewModel.kt`: `loadMetadata` and
+   `onEditSetClicked` (the range rule).
+3. `feature/params/src/commonMain/kotlin/com/kft/gcs/feature/params/ParamsScreen.kt`: `EditDialog`.
+
+### Tests
+- `ParamMetadataTest`:
+  - JSON flattened by name, every field used, and the "json" marker skipped.
+  - Non-pdef text gives nothing.
+  - URLs for a release, a dev build and a beta, and the cache key.
+- `ParamMetadataXmlTest` (desktop JVM and Android host): **the XML fixture gives exactly what the JSON fixture
+  gives**, and malformed XML gives nothing.
+- `ParamsViewModelTest` (16):
+  - `releaseMetadataFallsBackToXmlAndIsKeptForNextTime`: the downloads are [json, xml]; it's saved as "Copter-4.5.7";
+    the next session makes no downloads.
+  - `noNetworkLeavesTheListWorkingAndSaysWhy`.
+  - `groupsAndSearchByDescription`.
+  - `rangeIsCheckedBeforeSet` ("Outside the documented range 20 to 2000 cm/s. Not sent.").
+  - `outOfRangeIsOverridableOnlyWhenTheVehicleAlreadyHoldsOne`.
+  - `valuesAreChoicesAndRebootIsMentioned`.
+  - `bitmaskCheckboxesFlipBits`.
+  - `importedMetadataIsSavedAndReadOnlyCantBeSet` (and a `.param` file is refused as metadata).
+  - `rangeAllowsForFloatStorage`.
+- `gradlew.bat check` and `:app:android:assembleDebug` pass. The one warning is still the old `PlanViewModel.kt:398`.
+- **SITL, ArduCopter 4.8.0-dev, desktop app:**
+  - Download gave 1439 parameters and "Descriptions: ArduCopter 4.8.0-dev, downloaded".
+  - `param-metadata\Copter-4.8.0-dev.pdef` is 2 240 383 bytes, the same size as the file on the server.
+  - The list shows group headers, display names, units ("360 deg/s") and value names ("2 · Leveling and Limited").
+  - CAM1_TYPE: the dialog has the description, "Needs a restart" and the dropdown. Picking "2 · Relay" → Set gave
+    "Change CAM1_TYPE from 1 to 2 on the vehicle? It takes effect after the flight controller restarts." → Confirm
+    gave "CAM1_TYPE set to 2", with the row showing "2 · Relay · restart · modified" (screenshot
+    `docs/design/20-desktop-params-cam1-type-set.png`). Set back to 1 the same way.
+  - Searching ARMING_CHECK finds nothing, which is correct: master renamed it `ARMING_SKIPCHK`.
+  - The typing fix: "ARMING_SKIPCHK" typed at full speed now arrives complete.
+- Not re-run on the emulator (a usage budget decision). The XML reader's SAX use is covered by the Android host test,
+  and the rest is common code.
+
+### Metadata for KFT firmware (KFT_ parameters too)
+The KFT fork is ArduPilot with extra parameters, so ArduPilot's own generator documents them, as long as they carry
+the usual `// @Param:` comments in the source.
+1. Check out the ardupilotKFT tag that the aircraft runs (`git checkout <tag>`).
+2. `python3 Tools/autotest/param_metadata/param_parse.py --vehicle ArduCopter --format json` from the repository
+   root. Use `--vehicle ArduPlane` for planes. It writes `apm.pdef.json` in the current folder. (Options checked in
+   master's param_parse.py: `--vehicle` required, `--format` one of all/json/xml/….)
+3. Copy the file to the tablet or PC. In the app: Params → Download (so the app knows the vehicle and version) →
+   "Import parameter descriptions" → pick the file.
+4. It's saved as that vehicle and version's descriptions and is used from then on, offline included.
+Check: search a KFT_ parameter; its row should have a display name.
+
+### Open questions / next
+- **No "refresh descriptions" button.** A saved copy (downloaded or imported) is used until the firmware version
+  changes. For a dev build whose master metadata moves, re-import or delete the cache file. Add a button if that
+  turns out to matter.
+- **Betas and RCs use the latest build's metadata** (there's no archive for them). Usually right, but not
+  guaranteed.
+- The Links form's keystroke issue has its own task chip.
+- Next: **Pass 21, survey maths compared with QGC.**
