@@ -120,6 +120,53 @@ RC_Channel.cpp and SRV_Channel.h.
    check of the mission trigger therefore waits for a field test. For today, confirm in Read that the survey items
    include "Camera: a photo every … m" and "Camera: stop".
 
+## 5b. Video (Pass 27)
+Needs: the SIYI camera + MK15 air unit (or any RTSP camera), the Skydroid T12 with its air unit, the tablet, the
+laptop. Close the GCS before step 5 (the capture tool needs the T12's port).
+
+**No hardware first (desktop, optional):** `winget install bluenviron.mediamtx` and `winget install Gyan.FFmpeg`, then
+`powershell -ExecutionPolicy Bypass -File tools\video\rtsp-test-stream.ps1`. Fly → Video (camera button, top right)
+→ add `rtsp://127.0.0.1:8554/main.264` → Add and show.
+- [ ] Expected: "Connecting…", then the test pattern with a running clock in the window, bottom right. The statistics
+  button (the chart icon on the window's bar) shows "Live · ~30 fps · N ms".
+- [ ] Ctrl+C in the script's window. Expected: "Video lost: …" within 3–5 s, then "Reconnecting…". Run the script
+  again: the picture comes back by itself.
+
+1. **SIYI over RTSP, desktop.** Laptop on the MK15's network (Wi-Fi or Ethernet; the camera is 192.168.144.25).
+   Fly → Video → **SIYI (RTSP 192.168.144.25:8554)**.
+   - [ ] Picture within ~3 s. Statistics: fps close to the camera's setting; latency (arrival → decoded) under ~50 ms.
+   - [ ] Wave a hand in front of the lens: the delay you see end to end should be well under a second. Note it.
+   - [ ] Tap the window: video fills the view, the map is the small window; tap it again to swap back. Drag the bar,
+     drag the corner. Switch Fly → Links → Fly a few times while swapped: no crash, map still moves.
+   - [ ] Unplug the network for 10 s: "Video lost", then "Reconnecting…"; plug it back: the picture returns alone.
+   - [ ] If the camera is set to H.265: the desktop still plays it (FFmpeg); note it for step 2.
+2. **SIYI over RTSP, tablet.** Same, on the tablet (`gradlew.bat :app:android:installDebug`).
+   - [ ] Picture, swap, drag, resize, reconnect as above.
+   - [ ] Camera in H.265: expected message "The camera sends H.265, which the tablet can't play over RTSP: set it to
+     H.264". Set it back to H.264.
+3. **T12 on the laptop.** T12 on the laptop's USB (data port), air unit on and linked. Fly → Video → **Skydroid T12
+   (USB)**.
+   - [ ] Picture within ~3 s, ~15 fps (the start command asks for 720p, 15 fps, 900 kbit/s).
+   - [ ] If it says "No Skydroid T12 on USB": note what Windows shows in Device Manager → Ports (COM number, "Silicon
+     Labs CP210x"). If it says "answers but sends no video": note it (and run step 5).
+   - [ ] Unplug the T12 for 10 s and plug it back: the picture returns by itself (it may take a new COM number).
+   - [ ] Note whether Windows accepts 4 Mbaud: if the port opens but nothing ever arrives, the Silicon Labs driver may
+     be capping the rate. Note the driver version.
+4. **T12 on the tablet.** T12 on the tablet through USB-OTG.
+   - [ ] "Allow KFT GCS to access CP2102…": tap Allow. The picture follows within a few seconds.
+   - [ ] Unplug/replug: Android asks again or remembers; the picture comes back without touching the app.
+5. **Capture for the replay test (laptop, GCS closed).** Air unit on, with the flight controller powered so it sends
+   telemetry.
+   `powershell -ExecutionPolicy Bypass -File tools\t12\capture\capture.ps1 -Seconds 20`
+   - [ ] Expected: "N KiB of video so far" growing each second (about 100 KiB/s).
+   - [ ] The file is in `tools\t12\captures\`. Run `gradlew.bat :ui:video:jvmTest --tests "*T12VideoPipelineTest*"`:
+     `recordedT12CapturesDecode` passes and prints "N pictures, NAL types [...]". Commit the capture (it holds only
+     video and telemetry, no secrets).
+6. **Does the T12 carry MAVLink? (ADR-004 Step 0.)** Links → add **Skydroid T12** → Connect, with video on too.
+   - [ ] Heartbeat and "KFT login: OK" within ~5 s → the T12 multiplexes telemetry on its data channel. Note it.
+   - [ ] "Waiting for a vehicle heartbeat" forever → it doesn't; use UDP/a radio for telemetry with T12 video.
+   - [ ] Do **not** use a plain Serial profile on the T12's port while its video is on (the two fight over the port).
+
 ## 6. Wrap-up
 - [ ] Note the FC board, firmware version (under the Fly HUD title) and radio model here: ______________________
 - [ ] Anything that didn't match: which step, and what you saw instead.

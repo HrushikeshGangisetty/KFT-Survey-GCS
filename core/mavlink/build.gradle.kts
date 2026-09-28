@@ -41,3 +41,14 @@ kotlin {
         }
     }
 }
+
+// Records raw Skydroid T12 serial traffic for the replay test: gradlew :core:mavlink:t12Capture --args="<file> [seconds]".
+// See tools/t12/capture/README.md.
+tasks.register<JavaExec>("t12Capture") {
+    group = "kft"
+    description = "Records the Skydroid T12's poll answers to a capture file (hardware bench)."
+    val jvmMain = kotlin.jvm().compilations.getByName("main")
+    classpath = files(jvmMain.output.allOutputs, jvmMain.runtimeDependencyFiles)
+    mainClass.set("com.kft.gcs.core.mavlink.T12CaptureKt")
+    workingDir = rootDir
+}

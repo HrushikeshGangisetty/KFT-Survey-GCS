@@ -6,6 +6,7 @@ import com.kft.gcs.core.mavlink.ConnectionManager
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.PodStatus
 import com.kft.gcs.core.mavlink.SerialPorts
+import com.kft.gcs.core.mavlink.T12Link
 import kotlin.test.Test
 import com.kft.gcs.core.geo.LatLon
 import kotlin.test.assertEquals
@@ -38,7 +39,7 @@ class SitlCheck {
     private fun withSitlParams(block: suspend (ConnectionManager, VehicleRepository, MissionRepository, ParamRepository) -> Unit) {
         val (host, port) = target?.split(":") ?: return println("KFT_SITL not set: SITL check skipped")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), SerialPorts())
+        val manager = SerialPorts().let { ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), it, T12Link(scope, Dispatchers.IO, it)) }
         // Always attempt the KFT login: with no key configured, a dummy one. Stock SITL answers UNSUPPORTED whatever the
         // key (LEGACY_FIRMWARE); a KFT SITL would say DENIED to the dummy, which is the honest answer.
         val key = parseKftKey(KFT_APP_SECRET_HEX) ?: ByteArray(Kft.KEY_BYTES)

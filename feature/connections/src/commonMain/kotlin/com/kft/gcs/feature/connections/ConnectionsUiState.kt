@@ -43,6 +43,7 @@ enum class LinkKind(val label: String, val defaultPort: Int) {
     UDP_CLIENT("UDP client", 14550),
     TCP("TCP client", 5760),
     SERIAL("Serial", 0), // no network port: a serial profile picks a device and a baud rate instead
+    T12("Skydroid T12", 0), // nothing to pick: the T12 is found by its USB IDs (LinkConfig.T12)
 }
 
 /**
@@ -63,6 +64,7 @@ data class ProfileForm(
 ) {
     val needsHost: Boolean get() = kind == LinkKind.UDP_CLIENT || kind == LinkKind.TCP
     val isSerial: Boolean get() = kind == LinkKind.SERIAL
+    val isT12: Boolean get() = kind == LinkKind.T12
 }
 
 /** Pure: repository data in, screen state out. Tested directly, no ViewModel needed. */
@@ -115,6 +117,7 @@ fun VehicleInfo.describe(): String {
 
 /** Checks the form and builds the config, or returns the message to show. Kept apart from the ViewModel so it's easy to test. */
 fun ProfileForm.toConfigOrError(): Result<LinkConfig> {
+    if (isT12) return Result.success(LinkConfig.T12)
     if (isSerial) {
         return if (serialPort.isBlank()) Result.failure(IllegalArgumentException("Pick a serial port (plug it in, then Refresh)"))
         else Result.success(LinkConfig.Serial(serialPort, baud))
@@ -128,7 +131,7 @@ fun ProfileForm.toConfigOrError(): Result<LinkConfig> {
                 LinkKind.UDP_LISTEN -> LinkConfig.UdpListen(portNumber)
                 LinkKind.UDP_CLIENT -> LinkConfig.UdpClient(host.trim(), portNumber)
                 LinkKind.TCP -> LinkConfig.TcpClient(host.trim(), portNumber)
-                LinkKind.SERIAL -> error("handled above")
+                LinkKind.SERIAL, LinkKind.T12 -> error("handled above")
             },
         )
     }

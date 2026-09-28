@@ -2,6 +2,7 @@ package com.kft.gcs.core.mavlink.di
 
 import com.kft.gcs.core.mavlink.ConnectionManager
 import com.kft.gcs.core.mavlink.PodStatus
+import com.kft.gcs.core.mavlink.T12Link
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
@@ -16,5 +17,7 @@ val IoDispatcher = named("io")
  * pod later only replaces this one binding.
  */
 val mavlinkModule = module {
-    single { ConnectionManager(scope = get(), ioDispatcher = get(IoDispatcher), podStatus = MutableStateFlow(PodStatus.NoPod), serialPorts = get()) }
+    // One T12Link for the app: the T12's single port is shared by its video and a MAVLink link over it.
+    single { T12Link(scope = get(), ioDispatcher = get(IoDispatcher), ports = get()) }
+    single { ConnectionManager(scope = get(), ioDispatcher = get(IoDispatcher), podStatus = MutableStateFlow(PodStatus.NoPod), serialPorts = get(), t12 = get()) }
 }

@@ -29,6 +29,7 @@ kotlin {
             implementation(libs.jb.navigation.compose)
             implementation(project(":ui:design"))
             implementation(project(":ui:map")) // App() owns the one MapView (ADR-001 F10); DesktopApp gives it a GPU context
+            implementation(project(":ui:video")) // the video window that swaps places with that map
             implementation(libs.jb.lifecycle.viewmodel.compose)
             implementation(libs.jb.lifecycle.runtime.compose)
             implementation(project.dependencies.platform(libs.koin.bom))

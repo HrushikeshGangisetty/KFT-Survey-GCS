@@ -16,13 +16,15 @@ import okio.source
 // java.net works the same on Android and desktop, so these are written once in the shared jvmCommon source set.
 // Serial differs per platform: SerialPorts is an expect class with jvmMain and androidMain actuals.
 
-internal actual fun createTransport(config: LinkConfig, serialPorts: SerialPorts): MavTransport = when (config) {
+internal actual fun createTransport(config: LinkConfig, serialPorts: SerialPorts, t12: T12Link): MavTransport = when (config) {
     is LinkConfig.UdpListen -> UdpTransport(bindPort = config.port, fixedRemote = null)
     is LinkConfig.UdpClient -> UdpTransport(bindPort = 0, fixedRemote = InetSocketAddress(config.host, config.port))
     is LinkConfig.TcpClient -> TcpTransport(config.host, config.port)
     // The port opens inside MavTransport.open(), so a missing or busy port is an ordinary IOException and the
     // connection manager's reconnect loop retries it (which is also how the Android USB permission prompt resolves).
     is LinkConfig.Serial -> SerialTransport { serialPorts.open(config.port, config.baud) }
+    // The T12's port is shared with its video, so T12Link owns it and hands out a transport over its data channel.
+    LinkConfig.T12 -> t12.mavlinkTransport()
 }
 
 /**

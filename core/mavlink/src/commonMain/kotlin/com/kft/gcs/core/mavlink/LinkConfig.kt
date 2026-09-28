@@ -46,6 +46,15 @@ sealed interface LinkConfig {
         init { require(port.isNotBlank()) { "port is blank" }; require(baud > 0) { "baud must be positive: $baud" } }
         override val summary get() = bluetoothAddressOf(port)?.let { "Bluetooth $it" } ?: "Serial $port @ $baud"
     }
+
+    /**
+     * MAVLink over the Skydroid T12's own data channel, on the USB port [T12Link] shares with the T12's video. No
+     * port name is saved: the T12 is found by its USB IDs, since Android renames the device on every replug.
+     */
+    @Serializable @SerialName("t12")
+    data object T12 : LinkConfig {
+        override val summary get() = "Skydroid T12 (USB)"
+    }
 }
 
 private fun requirePort(port: Int) = require(port in 1..65535) { "port out of range: $port" }

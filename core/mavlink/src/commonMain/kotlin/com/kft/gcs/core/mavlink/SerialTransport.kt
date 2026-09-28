@@ -12,8 +12,16 @@ import okio.buffer
  * A serial port the OS offers. [name] is what a [LinkConfig.Serial] stores: "COM7" on Windows, a USB device path or a
  * paired Bluetooth device ("bt:00:21:13:0A:BC:DE", [bluetoothPortName]) on Android. [bluetooth]: the port is a
  * Bluetooth SPP link (on desktop, a COM port Windows made for a paired device), where the baud rate isn't used.
+ * [usb]: the USB chip's identity, when the port is a USB device. It's how the Skydroid T12 is found again after a
+ * replug, because Android gives the device a new [name] every time it's plugged in.
  */
-data class SerialPortInfo(val name: String, val description: String, val bluetooth: Boolean = false)
+data class SerialPortInfo(val name: String, val description: String, val bluetooth: Boolean = false, val usb: UsbId? = null)
+
+/**
+ * A USB device's vendor and product IDs, and its serial number when the OS lets us read it (Android only shows it
+ * after the user has allowed the device).
+ */
+data class UsbId(val vendorId: Int, val productId: Int, val serialNumber: String?)
 
 /**
  * Bluetooth Classic SPP ("Serial Port Profile") is a serial port carried over radio, so a paired device is listed
@@ -34,8 +42,11 @@ expect class SerialPorts {
     /** Ports present right now. Cheap enough to call when the user taps "Refresh". */
     fun list(): List<SerialPortInfo>
 
-    /** Opens [name] at [baud], 8N1 (a Bluetooth port ignores [baud]). Throws [IOException] with an operator-readable message if it can't. */
-    internal fun open(name: String, baud: Int): SerialLink
+    /**
+     * Opens [name] at [baud], 8N1 (a Bluetooth port ignores [baud]), with DTR raised and RTS too if [rts]. A read
+     * waits at most [readTimeoutMs]. Throws [IOException] with an operator-readable message if it can't.
+     */
+    internal fun open(name: String, baud: Int, readTimeoutMs: Int = SerialLink.READ_TIMEOUT_MS, rts: Boolean = false): SerialLink
 }
 
 /**
@@ -43,7 +54,7 @@ expect class SerialPorts {
  * wrappers around a library, and tests use a fake, so [SerialTransport]'s logic is checked without hardware.
  */
 internal interface SerialLink {
-    /** Waits up to [READ_TIMEOUT_MS] for bytes. Returns how many were read, 0 on timeout. Throws [IOException] if the port is gone. */
+    /** Waits up to the read timeout given to [SerialPorts.open] for bytes. Returns how many were read, 0 on timeout. Throws [IOException] if the port is gone. */
     fun read(buffer: ByteArray): Int
 
     /** Writes all of [bytes] or throws [IOException]. */
@@ -52,7 +63,7 @@ internal interface SerialLink {
     fun close()
 
     companion object {
-        /** Short, so a closed port is noticed quickly by the reader loop. */
+        /** The usual read timeout. Short, so a closed port is noticed quickly by the reader loop. */
         const val READ_TIMEOUT_MS = 200
     }
 }

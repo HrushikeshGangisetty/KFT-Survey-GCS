@@ -3170,3 +3170,134 @@ telemetry.
 - If an operator picks Windows' Incoming COM port, the connect just fails: mark it using the device ID (see above).
 - `ponytail:` no fallback for modules with a broken SDP record.
 - This was the last pass of the batch (23–26). **Stopped here, as asked.**
+
+## Pass 27 — Video: RTSP (SIYI) and Skydroid T12 serial video (2026-09-28)
+
+### What changed
+- **`core/mavlink/T12Protocol.kt`** (new, pure): the T12's poll/answer framing (`T12.poll`, `T12.parseFrame`,
+  `T12.packets`), the 30 ms / 180 ms send spacing (`T12TxQueue`), the start/stop-video AT commands, and the
+  `expect class T12Link`.
+- **`core/mavlink/jvmCommonMain/T12Link.kt`** (new): the only owner of the T12's USB serial port. It runs the poll
+  loop, puts out video as raw H.264 bytes (`video`), carries MAVLink over the 0xA3 data channel (`mavlinkTransport()`),
+  reopens after a replug (VID/PID + serial number), and reports `problem` ("No Skydroid T12 on USB").
+- **`core/mavlink`**: `LinkConfig.T12` ("t12" on disk); `SerialPortInfo.usb` (`UsbId`); `SerialPorts.open` takes a
+  read timeout and RTS; `ConnectionManager` and `createTransport` take the `T12Link`; Koin binds one.
+- **`core/mavlink/jvmMain/T12Capture.kt`** + the `t12Capture` task in `build.gradle.kts`: the capture tool and its
+  file format.
+- **`ui/video`** (new module): `VideoSource` (`PlayerSource`, `ElementaryStreamSource`), `H264.kt` (`AnnexBSplitter`,
+  `NalGate`, `NalQueue`), `VideoMonitor` (connecting / live / lost), `VideoView` (status + reconnect), `Pip.kt` (the
+  window's state and controls). Android: Media3 RTSP + MediaCodec. Desktop: FFmpeg (`Ffmpeg.kt`,
+  `PlatformVideo.jvm.kt`).
+- **`feature/fly`**: `Video.kt` (profiles, presets, `VideoViewModel`), `VideoDialog.kt`, and a Video button with the
+  Fly view's map buttons.
+- **`feature/connections`**: a "Skydroid T12" link type on the Links form.
+- **`app/shared`**: `App()` draws the video window and swaps it with the map; a `video-profiles.json` store on both
+  shells.
+- **`ui/design`**: four Material Symbols (videocam, swap_horiz, open_in_full, query_stats) and `IconFilesTest`.
+- **Docs and tools**: `docs/decisions/ADR-004-video.md`; video section 5b in `docs/checklists/bench-session-1.md`;
+  `tools/t12/capture/` (script + README) and `tools/t12/captures/`; `tools/video/rtsp-test-stream.ps1`; `NOTICE`,
+  `licenses/LGPL-3.0.txt` and `GPL-3.0.txt`; the `ui:video` row in CLAUDE.md §2; `.gitignore` keeps T12 captures.
+
+### How it works
+```
+RTSP:  VideoView ─key(attempt)─▶ PlatformVideo(PlayerSource)
+         Android: ExoPlayer RtspMediaSource (RTP over TCP) ──▶ TextureView
+         Desktop: FFmpeg avformat (rtsp_transport tcp, nobuffer) ─▶ avcodec ─▶ BGRA ─▶ Compose Canvas
+T12:   CP2102 ◀─poll FF 02 00 ack len type…─ T12Link (one poll loop, IO thread) ─512-byte answer─▶ T12.parseFrame
+         0xA5 video bytes ─▶ T12Link.video ─▶ ElementaryStreamSource
+              ─▶ NalQueue: AnnexBSplitter ─▶ NalGate (SPS + PPS + IDR first) ─▶ bounded queue (skip to IDR on overflow)
+              ─▶ Android MediaCodec (KEY_LOW_LATENCY) / desktop FFmpeg avcodec
+         0xA3 data ◀─▶ T12MavTransport ◀─▶ ConnectionManager ◀─ MavTxGateway (all outgoing MAVLink)
+Status: frames/failures ─▶ VideoMonitor ─▶ connecting / live (fps, latency) / lost ─▶ wait 1–3 s ─▶ new attempt
+Fly tab: MapView and VideoView stay composed; a swap changes only their modifier (full ↔ window) and zIndex (F10)
+```
+
+### Engineering learnings
+- **One owner instead of an ownership check.** The old app had two openers of the T12's port and a registry
+  (`UsbPortOwnership`) so each could refuse the other. Here video and MAVLink are both *subscribers* of `T12Link`,
+  which opens the port when the first arrives and closes it when the last leaves (`combine(videoUsers, mavUsers)` +
+  `collectLatest`). There's nothing to check, because nothing else ever opens the port.
+- **Why `T12Link` is an `expect class`.** Its MAVLink side has to block a reader thread until bytes come
+  (`LinkedBlockingQueue`), which `commonMain` doesn't have, but `ConnectionManager` (commonMain) has to name it. The
+  actual lives in `jvmCommonMain`, shared by Android and desktop, like the socket transports.
+- **Pure where it can be.** Framing, spacing, Annex-B splitting, gating and the status rules are pure, and they're
+  tested with bytes and times written out by hand. Only the thin platform players touch codecs.
+- **Status and retries live once, above the platforms.** A platform player reports only "frame" and "failed";
+  `VideoView` turns that into a status and retries by recomposing the player under `key(attempt)`. Decoders report
+  from their own threads through a `MutableSharedFlow`, so only the UI thread ever touches `VideoMonitor`.
+- **TextureView over SurfaceView (a deviation from the brief).** The swap with the map is a z-order change, and a
+  SurfaceView doesn't take part in Compose's z-order. ADR-004 §3 has the trade-off (about one frame of latency).
+- **FFmpeg directly, not JavaCV.** One decoder class handles RTSP packets and T12 NAL units alike, and the LGPL build
+  (bytedeco's plain `ffmpeg`, never `-gpl`) keeps the licence clean. See ADR-004 §4–5.
+- **Bugs the new tests found:**
+  - `PointerPointer(bgra)` is JavaCPP's *cast* constructor: it reads the pixel buffer as an array of pointers, and the
+    JVM crashed (0xC0000005). Now it's a one-slot `PointerPointer` filled with `put(0, bgra)`.
+  - `fflags nobuffer` throws away the packets FFmpeg reads while probing the stream. A real camera keeps sending, so it
+    only costs the first keyframe; the test server now streams continuously, as a camera does.
+  - `av_strerror` writes a C string, so it's read only up to its terminating zero.
+- **The bug found in the running app:** removing the Android `tint` attribute from three new icons also removed the
+  tag's closing `>`, and the desktop showed an XML error dialog when the Video dialog opened. `IconFilesTest` now
+  parses every icon, so `check` catches this.
+- **Ponytail review (lite):** cut the unused `TYPE_GPS`/`TYPE_DEBUG` constants and a per-URL player cache
+  (`PlayerSource` is a data class, so the same URL already keeps the same player). Kept `NalQueue.skips`, which the
+  overflow test needs. `ponytail:` notes: Windows x64 FFmpeg natives only; with two CP2102 devices plugged in and
+  none remembered, the first is tried.
+
+### What to look at
+1. `core/mavlink/src/jvmCommonMain/kotlin/com/kft/gcs/core/mavlink/T12Link.kt:122` (`session()`): the poll loop.
+2. `ui/video/src/commonMain/kotlin/com/kft/gcs/ui/video/H264.kt:14` (`AnnexBSplitter`) and `:100` (`NalQueue`).
+3. `ui/video/src/commonMain/kotlin/com/kft/gcs/ui/video/VideoView.kt:39` and
+   `app/shared/src/commonMain/kotlin/com/kft/gcs/app/App.kt:146`: status and reconnect, and the swap by modifier and
+   zIndex.
+
+### Tests
+- `T12ProtocolTest` (7): polls and frames against bytes written out by hand; a length over 508 is capped; short or
+  unframed reads count as bad; 600 bytes split into 250/250/100; 30 ms and 180 ms spacing.
+- `T12LinkTest` (5, virtual time, scripted fake T12): start-video goes first and the bytes come out in order;
+  stop-video is sent and the port closed when nobody watches; ack 0x00 after a silent poll; MAVLink both ways over
+  0xA3, with no AT command sent; with no T12, the transport fails and `problem` says why; after a replug, the
+  remembered serial number wins over another CP2102 listed first.
+- `H264Test` (5): the units come out right for every possible cut of the stream, and one byte at a time; bytes before
+  the first start code are dropped; NAL types; the gate; an overflow drops the backlog and restarts at the next
+  keyframe.
+- `VideoMonitorTest` (5): live and fps; a 3 s stall; failure then retry; the 10 s connect timeout; 1/2/3 s backoff.
+- `T12VideoPipelineTest` (desktop): a known test pattern (encoded by OpenH264 in the LGPL FFmpeg) → 512-byte T12
+  frames → parse → split → gate → FFmpeg gives 10 pictures of 320×240, white inside the square and black outside.
+  `recordedT12CapturesDecode` replays every capture in `tools/t12/captures/`. There are none yet, so it passes without
+  checking anything.
+- `RtspPlaybackTest` (desktop, with a small RTSP server inside the test): it plays; a dropped camera fails with "End
+  of file"; the same URL then plays again (the reconnect); an unreachable camera's error names its address.
+- `VideoViewModelTest` (6), `ProfileFileTest` (T12 round trip and file format), `IconFilesTest`.
+- `gradlew.bat check`: pass (760 test runs, 0 failures; the 1 skip predates this pass). `:app:android:assembleDebug`:
+  pass, with no FFmpeg in the APK. No new compiler warnings from this pass.
+- **Desktop app, by hand:** Video → Skydroid T12 with no T12 plugged in: the window appears bottom right with
+  "Connecting… No Skydroid T12 on USB…", then "Video lost: No picture after 10 s", then reconnects. The choice
+  survived a restart. Swap, tap to swap back, drag, resize, and Fly↔Links three times with the map small: no crash,
+  and the map was fine. Set back to Off afterwards.
+- **Not tested:** any real camera or T12 (no hardware here), the tablet, MediaMTX (not installed). The steps are in
+  `docs/checklists/bench-session-1.md` §5b.
+
+### Safety
+- `MavTxGateway` and its allowlist are unchanged. MAVLink over the T12 is one more `MavTransport` behind the gateway,
+  like UDP or serial.
+- `T12Link` writes the T12's own poll frames and AT commands (video on/off) to the port itself. Those are link-layer
+  framing, not MAVLink. Every MAVLink byte inside them came from the gateway, through `T12MavTransport`. `T12Link`
+  exposes nothing that sends: only `video`, `problem`, and the internal transport.
+- Video can't act on the vehicle. No flight actions were added (S9).
+
+### Open questions / next
+- **Does the T12 carry MAVLink on 0xA3?** Unknown until the bench session (§5b steps 5–6). If it doesn't, video keeps
+  the T12 and telemetry goes over UDP or a radio. ADR-004 has the details.
+- **T12 protocol provenance:** the old app's facts came from its author's disassembly of Skydroid's .aar. Nothing of
+  Skydroid's was copied here, but KFT should decide whether that's acceptable, or ask Skydroid for the protocol,
+  before this ships outside KFT. ADR-004 lists everything to remove if the answer is no.
+- **The LGPL source offer** for the desktop installer has to be settled before any release outside KFT (NOTICE,
+  ADR-004 §5).
+- **A plain Serial profile on the T12's port while T12 video runs** fights over the port (on Android, both links die).
+  The Links note steers people to the T12 type. If it happens in practice, the fix is one guard in `SerialPorts.open`
+  that refuses a port this app already has open.
+- On desktop, `fflags nobuffer` drops the first RTSP keyframe, so the picture starts at the second one (about 1 s
+  later with SIYI's GOP). If that's too slow, turn `nobuffer` off during the probe only.
+- 4 Mbaud on Windows through the Silicon Labs driver isn't confirmed (checklist §5b.3).
+- `ponytail:` Windows x64 FFmpeg natives only; with two CP2102 devices and none remembered, the first is tried.
+- **Stopped after Pass 27, as asked.**

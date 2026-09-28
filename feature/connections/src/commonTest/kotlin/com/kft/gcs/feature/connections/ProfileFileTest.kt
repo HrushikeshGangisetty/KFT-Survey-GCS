@@ -18,6 +18,7 @@ class ProfileFileTest {
             "SITL TCP" to LinkConfig.TcpClient("127.0.0.1", 5762),
             "Radio \"A\" \\ COM7" to LinkConfig.Serial("COM7", 115200), // quotes and backslashes in the name
             "HC-05" to LinkConfig.Serial(bluetoothPortName("00:21:13:0A:BC:DE")), // Android Bluetooth: a serial port too
+            "RC" to LinkConfig.T12,
         )
         assertEquals(profiles, decodeProfiles(encodeProfiles(profiles)))
     }
@@ -27,6 +28,12 @@ class ProfileFileTest {
     fun fileFormatIsStable() {
         val saved = """[{"name":"R","link":{"type":"serial","port":"COM7","baud":57600}}]"""
         assertEquals(listOf("R" to LinkConfig.Serial("COM7", 57600)), decodeProfiles(saved))
+        assertEquals(listOf("RC" to LinkConfig.T12), decodeProfiles("""[{"name":"RC","link":{"type":"t12"}}]"""))
+    }
+
+    @Test
+    fun aT12ProfileNeedsNothingButItsKind() {
+        assertEquals(LinkConfig.T12, ProfileForm(kind = LinkKind.T12).toConfigOrError().getOrThrow())
     }
 
     /** Found in the first desktop run: a port equal to the class default was left out of the file. */

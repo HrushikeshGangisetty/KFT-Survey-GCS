@@ -19,6 +19,9 @@ okio = "3.17.0"                       # same version mavlink-kotlin 1.2.15 depen
 jserialcomm = "2.11.4"
 usb-serial-android = "3.11.0"          # JitPack: com.github.mik3y:usb-serial-for-android
 maplibre-compose = "0.17.0"            # desktop needs Java 25 at runtime; see docs/implementation/00
+media3 = "1.11.1"                      # Android RTSP playback (ExoPlayer); added in Pass 27, checked 2026-09-28
+bytedeco-ffmpeg = "8.1.2-1.5.14"       # desktop video decode: FFmpeg's LGPLv3 build (NOT ffmpeg-gpl); ADR-004
+bytedeco-javacpp = "1.5.14"            # the JNI runtime the FFmpeg bindings above load their natives with
 
 android-compileSdk = "37"         # Compose 1.12 (androidx) requires compileSdk 37
 android-targetSdk = "36"
@@ -68,6 +71,11 @@ maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.r
 # and Windows only ships Vulkan (the OpenGL/ANGLE and D3D12 runtimes from PR #1439 are not released yet).
 maplibre-compose-runtime-opengl-android = { module = "org.maplibre.compose:maplibre-compose-runtime-opengl-android", version.ref = "maplibre-compose" }
 maplibre-compose-runtime-vulkan-windows-x64 = { module = "org.maplibre.compose:maplibre-compose-runtime-vulkan-windows-x64", version.ref = "maplibre-compose" }
+media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
+media3-exoplayer-rtsp = { module = "androidx.media3:media3-exoplayer-rtsp", version.ref = "media3" }
+# Classes plus a per-platform natives jar (classifier "windows-x86_64"), picked in ui/video/build.gradle.kts.
+bytedeco-ffmpeg = { module = "org.bytedeco:ffmpeg", version.ref = "bytedeco-ffmpeg" }
+bytedeco-javacpp = { module = "org.bytedeco:javacpp", version.ref = "bytedeco-javacpp" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose-multiplatform" }
 
 # Plugin artifacts used by build-logic (convention plugins compile against these)

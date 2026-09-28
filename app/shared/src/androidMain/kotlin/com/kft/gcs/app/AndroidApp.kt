@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.kft.gcs.core.mavlink.SerialPorts
 import com.kft.gcs.feature.connections.ProfileStore
+import com.kft.gcs.feature.fly.VideoStore
 import com.kft.gcs.feature.params.MetadataSource
 import com.kft.gcs.feature.plan.PlanFiles
 import com.kft.gcs.feature.plan.SettingsStore
@@ -38,6 +39,7 @@ fun AndroidApp(context: Context) {
             single<ProfileStore> { FileTextStore(File(app.filesDir, "connection-profiles.json")) }
             single<SettingsStore> { FileTextStore(File(app.filesDir, "plan-settings.json")) }
             single<ThemeStore> { FileTextStore(File(app.filesDir, "theme.txt")) }
+            single<VideoStore> { FileTextStore(File(app.filesDir, "video-profiles.json")) }
             single<MetadataSource> { HttpMetadataSource(File(app.filesDir, "param-metadata"), Dispatchers.IO) }
             single<PlanFiles> { planFiles }
             single<OfflineMaps> { MapLibreOfflineMaps(File(app.filesDir, "maps").path, TileSources.available()) }

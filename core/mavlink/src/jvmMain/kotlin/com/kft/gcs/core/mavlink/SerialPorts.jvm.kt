@@ -11,15 +11,25 @@ actual class SerialPorts {
     actual fun list(): List<SerialPortInfo> =
         SerialPort.getCommPorts().map {
             // Windows names them "Standard Serial over Bluetooth link (COM26)".
-            SerialPortInfo(it.systemPortName, it.descriptivePortName, bluetooth = it.descriptivePortName.contains("Bluetooth", ignoreCase = true))
+            SerialPortInfo(
+                it.systemPortName,
+                it.descriptivePortName,
+                bluetooth = it.descriptivePortName.contains("Bluetooth", ignoreCase = true),
+                // jSerialComm reports -1 for a port that isn't a USB device (a built-in or Bluetooth COM port).
+                usb = if (it.vendorID >= 0) UsbId(it.vendorID, it.productID, it.serialNumber?.takeIf(String::isNotBlank)) else null,
+            )
         }
 
-    internal actual fun open(name: String, baud: Int): SerialLink {
+    internal actual fun open(name: String, baud: Int, readTimeoutMs: Int, rts: Boolean): SerialLink {
         val port = SerialPort.getCommPort(name)
         port.setComPortParameters(baud, 8, SerialPort.ONE_STOP_BIT, SerialPort.NO_PARITY)
         // Semi-blocking: a read returns as soon as any bytes arrive, or with 0 after the timeout.
-        port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, SerialLink.READ_TIMEOUT_MS, 0)
+        port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, readTimeoutMs, 0)
         if (!port.openPort()) throw IOException("Can't open $name (unplugged, or in use by another program?)")
+        if (rts) {
+            port.setDTR()
+            port.setRTS()
+        }
         return JSerialCommLink(port)
     }
 }

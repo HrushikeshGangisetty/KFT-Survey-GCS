@@ -33,16 +33,22 @@ import org.koin.compose.viewmodel.koinViewModel
  * the same state (overlays, basemap, camera) to the one shared map (ADR-001 F10).
  */
 @Composable
-fun FlyRoute(viewModel: FlyViewModel = koinViewModel()) {
+fun FlyRoute(viewModel: FlyViewModel = koinViewModel(), video: VideoViewModel = koinViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    FlyScreen(state, viewModel::onBasemapSelected, viewModel::onCenterClicked, viewModel::onClearTrackClicked)
+    val videoState by video.state.collectAsStateWithLifecycle()
+    var videoDialog by remember { mutableStateOf(false) }
+    FlyScreen(state, viewModel::onBasemapSelected, viewModel::onCenterClicked, viewModel::onClearTrackClicked, onVideo = { videoDialog = true })
+    if (videoDialog) {
+        VideoDialog(videoState, video::onSourceSelected, video::onRtspAdded, video::onProfileDeleted, onDismiss = { videoDialog = false })
+    }
 }
 
 /**
  * Map-first layout, as in every GCS: the map (drawn underneath by `App()`) fills the screen. Top left: status chips
  * (link, KFT login, GPS, "mission ≠ plan"), and under them the HUD card of stat tiles. Top right: the map buttons as
  * a small vertical stack. Bottom left: the latest vehicle message. Everything else is left empty so the map shows and
- * takes the clicks. Monitoring only: no flight-action buttons (spec S9).
+ * takes the clicks. The video, when on, floats in a picture-in-picture window drawn by `App()` (it swaps places with the
+ * map, which only `App()` owns). Monitoring only: no flight-action buttons (spec S9).
  */
 @Composable
 fun FlyScreen(
@@ -50,6 +56,7 @@ fun FlyScreen(
     onBasemapSelected: (String) -> Unit,
     onCenter: () -> Unit,
     onClearTrack: () -> Unit,
+    onVideo: () -> Unit = {},
 ) {
     Box(Modifier.fillMaxSize().padding(Spacing.m)) {
         Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
@@ -75,7 +82,7 @@ fun FlyScreen(
             }
         }
 
-        MapButtons(state, onBasemapSelected, onCenter, onClearTrack, Modifier.align(Alignment.TopEnd))
+        MapButtons(state, onBasemapSelected, onCenter, onClearTrack, onVideo, Modifier.align(Alignment.TopEnd))
 
         state.message?.let { message ->
             val status = when (message.severity) {
@@ -89,13 +96,14 @@ fun FlyScreen(
     }
 }
 
-/** Basemap (only when there's a choice), centre on the vehicle, clear the flown track: icon buttons with tooltips. */
+/** Basemap (only when there's a choice), centre on the vehicle, clear the flown track, video: icon buttons with tooltips. */
 @Composable
 private fun MapButtons(
     state: FlyUiState,
     onBasemapSelected: (String) -> Unit,
     onCenter: () -> Unit,
     onClearTrack: () -> Unit,
+    onVideo: () -> Unit,
     modifier: Modifier,
 ) {
     MapCard(modifier, padding = false) {
@@ -116,6 +124,7 @@ private fun MapButtons(
         }
         TooltipIconButton(KftIcons.Center, "Centre on vehicle", onCenter, enabled = state.canCenter)
         TooltipIconButton(KftIcons.ClearTrack, "Clear track and photo count", onClearTrack)
+        TooltipIconButton(KftIcons.Video, "Video", onVideo)
     }
 }
 

@@ -238,6 +238,8 @@ private fun NewProfileForm(
                     }
                 }
                 form.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            } else if (form.isT12) {
+                Text(T12_NOTE, style = MaterialTheme.typography.bodySmall)
             } else {
                 OwnTextField(form.port, form.generation, onPortChanged, "Port", KeyboardType.Number, form.error)
             }
@@ -268,3 +270,9 @@ private fun OwnTextField(
         supportingText = error?.let { { Text(it) } },
     )
 }
+
+/** What a T12 profile does, and the open question about it (ADR-004, Step 0). */
+private const val T12_NOTE =
+    "MAVLink over the Skydroid T12's own USB link (plug the controller in over USB). The same USB link carries the " +
+        "T12's video, and the app shares it between the two. Not yet confirmed on hardware that the T12 carries " +
+        "telemetry this way: if no vehicle is heard, connect telemetry over UDP or a radio instead."

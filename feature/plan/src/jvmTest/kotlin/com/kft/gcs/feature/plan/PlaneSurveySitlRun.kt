@@ -7,6 +7,7 @@ import com.kft.gcs.core.mavlink.ConnectionManager
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.PodStatus
 import com.kft.gcs.core.mavlink.SerialPorts
+import com.kft.gcs.core.mavlink.T12Link
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.mission.Mission
 import com.kft.gcs.core.planning.SurveyLimits
@@ -98,7 +99,7 @@ class PlaneSurveySitlRun {
         val (host, port) = System.getenv("KFT_SITL")?.split(":") ?: return println("KFT_SITL not set: skipped")
         val out = File(System.getenv("KFT_SITL_OUT") ?: ".")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), SerialPorts())
+        val manager = SerialPorts().let { ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), it, T12Link(scope, Dispatchers.IO, it)) }
         val vehicles = VehicleRepository(scope, manager.frames, manager.state, manager.gateway, loginKey = null)
         val missions = DefaultMissionRepository(manager.frames, manager.state, vehicles.state, manager.gateway)
         try {

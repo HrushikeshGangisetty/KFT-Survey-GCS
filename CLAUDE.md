@@ -35,6 +35,7 @@ If a task seems to need one of these changed, stop and say so in the pass summar
 | `core:geo-io` | Import/export parsing (`.plan`, `.waypoints`, camera lists, KML, …) | `core:geo`, `core:planning`, `core:mission` |
 | `ui:design` | KFT theme (light, dark, high contrast), tokens, Material Symbols icons, logo, shared components | Compose |
 | `ui:map` | `MapView` abstraction + engine adapters | `core:geo`, Compose |
+| `ui:video` | Video playback: RTSP and raw H.264 players, picture-in-picture window (ADR-004) | `ui:design`, Compose, Media3 (Android), FFmpeg LGPL (desktop) |
 | `feature:*` | Screens + ViewModels (connections, fly, plan, params, settings) | `core:*`, `ui:*` — **never another `feature:*`** |
 | `app:shared` | `App()` root, navigation, Koin graph | everything above |
 | `app:android`, `app:desktop` | Platform shells only | `app:shared` |

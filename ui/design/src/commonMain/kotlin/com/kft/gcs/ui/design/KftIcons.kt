@@ -78,6 +78,12 @@ object KftIcons {
     val ExpandMore: ImageVector @Composable get() = vectorResource(Res.drawable.ic_expand_more)
     val ExpandLess: ImageVector @Composable get() = vectorResource(Res.drawable.ic_expand_less)
     val Check: ImageVector @Composable get() = vectorResource(Res.drawable.ic_check)
+
+    // Video (Fly view picture-in-picture)
+    val Video: ImageVector @Composable get() = vectorResource(Res.drawable.ic_videocam)
+    val Swap: ImageVector @Composable get() = vectorResource(Res.drawable.ic_swap_horiz)
+    val Resize: ImageVector @Composable get() = vectorResource(Res.drawable.ic_open_in_full)
+    val Stats: ImageVector @Composable get() = vectorResource(Res.drawable.ic_query_stats)
 }
 
 /**

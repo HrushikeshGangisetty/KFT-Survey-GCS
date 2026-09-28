@@ -44,6 +44,7 @@ import com.kft.gcs.app.di.allModules
 import com.kft.gcs.feature.connections.ConnectionsRoute
 import com.kft.gcs.feature.fly.FlyRoute
 import com.kft.gcs.feature.fly.FlyViewModel
+import com.kft.gcs.feature.fly.VideoViewModel
 import com.kft.gcs.feature.params.ParamsRoute
 import com.kft.gcs.feature.plan.PlanRoute
 import com.kft.gcs.feature.plan.PlanViewModel
@@ -59,6 +60,14 @@ import com.kft.gcs.ui.design.ThemeMode
 import com.kft.gcs.ui.design.TooltipIconButton
 import com.kft.gcs.ui.map.CameraRequest
 import com.kft.gcs.ui.map.MapView
+import com.kft.gcs.ui.video.PipControls
+import com.kft.gcs.ui.video.PipState
+import com.kft.gcs.ui.video.VideoView
+import com.kft.gcs.ui.video.pip
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.compose.KoinApplication
@@ -105,18 +114,20 @@ interface ThemeStore {
  * second Fly→Links), so screens never own a map: Fly and Plan hand their overlays and callbacks to this one, and
  * Links covers it with an opaque Surface.
  *
- * The map ViewModels (Fly, Plan, Maps) are created here, at window scope, and passed to their routes, so the map and
+ * The map ViewModels (Fly, Plan, Maps, and Video, which trades places with the map) are created here, at window scope, and passed to their routes, so the map and
  * the panels read the same instance. The plan's route and markers show on the Fly view too, but only the Plan tab
  * can edit them. The Maps tab adds its downloaded areas' outlines and hears where the map is looking.
  */
 @Composable
 private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modifier: Modifier) {
     val fly: FlyViewModel = koinViewModel()
+    val video: VideoViewModel = koinViewModel()
     val plan: PlanViewModel = koinViewModel()
     val maps: OfflineMapsViewModel = koinViewModel()
     val mapsState by maps.state.collectAsStateWithLifecycle()
     val flyState by fly.state.collectAsStateWithLifecycle()
     val planState by plan.state.collectAsStateWithLifecycle()
+    val videoState by video.state.collectAsStateWithLifecycle()
     val current by nav.currentBackStackEntryAsState()
     val planning = current?.destination?.route == Destination.PLAN.route
     val mapsTab = current?.destination?.route == Destination.MAPS.route
@@ -128,9 +139,17 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
 
     // The Plan tab's undo/redo keys; the desktop window calls this for every key press (see KeyShortcuts).
     SideEffect { shortcuts.handler = { planning && planShortcut(it, plan) } }
-    Box(modifier) {
+
+    // Video on the Fly tab only, in a picture-in-picture window. Swapping it with the map changes only each one's size
+    // and z-order (zIndex): both stay composed where they are, so the map is never torn down (F10) and the stream
+    // isn't reopened. Z-order, bottom to top: the big one (0), the screen's panels (1), the small one (2), its controls (3).
+    val videoSource = videoState.source.takeIf { current?.destination?.route == Destination.FLY.route && videoState.visible }
+    val videoBig = videoSource != null && videoState.swapped
+    val pip = remember { PipState() }
+    val density = LocalDensity.current
+    Box(modifier.onSizeChanged { pip.area = with(density) { DpSize(it.width.toDp(), it.height.toDp()) } }) {
         MapView(
-            Modifier.fillMaxSize(),
+            if (videoBig) Modifier.pip(pip).zIndex(2f) else Modifier.fillMaxSize(),
             basemap = flyState.selectedBasemap,
             overlays = (if (mapsTab) mapsState.overlays else emptyList()) + planState.overlays + flyState.overlays,
             cameraRequest = camera,
@@ -140,15 +159,17 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             onMarkerDragEnd = if (planning) { _ -> plan.onMarkerDragFinished() } else null,
             onViewChanged = maps::onViewChanged,
         )
-        NavHost(nav, startDestination = START.route) {
+        videoSource?.let { VideoView(it, if (videoBig) Modifier.fillMaxSize() else Modifier.pip(pip).zIndex(2f), showStats = videoState.showStats) }
+        NavHost(nav, startDestination = START.route, modifier = Modifier.zIndex(1f)) {
             // Fly and Plan draw only their panels; where they draw nothing, input falls through to the map.
-            composable(Destination.FLY.route) { FlyRoute(fly) }
+            composable(Destination.FLY.route) { FlyRoute(fly, video) }
             composable(Destination.PLAN.route) { PlanRoute(plan) }
             composable(Destination.MAPS.route) { OfflineMapsRoute(maps) }
             // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
             composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute() } }
         }
+        if (videoSource != null) PipControls(pip, video::onSwapClicked, video::onStatsToggled, video::onHideClicked, Modifier.zIndex(3f))
     }
 }
 

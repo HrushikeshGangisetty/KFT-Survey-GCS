@@ -24,3 +24,28 @@ QGroundControl survey algorithm (test reference only, not in the app)
   Changes: translated from C++/Qt to Kotlin for use as a comparison reference in tests; Qt geometry and
            GeographicLib replaced by equivalent code; only the single-polygon survey path; logging removed.
            The header of the file lists the functions ported.
+
+--------------------------------------------------------------------------------
+FFmpeg (desktop app only: video decoding)
+  Files:   the FFmpeg DLLs inside org.bytedeco:ffmpeg:8.1.2-1.5.14:windows-x86_64 (avcodec, avformat, avutil,
+           swscale, swresample, ...), loaded at run time.
+  Source:  FFmpeg 8.1.2, https://ffmpeg.org/releases/ ; built by the JavaCPP Presets project,
+           https://github.com/bytedeco/javacpp-presets/tree/1.5.14/ffmpeg (cppbuild.sh has the exact configure flags)
+  Licence: GNU Lesser General Public License, version 3 (licenses/LGPL-3.0.txt, which builds on licenses/GPL-3.0.txt).
+           The build uses --enable-version3 without --enable-gpl. The libraries are dynamically linked and can be
+           replaced. Corresponding source: FFmpeg 8.1.2 and the build script above. How KFT hands it on with the
+           desktop installer (LGPLv3 §4 via GPLv3 §6) is to be settled before the first release outside KFT (ADR-004).
+  Changes: none.
+
+--------------------------------------------------------------------------------
+JavaCPP and JavaCPP Presets for FFmpeg (desktop app only)
+  Files:   org.bytedeco:javacpp:1.5.14, org.bytedeco:ffmpeg:8.1.2-1.5.14 (Java bindings and JNI glue)
+  Source:  https://github.com/bytedeco/javacpp , https://github.com/bytedeco/javacpp-presets
+  Licence: Apache License, Version 2.0 (licenses/Apache-2.0.txt), chosen from its Apache-2.0 / GPLv2-with-Classpath-
+           exception dual licence.
+
+--------------------------------------------------------------------------------
+AndroidX Media3 (Android app only: RTSP playback)
+  Files:   androidx.media3:media3-exoplayer, media3-exoplayer-rtsp 1.11.1
+  Source:  https://github.com/androidx/media
+  Licence: Apache License, Version 2.0 (licenses/Apache-2.0.txt). Copyright The Android Open Source Project.

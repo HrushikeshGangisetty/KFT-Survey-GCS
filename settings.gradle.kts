@@ -37,6 +37,7 @@ include(":core:geo-io")
 // ---- ui: shared UI building blocks ----
 include(":ui:design")  // KFT theme, tokens, icons, logo, shared components
 include(":ui:map")
+include(":ui:video") // RTSP and T12 video playback (Pass 27)
 
 // ---- features: one screen family each, never depend on each other ----
 include(":feature:connections")

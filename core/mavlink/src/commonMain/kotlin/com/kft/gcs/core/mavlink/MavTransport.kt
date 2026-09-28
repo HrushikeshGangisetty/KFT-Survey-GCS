@@ -12,7 +12,7 @@ import okio.BufferedSource
 import okio.IOException
 
 /**
- * A raw byte pipe to a vehicle (UDP, TCP, later serial and Bluetooth). MAVLink framing sits on top of it.
+ * A raw byte pipe to a vehicle (UDP, TCP, serial, Bluetooth, the T12's data channel). MAVLink framing sits on top of it.
  *
  * `internal` on purpose: code outside `core:mavlink` can't even name a transport, so it can't write bytes that
  * bypass [MavTxGateway]. That's how CLAUDE.md §4 ("only the gateway writes") is enforced by the compiler.
@@ -47,7 +47,7 @@ internal class TransportMavConnection(private val transport: MavTransport) : Abs
 }
 
 /** Builds the platform transport for [config], wrapped for coroutines. Socket code lives in `jvmCommonMain`. */
-internal fun openTransportConnection(config: LinkConfig, ioDispatcher: CoroutineDispatcher, serialPorts: SerialPorts): CoroutinesMavConnection =
-    TransportMavConnection(createTransport(config, serialPorts)).asCoroutine(ioDispatcher)
+internal fun openTransportConnection(config: LinkConfig, ioDispatcher: CoroutineDispatcher, serialPorts: SerialPorts, t12: T12Link): CoroutinesMavConnection =
+    TransportMavConnection(createTransport(config, serialPorts, t12)).asCoroutine(ioDispatcher)
 
-internal expect fun createTransport(config: LinkConfig, serialPorts: SerialPorts): MavTransport
+internal expect fun createTransport(config: LinkConfig, serialPorts: SerialPorts, t12: T12Link): MavTransport

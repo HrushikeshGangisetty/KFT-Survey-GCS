@@ -45,7 +45,13 @@ actual class SerialPorts(context: Context) {
 
     private fun usbPorts() = UsbSerialProber.getDefaultProber().findAllDrivers(usb).map { driver ->
         val device = driver.device
-        SerialPortInfo(device.deviceName, listOfNotNull(device.productName, driver.javaClass.simpleName.removeSuffix("SerialDriver")).joinToString(" · "))
+        // Android 10+ throws SecurityException for the serial number until the user has allowed the device.
+        val serial = runCatching { device.serialNumber }.getOrNull()
+        SerialPortInfo(
+            device.deviceName,
+            listOfNotNull(device.productName, driver.javaClass.simpleName.removeSuffix("SerialDriver")).joinToString(" · "),
+            usb = UsbId(device.vendorId, device.productId, serial),
+        )
     }
 
     /** Paired devices, by name. None when the tablet has no Bluetooth, it's off, or the permission is missing (then asked for). */
@@ -67,7 +73,7 @@ actual class SerialPorts(context: Context) {
         }
     }
 
-    internal actual fun open(name: String, baud: Int): SerialLink {
+    internal actual fun open(name: String, baud: Int, readTimeoutMs: Int, rts: Boolean): SerialLink {
         bluetoothAddressOf(name)?.let { return openBluetooth(it) }
         val driver = UsbSerialProber.getDefaultProber().findAllDrivers(usb).firstOrNull { it.device.deviceName == name }
             ?: throw IOException("USB device $name isn't connected")
@@ -82,11 +88,12 @@ actual class SerialPorts(context: Context) {
             port.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
             // Some CDC-ACM flight controllers only send once the host raises DTR, as a terminal program would.
             port.dtr = true
+            if (rts) port.rts = true
         } catch (e: java.io.IOException) {
             port.close()
             throw IOException("Couldn't configure $name: ${e.message}")
         }
-        return UsbSerialLink(port)
+        return UsbSerialLink(port, readTimeoutMs)
     }
 
     /**
@@ -130,8 +137,8 @@ actual class SerialPorts(context: Context) {
     }
 }
 
-private class UsbSerialLink(private val port: UsbSerialPort) : SerialLink {
-    override fun read(buffer: ByteArray): Int = port.read(buffer, SerialLink.READ_TIMEOUT_MS)
+private class UsbSerialLink(private val port: UsbSerialPort, private val readTimeoutMs: Int) : SerialLink {
+    override fun read(buffer: ByteArray): Int = port.read(buffer, readTimeoutMs)
 
     override fun write(bytes: ByteArray) = port.write(bytes, WRITE_TIMEOUT_MS)
 
