@@ -121,7 +121,8 @@ actual class T12Link internal constructor(
 
     private suspend fun session() {
         val port = findPort() ?: throw IOException("No Skydroid T12 on USB: plug the controller in (USB-C, data port)")
-        val link = openPort(port.name)
+        // Claimed first: if a Serial profile has this port open, stop here with its name rather than take the port.
+        val link = claimed(port.name, T12_OWNER) { openPort(port.name) }
         _problem.value = null
         synchronized(tx) { tx.clear() }
         var videoOn = false
@@ -207,9 +208,11 @@ actual class T12Link internal constructor(
 
         override fun open(): MavTransport.Streams {
             // Fail like a missing serial port would, so the Links screen says why and the reconnect loop retries.
-            if (listPorts().none { it.usb?.vendorId == T12.VENDOR_ID && it.usb.productId == T12.PRODUCT_ID }) {
-                throw IOException("No Skydroid T12 on USB")
-            }
+            val ports = listPorts().filter { it.usb?.vendorId == T12.VENDOR_ID && it.usb.productId == T12.PRODUCT_ID }
+            if (ports.isEmpty()) throw IOException("No Skydroid T12 on USB")
+            // Its port held by a Serial profile: say so here, where the Links screen shows it.
+            ports.firstNotNullOfOrNull { p -> PortClaims.holders.value[p.name]?.takeIf { it != T12_OWNER }?.let { "${p.name} is in use by $it" } }
+                ?.let { throw IOException(it) }
             dataSink = { bytes -> incoming.offer(bytes) }
             opened = true
             mavUsers.update { it + 1 }

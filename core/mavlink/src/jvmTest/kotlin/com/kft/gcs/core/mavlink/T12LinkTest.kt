@@ -137,6 +137,48 @@ class T12LinkTest {
         assertEquals(2, got.size)
     }
 
+    // Port conflicts (PortClaims). Each test uses its own port name: the claim table is process-wide, like a real port.
+
+    @Test
+    fun whileTheT12HoldsItsPortASerialProfileIsRefusedAndLinksSaysWhy() = runTest {
+        val link = link({ listOf(port("COM20", "0001")) }) { FakeT12(frame(0xA5, 1)) }
+        val video = backgroundScope.launch { link.video.collect { } }
+        advanceTimeBy(100); runCurrent()
+
+        val refused = assertFailsWith<IOException> { SerialTransport { claimed("COM20", SERIAL_OWNER) { error("must not open") } }.open() }
+        assertEquals("COM20 is in use by Skydroid T12", refused.message)
+        assertEquals(T12_OWNER, listOf(SerialPortInfo("COM20", "CP2102")).withHolders().single().inUseBy)
+
+        video.cancel()
+        advanceTimeBy(100); runCurrent()
+        assertEquals(null, PortClaims.holders.value["COM20"], "given back when the video stops")
+    }
+
+    @Test
+    fun whileASerialProfileHoldsThePortTheT12IsRefusedAndSaysWhy() = runTest {
+        val serial = SerialTransport { claimed("COM21", SERIAL_OWNER) { FakeT12() } }
+        serial.open()
+        var opens = 0
+        val link = link({ listOf(port("COM21", "0001")) }) { opens++; FakeT12(frame(0xA5, 1)) }
+
+        backgroundScope.launch { link.video.collect { } }
+        advanceTimeBy(100); runCurrent()
+        assertEquals("COM21 is in use by a Serial link", link.problem.value)
+        assertEquals(0, opens, "the T12 link never opened the port")
+        assertEquals("COM21 is in use by a Serial link", assertFailsWith<IOException> { link.mavlinkTransport().open() }.message)
+
+        serial.close() // the Serial link disconnects: the T12 gets the port on its next try
+        advanceTimeBy(1_100); runCurrent()
+        assertEquals(1, opens)
+        assertEquals(T12_OWNER, PortClaims.holders.value["COM21"])
+    }
+
+    @Test
+    fun aFailedOpenLeavesThePortFree() {
+        assertFailsWith<IOException> { claimed("COM22", SERIAL_OWNER) { throw IOException("unplugged") } }
+        assertEquals(null, PortClaims.holders.value["COM22"])
+    }
+
     private fun CoroutineScope.launchCollect(link: T12Link, into: MutableList<ByteArray> = mutableListOf()) {
         launch { link.video.collect { into += it } }
     }

@@ -5,6 +5,7 @@ import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.SerialPorts
+import com.kft.gcs.core.mavlink.withHolders
 import com.kft.gcs.core.vehicle.KftLoginStatus
 import com.kft.gcs.core.vehicle.VehicleState
 import kotlinx.coroutines.flow.Flow
@@ -35,7 +36,7 @@ interface ConnectionsRepository {
     fun connect(profileId: String)
     fun disconnect()
 
-    /** Serial ports present right now (COM ports on desktop, USB-OTG devices on Android). */
+    /** Serial ports present right now (COM ports on desktop, USB-OTG devices on Android), with who holds each. */
     fun serialPorts(): List<SerialPortInfo>
 }
 
@@ -78,7 +79,8 @@ class DefaultConnectionsRepository(
 
     override fun disconnect() = manager.disconnect()
 
-    override fun serialPorts() = ports.list()
+    // Marked with who holds them in this app (the T12 link, a Serial link), so the form can refuse them.
+    override fun serialPorts() = ports.list().withHolders()
 
     private fun profile(name: String, config: LinkConfig) = ConnectionProfile("p${nextId++}", name, config)
 

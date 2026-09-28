@@ -2,6 +2,7 @@ package com.kft.gcs.feature.connections
 
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.SerialPortInfo
+import com.kft.gcs.core.mavlink.T12_OWNER
 import com.kft.gcs.core.mavlink.bluetoothPortName
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -29,6 +30,12 @@ class ProfileFileTest {
         val saved = """[{"name":"R","link":{"type":"serial","port":"COM7","baud":57600}}]"""
         assertEquals(listOf("R" to LinkConfig.Serial("COM7", 57600)), decodeProfiles(saved))
         assertEquals(listOf("RC" to LinkConfig.T12), decodeProfiles("""[{"name":"RC","link":{"type":"t12"}}]"""))
+    }
+
+    @Test
+    fun aPortHeldByTheT12SaysSoOnItsChip() {
+        assertEquals("COM9 · Silicon Labs CP210x", portLabel(SerialPortInfo("COM9", "Silicon Labs CP210x")))
+        assertEquals("COM9 · Silicon Labs CP210x · in use by Skydroid T12", portLabel(SerialPortInfo("COM9", "Silicon Labs CP210x", inUseBy = T12_OWNER)))
     }
 
     @Test

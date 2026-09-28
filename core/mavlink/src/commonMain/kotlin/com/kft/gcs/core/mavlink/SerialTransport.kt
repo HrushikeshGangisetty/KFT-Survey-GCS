@@ -15,7 +15,14 @@ import okio.buffer
  * [usb]: the USB chip's identity, when the port is a USB device. It's how the Skydroid T12 is found again after a
  * replug, because Android gives the device a new [name] every time it's plugged in.
  */
-data class SerialPortInfo(val name: String, val description: String, val bluetooth: Boolean = false, val usb: UsbId? = null)
+data class SerialPortInfo(
+    val name: String,
+    val description: String,
+    val bluetooth: Boolean = false,
+    val usb: UsbId? = null,
+    /** Who in this app has the port open right now ([SERIAL_OWNER], [T12_OWNER]), or null. See [withHolders]. */
+    val inUseBy: String? = null,
+)
 
 /**
  * A USB device's vendor and product IDs, and its serial number when the OS lets us read it (Android only shows it

@@ -124,5 +124,6 @@ test prints the frame types seen.
 
 - The T12's poll frames and AT commands are written by `T12Link`, not `MavTxGateway`: they are link-layer framing,
   like a UDP header. Every MAVLink byte inside them still comes from the gateway, through the T12 transport.
-- A plain **Serial** profile on the T12's port and T12 video at the same time will fight over the port (on Android,
-  both links die; on Windows the second open fails). Use the "Skydroid T12" link type instead. See the pass log.
+- A plain **Serial** profile and the T12 link can't hold the T12's port at the same time: both claim it in
+  `PortClaims` first, and the second is refused with "COM9 is in use by Skydroid T12" (or "by a Serial link"); the
+  Links screen shows the port as in use (Pass 28). Use the "Skydroid T12" link type for MAVLink over the T12.

@@ -3301,3 +3301,87 @@ Fly tab: MapView and VideoView stay composed; a swap changes only their modifier
 - 4 Mbaud on Windows through the Silicon Labs driver isn't confirmed (checklist §5b.3).
 - `ponytail:` Windows x64 FFmpeg natives only; with two CP2102 devices and none remembered, the first is tried.
 - **Stopped after Pass 27, as asked.**
+
+## Pass 28 — Before the hardware session: port conflicts, one hardware checklist, a release checklist (2026-09-28)
+
+### What changed
+- **`core/mavlink/PortClaims.kt`** (new): the app-wide table of open serial ports and their holders (`PortClaims`),
+  the owner names (`SERIAL_OWNER`, `T12_OWNER`), `claimed()` (claim, open, give back on close or on a failed open),
+  and `withHolders()` for the Links list.
+- **`core/mavlink`**: `SerialPortInfo.inUseBy`; a Serial profile's transport opens its port through `claimed()`
+  (`SocketTransports.kt`); `T12Link.session()` does too, and the T12 MAVLink transport refuses with the holder's name
+  if a Serial profile has the T12's port.
+- **`feature/connections`**: the repository marks held ports; a held port's chip reads "… · in use by Skydroid T12" and
+  can't be picked (`portLabel`, `enabled = p.inUseBy == null`).
+- **`ui/video`**: `FfmpegBuildTest` asks FFmpeg itself that it's the LGPL build.
+- **`docs/checklists/hardware-session-1.md`** (new) replaces `bench-session-1.md`: every hardware step from that file
+  and from the Pass 12–27 log entries, in one order for one sitting, each with Action / Expected / Result, plus "What
+  to capture on failure".
+- **`docs/checklists/release.md`** (new): GS-1, the Skydroid permission, LGPL-not-GPL, the FFmpeg notice and source
+  offer, no OpenH264 in the shipped app, H.264/H.265 decoder patents, GS-9, keys, build steps.
+- **`docs/decisions/ADR-004-video.md`**: the port-conflict consequence now describes the refusal.
+
+### How it works
+```
+Serial profile connect ─▶ createTransport ─▶ claimed(COM9, "a Serial link") ─┐
+T12 video / T12 link   ─▶ T12Link.session  ─▶ claimed(COM9, "Skydroid T12") ─┤─▶ PortClaims: COM9 free? take it : throw
+                                                                             │     "COM9 is in use by <holder>"
+link.close() / failed open ─▶ release(COM9, owner) ◀─────────────────────────┘
+Links → Refresh ─▶ ports.list().withHolders() ─▶ chip "COM9 · … · in use by Skydroid T12", disabled
+```
+
+### Engineering learnings
+- **Claim in the one place every opener goes through.** Both openers call `claimed()` before touching the port, so
+  the check can't be forgotten by one of them, and the claim is given back by the link's own `close()` (and by a
+  failed open), so no code path can leave a port marked held. Pass 27 avoided an ownership registry between video and
+  MAVLink on the T12 (one owner, two subscribers); this table is the other half: between the T12 link and a Serial
+  profile, which really are two separate openers.
+- **Lock-free, in common code.** `commonMain` has no `synchronized`, so `claim` is a compare-and-set loop on a
+  `MutableStateFlow`: read the map, fail if the port is taken, otherwise swap in the new map only if nobody changed it
+  in between. The same flow is what the Links screen reads.
+- **Process-wide on purpose.** A port is process-wide, so the table is an `object`. The tests use a different port
+  name each, so they can't see each other's claims.
+- **The licence question answered by the library, not the file name.** `avcodec_license()` said "LGPL version 3 or
+  later", and `avcodec_configuration()` showed `--enable-libopenh264`: OpenH264 is compiled into the FFmpeg we'd
+  ship. That became a release item, with the options.
+- **The checklist:** one step, one Action, one Expected, one blank Result line, printable. The T12 comes first
+  because its answers (4 Mbaud on Windows, the capture, MAVLink on 0xA3) decide the next passes; anything that needs
+  flying is listed as out of scope. The GCS writes no tlog, so the failure section says so and uses the FC's
+  dataflash log instead; that gap is worth a pass.
+- **Ponytail review (lite):** `withHolders()` lost an optional parameter nobody passed. Nothing else to cut.
+
+### What to look at
+1. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/PortClaims.kt:21` (`PortClaims`) and `:56` (`claimed`).
+2. `core/mavlink/src/jvmCommonMain/kotlin/com/kft/gcs/core/mavlink/T12Link.kt:125`: the T12 claims before it opens.
+3. `docs/checklists/hardware-session-1.md` and `docs/checklists/release.md`.
+
+### Tests
+- `T12LinkTest` (3 new):
+  - `whileTheT12HoldsItsPortASerialProfileIsRefusedAndLinksSaysWhy`: with T12 video on COM20, a Serial transport for
+    COM20 fails with "COM20 is in use by Skydroid T12" without opening the port; `withHolders()` marks it; the claim is
+    gone once the video stops.
+  - `whileASerialProfileHoldsThePortTheT12IsRefusedAndSaysWhy`: with a Serial link on COM21, the T12 link reports
+    "COM21 is in use by a Serial link" and never opens the port; the T12 MAVLink transport fails with the same message;
+    after the Serial link closes, the T12 takes the port on its next try.
+  - `aFailedOpenLeavesThePortFree`.
+- `ProfileFileTest.aPortHeldByTheT12SaysSoOnItsChip`: the chip text with and without a holder.
+- `FfmpegBuildTest`: the linked FFmpeg reports LGPL, with no `--enable-gpl` or `--enable-nonfree`.
+- `gradlew.bat check`: pass (766 test runs, 0 failures, 1 skipped from before). No new warnings (the one in
+  `ConnectionsUiTest` predates this pass).
+- Not run in the app this pass: the disabled chip is one `enabled` flag on the existing chip; checklist step 1.6
+  checks it on the hardware.
+- The Serial-side test builds `SerialTransport { claimed(...) { … } }` the same way `createTransport` does; the
+  one-line wiring in `createTransport` itself isn't under test (it needs the platform's `SerialPorts`).
+
+### Safety
+No transmission change: the gateway, allowlist and protocols are untouched. The change removes a failure mode: on
+Android a second open of the same USB port used to take it from the first link silently, and now it's refused with a
+message naming the holder.
+
+### Open questions / next
+- The hardware session (`docs/checklists/hardware-session-1.md`). Its answers to 1.1, 1.2, 1.5 and 4.6 decide the
+  next T12 and parameter work.
+- `release.md` items are KFT decisions: OpenFreeMap, the Skydroid permission, the FFmpeg source offer, OpenH264
+  (the current build includes it), decoder patents, GS-9.
+- The GCS records no tlog: worth its own pass (write every received and sent frame, MAVProxy-compatible).
+- **Stopped after Pass 28, as asked.**

@@ -221,7 +221,9 @@ private fun NewProfileForm(
                         FilterChip(
                             selected = form.serialPort == p.name,
                             onClick = { onSerialPortChanged(p.name) },
-                            label = { Text(if (p.description.isBlank()) p.name else "${p.name} · ${p.description}") },
+                            label = { Text(portLabel(p)) },
+                            // Held by the T12 link (or another Serial link): opening it again would take it away.
+                            enabled = p.inUseBy == null,
                         )
                     }
                 }

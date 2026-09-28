@@ -137,6 +137,10 @@ fun ProfileForm.toConfigOrError(): Result<LinkConfig> {
     }
 }
 
+/** A port chip's text: "COM9 · Silicon Labs CP210x", plus "· in use by Skydroid T12" when this app holds it. */
+fun portLabel(port: SerialPortInfo): String =
+    listOfNotNull(port.name, port.description.ifBlank { null }, port.inUseBy?.let { "in use by $it" }).joinToString(" · ")
+
 /**
  * What to tell the operator about a Bluetooth port, or null for any other port.
  * - Android lists the paired device itself ("bt:…"): no baud rate to pick; the module's UART must match the flight

@@ -22,7 +22,8 @@ internal actual fun createTransport(config: LinkConfig, serialPorts: SerialPorts
     is LinkConfig.TcpClient -> TcpTransport(config.host, config.port)
     // The port opens inside MavTransport.open(), so a missing or busy port is an ordinary IOException and the
     // connection manager's reconnect loop retries it (which is also how the Android USB permission prompt resolves).
-    is LinkConfig.Serial -> SerialTransport { serialPorts.open(config.port, config.baud) }
+    // Claimed first, so a port the T12 link holds is refused with "COM9 is in use by Skydroid T12" (PortClaims).
+    is LinkConfig.Serial -> SerialTransport { claimed(config.port, SERIAL_OWNER) { serialPorts.open(config.port, config.baud) } }
     // The T12's port is shared with its video, so T12Link owns it and hands out a transport over its data channel.
     LinkConfig.T12 -> t12.mavlinkTransport()
 }
