@@ -9,15 +9,19 @@ import com.divpundir.mavlink.definitions.common.CommandLong
 import com.divpundir.mavlink.definitions.common.FileTransferProtocol
 import com.divpundir.mavlink.definitions.common.ManualControl
 import com.divpundir.mavlink.definitions.common.MavCmd
+import com.divpundir.mavlink.definitions.common.MissionAck
 import com.divpundir.mavlink.definitions.common.MissionClearAll
 import com.divpundir.mavlink.definitions.common.MissionCount
 import com.divpundir.mavlink.definitions.common.MissionItemInt
+import com.divpundir.mavlink.definitions.common.MissionRequestInt
 import com.divpundir.mavlink.definitions.common.MissionRequestList
 import com.divpundir.mavlink.definitions.common.MissionSetCurrent
+import com.divpundir.mavlink.definitions.common.MissionWritePartialList
 import com.divpundir.mavlink.definitions.common.ParamRequestList
 import com.divpundir.mavlink.definitions.common.ParamRequestRead
 import com.divpundir.mavlink.definitions.common.ParamSet
 import com.divpundir.mavlink.definitions.common.RcChannelsOverride
+import com.divpundir.mavlink.definitions.common.RequestDataStream
 import com.divpundir.mavlink.definitions.common.SetAttitudeTarget
 import com.divpundir.mavlink.definitions.common.SetMode
 import com.divpundir.mavlink.definitions.common.SetPositionTargetGlobalInt
@@ -82,15 +86,20 @@ class MavTxGatewayTest {
         assertNull(verdict(ParamRequestRead(), armed = true), "reading is fine in the air")
     }
 
+    /** A heard vehicle as the gateway is told about it; null [armed] = not heard. */
+    private fun info(armed: Boolean?, systemId: UByte = 1u, duplicate: Boolean = false) =
+        armed?.let { VehicleInfo(systemId, 1u, VehicleKind.COPTER, it, 0u, duplicate) }
+
     @Test
     fun gatewayRejectsParamSetWhileArmedWithoutWriting() = runTest {
         var armed: Boolean? = false
         val link = FakeMavConnection()
-        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { armed }
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed) }
         gateway.attach(link)
-        assertEquals(TxResult.Sent, gateway.send(ParamSet(paramId = "CAM1_TYPE", paramValue = 1f)))
+        val sender = gateway.forVehicle(1u)
+        assertEquals(TxResult.Sent, sender.send(ParamSet(targetSystem = 1u, paramId = "CAM1_TYPE", paramValue = 1f)))
         armed = true
-        val rejected = assertIs<TxResult.Rejected>(gateway.send(ParamSet(paramId = "CAM1_TYPE", paramValue = 0f)))
+        val rejected = assertIs<TxResult.Rejected>(sender.send(ParamSet(targetSystem = 1u, paramId = "CAM1_TYPE", paramValue = 0f)))
         assertEquals("PARAM_SET", rejected.message)
         assertEquals(1, link.sent.size, "the armed-time set must not reach the link")
     }
@@ -124,11 +133,12 @@ class MavTxGatewayTest {
     fun gatewayReadsArmedStateAtSendTime() = runTest {
         var armed: Boolean? = false
         val link = FakeMavConnection()
-        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { armed }
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed) }
         gateway.attach(link)
-        assertEquals(TxResult.Sent, gateway.send(MissionSetCurrent(seq = 2u)))
+        val sender = gateway.forVehicle(1u)
+        assertEquals(TxResult.Sent, sender.send(MissionSetCurrent(targetSystem = 1u, seq = 2u)))
         armed = true
-        assertIs<TxResult.Rejected>(gateway.send(MissionSetCurrent(seq = 2u)))
+        assertIs<TxResult.Rejected>(sender.send(MissionSetCurrent(targetSystem = 1u, seq = 2u)))
         assertEquals(1, link.sent.size, "the armed-time request must not reach the link")
     }
 
@@ -182,7 +192,7 @@ class MavTxGatewayTest {
         gateway.attach(link)
 
         gateway.rejections.test {
-            val result = gateway.send(MissionCount(count = 5u))
+            val result = gateway.forVehicle(1u).send(MissionCount(targetSystem = 1u, count = 5u))
             assertIs<TxResult.Rejected>(result)
             assertEquals(result, awaitItem(), "every rejection is published for the log")
         }
@@ -193,18 +203,105 @@ class MavTxGatewayTest {
     fun gatewayReadsPodStateAtSendTime() = runTest {
         val pod = MutableStateFlow(PodStatus.NoPod)
         val gateway = MavTxGateway(pod)
-        assertEquals(TxResult.NotConnected, gateway.send(copterHeartbeat()))
+        val sender = gateway.forVehicle(1u)
+        assertEquals(TxResult.NotConnected, sender.send(MissionCount(targetSystem = 1u, count = 5u)))
 
         val link = FakeMavConnection()
         gateway.attach(link)
-        assertEquals(TxResult.Sent, gateway.send(MissionCount(count = 5u)))
+        assertEquals(TxResult.Sent, sender.send(MissionCount(targetSystem = 1u, count = 5u)))
 
         // A lock that arrives mid-upload blocks the very next mission message.
         pod.value = locked
-        assertIs<TxResult.Rejected>(gateway.send(MissionItemInt()))
+        assertIs<TxResult.Rejected>(sender.send(MissionItemInt(targetSystem = 1u)))
         assertEquals(1, link.sent.size)
 
         gateway.detach()
-        assertEquals(TxResult.NotConnected, gateway.send(copterHeartbeat()))
+        assertEquals(TxResult.NotConnected, gateway.sendHeartbeat(copterHeartbeat()))
+    }
+
+    // ---- ADR-005 §3: every send names its vehicle ----
+
+    /** A message together with "send it through this sender": send() needs the message's own type, which a list loses. */
+    private class Sendable(val message: MavMessage<*>, val sendVia: suspend (MavSender) -> TxResult)
+
+    private fun <T : MavMessage<T>> sendable(message: T) = Sendable(message) { it.send(message) }
+
+    /** One of every allowlisted message that has a target, addressed to [system]. */
+    private fun targeted(system: UByte): List<Sendable> = listOf(
+        sendable(ParamRequestRead(targetSystem = system)), sendable(ParamRequestList(targetSystem = system)),
+        sendable(ParamSet(targetSystem = system)), sendable(RequestDataStream(targetSystem = system)),
+        sendable(MissionRequestList(targetSystem = system)), sendable(MissionRequestInt(targetSystem = system)),
+        sendable(MissionAck(targetSystem = system)), sendable(MissionCount(targetSystem = system)),
+        sendable(MissionItemInt(targetSystem = system)), sendable(MissionClearAll(targetSystem = system)),
+        sendable(MissionWritePartialList(targetSystem = system)), sendable(MissionSetCurrent(targetSystem = system)),
+        sendable(CommandLong(targetSystem = system, command = MavEnumValue.of(MavCmd.REQUEST_MESSAGE))),
+        sendable(CommandInt(targetSystem = system, command = MavEnumValue.of(MavCmd.SET_MESSAGE_INTERVAL))),
+    )
+
+    /** The gateway reads the target from the message itself; a type missing from the lookup could never be sent. */
+    @Test
+    fun everyAllowlistedTargetedMessageHasItsTargetRead() {
+        targeted(7u).forEach { assertEquals(7u.toUByte(), TxPolicy.targetSystem(it.message), "${it.message}") }
+        assertNull(TxPolicy.targetSystem(copterHeartbeat()), "a heartbeat has no target")
+    }
+
+    /** The cross-vehicle mistake: a message built for vehicle 1 handed to vehicle 2's sender. Nothing reaches the link. */
+    @Test
+    fun aMessageAddressedToAnotherVehicleIsNeverWritten() = runTest {
+        val link = FakeMavConnection()
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed = false, systemId = it) }
+        gateway.attach(link)
+        for (m in targeted(1u)) {
+            val result = assertIs<TxResult.Rejected>(m.sendVia(gateway.forVehicle(2u)), "${m.message}")
+            assertTrue("system 1" in result.reason && "system 2" in result.reason, result.reason)
+        }
+        assertTrue(link.sent.isEmpty(), "none of them may reach the link")
+        // The same messages through the right sender all go out.
+        targeted(1u).forEach { assertEquals(TxResult.Sent, it.sendVia(gateway.forVehicle(1u)), "${it.message}") }
+    }
+
+    /** target_system 0 means "every system": on a link with three drones, all three would obey. */
+    @Test
+    fun aBroadcastTargetIsRefused() = runTest {
+        val link = FakeMavConnection()
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed = false, systemId = it) }
+        gateway.attach(link)
+        targeted(0u).forEach { assertIs<TxResult.Rejected>(it.sendVia(gateway.forVehicle(1u)), "${it.message}") }
+        assertTrue(link.sent.isEmpty())
+    }
+
+    /** Vehicle 1 is flying, vehicle 2 is on the ground: each sender is judged by its own vehicle's armed flag. */
+    @Test
+    fun theArmedRuleUsesTheNamedVehiclesOwnFlag() = runTest {
+        val link = FakeMavConnection()
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed = it == 1u.toUByte(), systemId = it) }
+        gateway.attach(link)
+        assertIs<TxResult.Rejected>(gateway.forVehicle(1u).send(ParamSet(targetSystem = 1u)), "vehicle 1 is armed")
+        assertEquals(TxResult.Sent, gateway.forVehicle(2u).send(ParamSet(targetSystem = 2u)), "vehicle 2 is disarmed")
+        assertEquals(listOf<UByte>(2u), link.sent.filterIsInstance<ParamSet>().map { it.targetSystem })
+    }
+
+    /** ADR-005 §4: with two autopilots on one system id, even a read request is refused: both would answer. */
+    @Test
+    fun nothingIsSentToADuplicatedSystemId() = runTest {
+        val link = FakeMavConnection()
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed = false, systemId = it, duplicate = true) }
+        gateway.attach(link)
+        for (m in targeted(1u)) {
+            val result = assertIs<TxResult.Rejected>(m.sendVia(gateway.forVehicle(1u)), "${m.message}")
+            assertTrue(result.reason.contains("two vehicles"), result.reason)
+        }
+        assertTrue(link.sent.isEmpty())
+    }
+
+    /** Two links, both with a system 1: a sender writes to its own link only. */
+    @Test
+    fun aSenderWritesOnlyToItsOwnLink() = runTest {
+        val (linkA, linkB) = FakeMavConnection() to FakeMavConnection()
+        val gatewayA = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed = false, systemId = it) }.apply { attach(linkA) }
+        MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed = false, systemId = it) }.apply { attach(linkB) }
+        assertEquals(TxResult.Sent, gatewayA.forVehicle(1u).send(MissionCount(targetSystem = 1u, count = 2u)))
+        assertEquals(1, linkA.sent.size)
+        assertTrue(linkB.sent.isEmpty())
     }
 }

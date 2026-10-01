@@ -8,6 +8,7 @@ import com.kft.gcs.core.geoio.encodeParamFile
 import com.kft.gcs.core.geoio.parsePdef
 import com.kft.gcs.core.geoio.pdefCacheKey
 import com.kft.gcs.core.geoio.pdefUrls
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.geoio.parseParamFile
 import com.kft.gcs.core.vehicle.Param
@@ -18,6 +19,8 @@ import com.kft.gcs.core.vehicle.formatParamValue
 import com.kft.gcs.core.vehicle.parseParamInput
 import com.kft.gcs.core.vehicle.valueText
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -75,12 +78,17 @@ sealed interface ParamsEffect {
  * Descriptions, units, ranges, value names and bits come from ArduPilot's parameter metadata for the connected
  * vehicle and firmware version ([loadMetadata], after each download), or from a file the operator imports. The list
  * works without them; they only add help and checks.
+ *
+ * Several vehicles (ADR-005 §5): [vehicle] and [repository] are the selected vehicle's. Each vehicle has its own list
+ * here; when [selectedId] changes, the list on screen is swapped for that vehicle's, so one drone's values are never
+ * shown, edited or written while another is selected.
  */
 class ParamsViewModel(
     private val vehicle: StateFlow<VehicleState>,
     private val repository: ParamRepository,
     private val files: ParamFiles,
     private val metadata: MetadataSource,
+    private val selectedId: StateFlow<VehicleId?> = MutableStateFlow(null),
 ) : ViewModel() {
 
     private data class Model(
@@ -98,6 +106,13 @@ class ParamsViewModel(
 
     private val model = MutableStateFlow(Model())
 
+    // Which vehicle [model] belongs to, and the lists of the vehicles that aren't selected. Main thread only.
+    private var shown: VehicleId? = selectedId.value
+    private val others = HashMap<VehicleId?, Model>()
+
+    /** The download or write in progress, so a change of vehicle can stop it. */
+    private var job: Job? = null
+
     val state: StateFlow<ParamsUiState> = combine(model, vehicle, ::buildUiState)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), buildUiState(model.value, vehicle.value))
 
@@ -109,6 +124,19 @@ class ParamsViewModel(
         // needs that), without a visit to the Params tab. drop(1): a vehicle that is ready at start isn't a new connection.
         viewModelScope.launch {
             vehicle.map(::ready).distinctUntilChanged().drop(1).filter { it }.collect { onDownloadClicked() }
+        }
+        // Another vehicle was selected: stop what was running for the old one, put its list away and bring out the new
+        // one's. A vehicle seen for the first time has no list yet, so it is read now (once per vehicle, not at connect
+        // for every vehicle: three full downloads at once would flood a telemetry radio).
+        viewModelScope.launch {
+            selectedId.collect { id ->
+                if (id == shown) return@collect
+                job?.cancel()
+                others[shown] = model.value.copy(progress = null, edit = null, fileLoad = null)
+                model.value = others.remove(id) ?: Model()
+                shown = id
+                if (model.value.params.isEmpty() && ready(vehicle.value)) onDownloadClicked()
+            }
         }
     }
 
@@ -128,8 +156,10 @@ class ParamsViewModel(
      * used from then on instead of a download.
      */
     fun onImportMetadataClicked() {
+        val forVehicle = shown
         viewModelScope.launch {
             val (name, text) = files.open() ?: return@launch
+            if (shown != forVehicle) return@launch // the selection changed while the file dialog was open
             val meta = parsePdef(text)
             if (meta.isEmpty()) return@launch say("$name is not a parameter metadata file (apm.pdef.json or .xml)")
             val key = pdefVehicle(vehicle.value)?.let { pdefCacheKey(it, vehicle.value.firmwareVersion) }
@@ -240,8 +270,10 @@ class ParamsViewModel(
     fun onLoadFileClicked() {
         if (model.value.params.isEmpty()) return say("Download the parameters first, so the file can be compared with the vehicle")
         if (!canWrite()) return
+        val forVehicle = shown
         viewModelScope.launch {
             val (name, text) = files.open() ?: return@launch
+            if (shown != forVehicle) return@launch // the changes would be compared with another vehicle's values
             val file = parseParamFile(text)
             val byName = model.value.params.associateBy { it.name }
             val changes = mutableListOf<ParamChange>()
@@ -284,6 +316,8 @@ class ParamsViewModel(
 
     /** One write, with the list updated to what the vehicle reported. */
     private suspend fun write(p: Param, value: Float): ParamSetResult {
+        // The list on screen must be the selected vehicle's: the repository writes to whichever vehicle is selected.
+        if (selectedId.value != shown) return ParamSetResult.NotApplied("The selected vehicle changed. Nothing was sent.")
         val result = repository.set(p, value)
         val now = when (result) {
             is ParamSetResult.Applied -> result.param
@@ -302,13 +336,18 @@ class ParamsViewModel(
     private fun runExclusive(label: String, block: suspend () -> Unit) {
         if (model.value.progress != null) return
         model.update { it.copy(progress = label) }
-        viewModelScope.launch {
+        // LAZY, so `job` is set before the block can run. A job that was cancelled by a change of vehicle must not
+        // clear the progress of the job that replaced it, hence the `job === mine` check.
+        lateinit var mine: Job
+        mine = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 block()
             } finally {
-                model.update { it.copy(progress = null) }
+                if (job === mine) model.update { it.copy(progress = null) }
             }
         }
+        job = mine
+        mine.start()
     }
 
     private fun canWrite() = writable(model.value, vehicle.value)

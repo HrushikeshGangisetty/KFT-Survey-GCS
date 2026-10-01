@@ -3,6 +3,7 @@ package com.kft.gcs.ui.design
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -31,8 +33,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
@@ -47,7 +52,12 @@ data class RailItem(val label: String, val icon: ImageVector, val selected: Bool
  * shouldn't have to guess an icon), and [footer] pinned to the bottom for app-wide actions (theme, About).
  */
 @Composable
-fun KftNavigationRail(items: List<RailItem>, modifier: Modifier = Modifier, footer: @Composable ColumnScope.() -> Unit = {}) {
+fun KftNavigationRail(
+    items: List<RailItem>,
+    modifier: Modifier = Modifier,
+    extra: @Composable ColumnScope.() -> Unit = {},
+    footer: @Composable ColumnScope.() -> Unit = {},
+) {
     NavigationRail(modifier, header = { KftLogo(Modifier.width(52.dp).padding(vertical = Spacing.m)) }) {
         items.forEach { item ->
             NavigationRailItem(
@@ -57,8 +67,39 @@ fun KftNavigationRail(items: List<RailItem>, modifier: Modifier = Modifier, foot
                 label = { Text(item.label) },
             )
         }
+        // Under the tabs: things that apply to every tab, today the vehicle switcher.
+        extra()
         Spacer(Modifier.weight(1f))
         footer()
+    }
+}
+
+/** One vehicle in [VehicleSwitcher]. [color] is the vehicle's colour on the map, so the two always match. */
+data class VehicleChip(val label: String, val color: Color, val selected: Boolean, val connected: Boolean, val onClick: () -> Unit)
+
+/**
+ * The vehicle switcher: one round button per vehicle, in its map colour, with its label. The selected one has a ring
+ * (shape, not colour alone, says which); one whose heartbeat is lost is faded. Lives in the rail because the selection
+ * applies to every tab: Fly's HUD, Plan's transfers and Params all act on the selected vehicle.
+ */
+@Composable
+fun VehicleSwitcher(vehicles: List<VehicleChip>, modifier: Modifier = Modifier) {
+    Column(modifier.padding(top = Spacing.m), verticalArrangement = Arrangement.spacedBy(Spacing.xs), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("Vehicle", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        vehicles.forEach { v ->
+            Tooltip("Vehicle ${v.label}" + (if (v.selected) " (selected)" else "") + (if (v.connected) "" else " · heartbeat lost"), Modifier) {
+                Surface(
+                    onClick = v.onClick,
+                    modifier = Modifier.size(MinTouchTarget).padding(Spacing.xs).semantics { selected = v.selected },
+                    shape = CircleShape,
+                    color = v.color.copy(alpha = if (v.connected) 1f else 0.4f),
+                    border = if (v.selected) BorderStroke(3.dp, MaterialTheme.colorScheme.onSurface) else null,
+                ) {
+                    // Black on every vehicle colour: they are all light, saturated map colours (ui:map VehicleColors).
+                    Box(contentAlignment = Alignment.Center) { Text(v.label, style = MaterialTheme.typography.labelLarge, color = Color.Black) }
+                }
+            }
+        }
     }
 }
 

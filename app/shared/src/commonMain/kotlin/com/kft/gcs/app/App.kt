@@ -59,8 +59,11 @@ import com.kft.gcs.ui.design.RailItem
 import com.kft.gcs.ui.design.Spacing
 import com.kft.gcs.ui.design.ThemeMode
 import com.kft.gcs.ui.design.TooltipIconButton
+import com.kft.gcs.ui.design.VehicleChip
+import com.kft.gcs.ui.design.VehicleSwitcher
 import com.kft.gcs.ui.map.CameraRequest
 import com.kft.gcs.ui.map.MapView
+import com.kft.gcs.ui.map.VehicleColors
 import com.kft.gcs.ui.video.PipControls
 import com.kft.gcs.ui.video.PipState
 import com.kft.gcs.ui.video.VideoView
@@ -217,6 +220,9 @@ private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (
     val current by nav.currentBackStackEntryAsState()
     var themeMenu by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
+    // The same window-scoped FlyViewModel the map uses: it knows every vehicle and which one is selected.
+    val fly: FlyViewModel = koinViewModel()
+    val vehicles = fly.state.collectAsStateWithLifecycle().value.vehicles
     KftNavigationRail(
         items = Destination.entries.map { destination ->
             RailItem(
@@ -238,6 +244,16 @@ private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (
                     }
                 },
             )
+        },
+        extra = {
+            // Shown only when there is a choice. The colours are the map's, so a drone is the same colour in both places.
+            if (vehicles.size > 1) {
+                VehicleSwitcher(
+                    vehicles.map { v ->
+                        VehicleChip(v.label, VehicleColors[v.slot.mod(VehicleColors.size)], v.selected, v.connected) { fly.onVehicleSelected(v.id) }
+                    },
+                )
+            }
         },
         footer = {
             Box {

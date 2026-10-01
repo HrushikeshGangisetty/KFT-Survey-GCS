@@ -11,8 +11,10 @@ import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.LinkStats
 import com.kft.gcs.core.mavlink.MavSender
 import com.kft.gcs.core.mavlink.TxResult
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.GpsFix
 import com.kft.gcs.core.mission.MissionCommand
 import com.kft.gcs.core.mission.MissionItem
@@ -31,6 +33,9 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -45,20 +50,92 @@ class FlyViewModelTest {
     private val frames = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = 16)
     private val copter = VehicleInfo(1u, 1u, VehicleKind.COPTER, armed = false, customMode = 5u)
     private val home = LatLon(-35.363261, 149.165230)
-    private val sync = MissionSync()
+    private val drone = VehicleId(link = 1, systemId = 1u)
+    private val selectedId = MutableStateFlow<VehicleId?>(drone)
+    private val sync = MissionSync().apply { select(drone) }
 
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
-    /** A real VehicleRepository, driven by scripted link state and frames instead of a socket. */
     private val basemaps = MutableStateFlow(listOf(TileSources.Street, TileSources.Satellite))
 
+    /** One vehicle: a real VehicleRepository, driven by scripted link state and frames instead of a socket. */
     private fun TestScope.viewModel(): FlyViewModel {
         val repo = VehicleRepository(backgroundScope, frames, link, SilentSender, loginKey = null, testScheduler.timeSource)
-        return FlyViewModel(repo, basemaps, sync).also {
+        val vehicles = repo.state.map { listOf(FleetVehicle(drone, slot = 0, it)) }.stateIn(backgroundScope, SharingStarted.Eagerly, emptyList())
+        return FlyViewModel(vehicles, selectedId, { selectedId.value = it }, basemaps, sync).also {
             link.value = LinkState.Connected(LinkConfig.UdpListen(), copter, LinkStats())
             runCurrent()
         }
+    }
+
+    // ---- several vehicles (ADR-005): states set by hand, as the fleet would report them ----
+
+    private val north = LatLon(home.latitude + 0.001, home.longitude)
+    private val drone2 = VehicleId(link = 1, systemId = 2u)
+    private val fleet = MutableStateFlow(
+        listOf(
+            FleetVehicle(drone, slot = 0, VehicleState(connected = true, position = home, headingDeg = 90.0, altitudeRelativeM = 10.0)),
+            FleetVehicle(drone2, slot = 1, VehicleState(connected = true, position = north, headingDeg = 180.0, altitudeRelativeM = 25.0)),
+        ),
+    )
+
+    private fun TestScope.fleetViewModel() = FlyViewModel(fleet, selectedId, { selectedId.value = it }, basemaps, sync).also { vm ->
+        backgroundScope.launch { vm.state.collect {} }
+        runCurrent()
+    }
+
+    @Test
+    fun everyVehicleIsOnTheMapInItsOwnColourWithItsLabel() = runTest(dispatcher) {
+        val vm = fleetViewModel()
+        assertEquals(
+            listOf(
+                MapOverlay.Vehicle(home, 90.0, slot = 0, label = "1", selected = true),
+                MapOverlay.Vehicle(north, 180.0, slot = 1, label = "2", selected = false),
+            ),
+            vm.state.value.overlays.filterIsInstance<MapOverlay.Vehicle>(),
+        )
+        assertEquals(
+            listOf(VehicleChipUi(drone, "1", 0, selected = true, connected = true), VehicleChipUi(drone2, "2", 1, selected = false, connected = true)),
+            vm.state.value.vehicles,
+        )
+        // One track each: both start at their vehicle's own position.
+        assertEquals(listOf(listOf(home), listOf(north)), vm.state.value.overlays.filterIsInstance<MapOverlay.Track>().map { it.points })
+    }
+
+    @Test
+    fun theHudFollowsTheSelectedVehicle() = runTest(dispatcher) {
+        val vm = fleetViewModel()
+        fun alt() = vm.state.value.hud.single { it.label == "Alt" }.value
+        assertEquals("10.0 m", alt())
+
+        vm.onVehicleSelected(drone2)
+        runCurrent()
+        assertEquals("25.0 m", alt())
+        assertEquals(listOf(false, true), vm.state.value.vehicles.map { it.selected })
+        assertEquals(listOf(false, true), vm.state.value.overlays.filterIsInstance<MapOverlay.Vehicle>().map { it.selected })
+
+        vm.onCenterClicked()
+        runCurrent()
+        assertEquals(north, vm.state.value.cameraRequest?.target, "centre goes to the selected vehicle")
+    }
+
+    /** ADR-005 §4: a duplicated id is two aircraft answering in turn, so it has no arrow and no track, and says why. */
+    @Test
+    fun aDuplicatedSystemIdIsNotDrawnAndIsExplained() = runTest(dispatcher) {
+        fleet.value = fleet.value.map { if (it.id == drone) it.copy(duplicateId = true) else it }
+        val vm = fleetViewModel()
+        assertEquals(listOf("2"), vm.state.value.overlays.filterIsInstance<MapOverlay.Vehicle>().map { it.label })
+        assertEquals("Two vehicles are using system id 1: nothing can be sent", vm.state.value.vehicleProblem)
+        assertEquals(listOf(emptyList(), listOf(north)), vm.state.value.overlays.filterIsInstance<MapOverlay.Track>().map { it.points })
+    }
+
+    /** Labels are the system id; two links that both carry a system 1 get the link number too. */
+    @Test
+    fun labelsNeverCollide() {
+        assertEquals(mapOf(drone to "1", drone2 to "2"), vehicleLabels(listOf(drone, drone2)))
+        val otherLink = VehicleId(link = 2, systemId = 1u)
+        assertEquals(mapOf(drone to "L1·1", otherLink to "L2·1", drone2 to "2"), vehicleLabels(listOf(drone, otherLink, drone2)))
     }
 
     private fun position(p: LatLon) = check(frames.tryEmit(Frame(GlobalPositionInt(lat = p.latE7, lon = p.lonE7, hdg = 9000u))))
@@ -176,7 +253,7 @@ class FlyViewModelTest {
         sync.planChanged(listOf(wp), 0)
         runCurrent()
         assertEquals(null, vm.state.value.missionWarning, "nothing uploaded yet: unknown, no warning")
-        sync.vehicleHolds(listOf(wp))
+        sync.vehicleHolds(drone, listOf(wp))
         runCurrent()
         assertEquals(null, vm.state.value.missionWarning)
         sync.planChanged(listOf(wp, wp.copy(altitudeM = 40.0)), 0)

@@ -41,8 +41,8 @@ class PlanViewModelTest {
     private val a = LatLon(-35.3620, 149.1660)
     private val b = LatLon(-35.3640, 149.1670)
     private val vehicle = MutableStateFlow(VehicleState(connected = true, vehicleKind = VehicleKind.COPTER, home = home))
-    private val missions = FakeMissions()
-    private val sync = MissionSync()
+    private val sync = MissionSync().apply { select(TEST_VEHICLE) }
+    private val missions = FakeMissions(sync)
     private val files = FakeFiles()
 
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)

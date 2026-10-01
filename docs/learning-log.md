@@ -3385,3 +3385,164 @@ message naming the holder.
   (the current build includes it), decoder patents, GS-9.
 - The GCS records no tlog: worth its own pass (write every received and sent frame, MAVProxy-compatible).
 - **Stopped after Pass 28, as asked.**
+
+## Pass 29 — Multi-vehicle foundation: several links, several vehicles per link (2026-10-01)
+
+Decision record first: `docs/decisions/ADR-005-multi-vehicle.md`. It also writes down what Level 2 (the GCS starts
+missions) and Level 3 (formation) would need, and where each collides with S4 and S9.
+
+### What changed
+- **`docs/decisions/ADR-005-multi-vehicle.md`** (new).
+- **`core/mavlink`**
+  - `ConnectionManager.kt`: `VehicleId(link, systemId)`; a link now tracks every system id it hears
+    (`LinkState.Connected.vehicles`), each with its own heartbeat timeout; duplicate-system-id detection
+    (`VehicleInfo.duplicateId`); the `MavLink` interface; `LinkState.forVehicle()`; `withStates()`.
+  - `MavTxGateway.kt`: no plain `send` any more. `forVehicle(systemId)` gives a sender bound to one vehicle;
+    `sendHeartbeat` is the link's own, internal.
+  - `TxPolicy.kt`: `targetSystem(message)`, the `target_system` of every allowlisted message.
+  - `Links.kt` (new): every open link, numbered, never opened twice.
+  - `Tlog.kt`, `TlogFiles.kt` (new): one MAVProxy-format `.tlog` per vehicle.
+  - `SocketTransports.kt`: a UDP listen link answers every address it has heard, not only the last.
+- **`core/vehicle`**
+  - `Fleet.kt` (new): one entry per vehicle (the existing `VehicleRepository`, mission and parameter repositories,
+    each on a view of its link), the selected vehicle, and `missions` / `params` that act on it.
+  - `MissionSync.kt`: what each vehicle holds is kept per vehicle; `onVehicle` follows the selection.
+  - `di/VehicleModule.kt`: binds `Fleet`, and the selected vehicle's state and repositories.
+- **`feature/connections`**: several links at once. One status card per link with its own Disconnect; a link with
+  several vehicles lists them, each with its login; the duplicate-id error card.
+- **`feature/fly`**: all vehicles on the map (colour, label, the selected one larger), one track each, the HUD of the
+  selected vehicle, the switcher's data, the "two vehicles are using system id N" chip.
+- **`feature/plan`**: transfers go through the fleet's mission repository, which records what the vehicle holds.
+- **`feature/params`**: one parameter list per vehicle, swapped when the selection changes.
+- **`ui/map`**: `VehicleColors`, a coloured arrow per slot, the label under the arrow.
+- **`ui/design`**: `VehicleSwitcher`, and an `extra` slot in the rail for it.
+- **`app/shared`**: the switcher in the rail (only with 2+ vehicles); both shells bind the tlog folder.
+- **`tools/sitl/start-sitl.ps1`**: `-Count N` (instances 0..N-1, system ids 1..N, homes 10 m apart), `-SameSysId`.
+- **Before this pass, as its own commit (`a6718fd`)**: the Serial "Connect" button and parameters-on-connect that were
+  uncommitted in the tree when the batch started. Nothing in them was changed.
+
+### How it works
+```
+Links ─▶ ConnectionManager #1 (UDP 14550)  hears systems 1, 2, 3 ─┐
+         ConnectionManager #2 (TCP 5772)   hears system 1 ────────┤ link.state.vehicles
+                                                                  ▼
+Fleet.reconcile()  one Entry per VehicleId(link, system), made the first time its heartbeat is heard:
+   frames  = link.frames filtered to that system id
+   view    = link.state.forVehicle(id)          (Connected.vehicle = this vehicle only)
+   sender  = link.senderFor(id) = gateway.forVehicle(id)
+   └▶ VehicleRepository (state, KFT login, startup requests) · MissionRepository · ParamRepository · tlog
+Fleet.vehicles ─▶ FlyViewModel ─▶ map (every vehicle) + rail switcher
+Fleet.selected / .missions / .params ─▶ Plan, Params, Fly's HUD      Fleet.select(id) ◀─ switcher click
+```
+A send, step by step: Plan asks `Fleet.missions.upload`. The fleet takes the selected entry **once**, at the start.
+Its `MissionProtocol` builds `MISSION_COUNT(target_system = 2)` and gives it to that entry's sender. The gateway checks
+the allowlist with vehicle 2's armed flag, then that the message's `target_system` is 2, then that id 2 isn't
+duplicated, and writes it to link 1 only. On success the fleet notes in `MissionSync` that vehicle 2 holds those
+items, whatever is selected by then.
+
+### Engineering learnings
+- **Reuse by narrowing the input, not by rewriting.** The single-vehicle classes read `LinkState.Connected.vehicle`.
+  Instead of teaching them about many vehicles, each gets a link state in which `vehicle` is its own vehicle, frames
+  from its own system id and a sender that reaches only it. `VehicleRepository`, the three protocols and all their
+  tests are unchanged, so "one vehicle still works exactly as before" is shown by the old tests, not argued.
+  The cost is that `Connected` carries both `vehicle` and `vehicles`; the KDoc says which is which.
+- **Make the wrong call impossible to write.** The gateway lost its `send`. The only senders are bound to a vehicle,
+  and a bound sender refuses a message addressed elsewhere. A wrong target field, a wrong sender or a wrong link each
+  fail on their own, and each has a test. The alternative (a `target` parameter on `send`) would have relied on every
+  caller passing the right one.
+- **Default-deny, again.** `targetSystem()` returns null for a message it doesn't know. A new allowlisted message
+  that someone forgets to add there can't be sent at all, which is the safe way to be wrong.
+- **One collector for shared mutable state.** `Fleet.reconcile` is the only place entries are added or removed, fed
+  by one flow of all links' states (`withStates`). No lock, no race between links.
+- **A transfer keeps the vehicle it started with.** The first design left `sync.vehicleHolds(items)` in the Plan
+  ViewModel and looked the selected vehicle up afterwards; a switch during the upload would have recorded the mission
+  against the wrong drone. Moving the bookkeeping to where the vehicle is known (`Fleet.missions`) removes the race
+  instead of narrowing it. Params does the same from the other side: a change of selection cancels the running job,
+  and `write` refuses if the list on screen isn't the selected vehicle's.
+- **Detecting a duplicate id with the one signal every transport has.** Two autopilots on one id look like one
+  vehicle at 2 heartbeats a second. Counting heartbeats over 10 s (16 = duplicate, back to 12 = clear) needs nothing
+  from the transport and nothing from the vehicle. Boot-time or UDP source addresses would be sharper but each works
+  on only some links. The limit (a long stall followed by a burst can trip it for 10 s) is in the ADR; it fails safe.
+- **A test fake can lie about timing.** The first `FakeLink` merged several fakes' flows with `merge()`. `merge`
+  subscribes in a new coroutine, so the reply to the first message was missed and a retry hid it; the test failed only
+  because it counted messages. The fakes now share one `MutableSharedFlow`, as a real link's frames do.
+- **`flatMapLatest` + `combine` of an empty list never emits**, so "no links" and "no vehicles" are written out
+  (`flowOf(emptyList())`).
+- **UDP**: one socket, several senders. Sending to all known peers is what QGroundControl does; MAVLink addressing
+  does the filtering.
+- **Ponytail review (lite):** one finding applied: `VehicleRecorder` moved beside the tlog code so `TlogFiles`
+  implements it and the shells lost their adapter lambdas. Kept on purpose: `MavLink` and `VehicleRecorder` (test and
+  platform seams), `vehicle` next to `vehicles`.
+
+### What to look at
+1. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/MavTxGateway.kt` — `forVehicle`: the three checks.
+2. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/Fleet.kt` — `reconcile`, `entry`, and `missions`.
+3. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/ConnectionManager.kt` — `runSession` (the `heard`
+   map) and `Heard.isDuplicate`.
+
+### Tests
+`gradlew.bat check`: pass, 823 test results, 0 failures (desktop JVM and Android host).
+- `MavTxGatewayTest` (6 new): `aMessageAddressedToAnotherVehicleIsNeverWritten` (every allowlisted targeted message,
+  built for vehicle 1, through vehicle 2's sender: rejected, nothing on the link), `aBroadcastTargetIsRefused`,
+  `theArmedRuleUsesTheNamedVehiclesOwnFlag`, `nothingIsSentToADuplicatedSystemId`, `aSenderWritesOnlyToItsOwnLink`,
+  `everyAllowlistedTargetedMessageHasItsTargetRead`.
+- `ConnectionManagerTest` (4 new): `aLinkCarriesSeveralVehiclesEachWithItsOwnState`;
+  `twoVehiclesWithOneSystemIdAreAnErrorNotAMerge` (hand-worked: heartbeats every 0.5 s, the 16th at t = 7.5 s);
+  `oneVehicleAtOneHertzIsNeverADuplicate`; `linksAreNumberedAndNeverOpenedTwice`.
+- `FleetTest` (8 new): own state and own requests per vehicle; the same system id on two links is two vehicles;
+  transfers go to the selected vehicle; `aTransferStaysWithTheVehicleItStartedOn`; closing a link; a silent vehicle
+  stays listed; duplicate reported; each vehicle recorded with only its own frames.
+- `TlogTest`: a record equals the 8-byte big-endian time plus the frame exactly as **pymavlink 2.4.43** packs it
+  (an independent encoder); one file per vehicle; no file for a silent vehicle.
+- `SocketTransportsTest.udpListenRepliesToEverySenderItHasHeard`.
+- `MissionSyncTest.eachVehicleHasItsOwnHeldMission`; `ConnectionsViewModelTest` (2 new: a card per link and the
+  vehicle lines, the duplicate card); `FlyViewModelTest` (4 new: colours and labels, HUD follows the selection,
+  duplicate not drawn, labels never collide); `ParamsViewModelTest` (2 new: a list per vehicle, a not-ready vehicle
+  shows an empty list).
+
+**SITL, run this pass** (`start-sitl.ps1 -Count 3 -Wipe`, ArduCopter 4.8.0-dev):
+- Three links, one copter each: `SitlCheck.threeVehiclesEachGetAndFlyTheirOwnMission` with
+  `KFT_SITL_FLEET=127.0.0.1:5762,127.0.0.1:5772,127.0.0.1:5782 KFT_SITL_FLY=1`. Telemetry and a distinct home for
+  each; a different mission uploaded to each (4, 5 and 6 items), read back in reverse order and compared, seq 0 each
+  vehicle's own home; `sitl_pilot.py` as each pilot; **all 3 in AUTO at once** (alt 20.0, 15.0, 15.0 m), each reached
+  its own last item (4, 4, 5), all landed and disarmed. Pass, 5 min.
+  The first try, started right after `-Wipe`, failed: the pilots couldn't arm inside their 60 s. A few minutes later
+  it passed unchanged. Give a wiped SITL a minute before flying.
+- One link carrying three (desktop app, "SITL (UDP 14550)"): the Links card read "3 vehicles on UDP listen :14550"
+  with a login line each; the map showed three arrows (orange 1, violet 2, white 3) with labels; the switcher changed
+  the HUD (battery 62 % → 37 %) and moved the ring. Screenshots: `docs/design/29-desktop-*.jpg`.
+- Duplicate id (`-Count 2 -SameSysId`, same UDP link): within about 10 s the card read "Two vehicles are using system
+  id 1 on UDP listen :14550".
+- Tlogs from that app run (`%APPDATA%\KFT-GCS\tlogs`): three files, read with pymavlink: 13 043 / 6 204 / 4 842
+  messages, 0 bad, each holding its own system id only.
+
+To repeat by hand: `tools\sitl\start-sitl.ps1 -Count 3`, connect "SITL (UDP 14550)", pick each vehicle in the rail,
+plan and upload, then in each MAVProxy window `mode guided`, `arm throttle`, `takeoff 15`, `mode auto`.
+
+### Safety
+- **Allowlist behaviour changed, tests added.** Every send is now bound to a vehicle and refused unless its
+  `target_system` is that vehicle (0 is refused too), and refused entirely for a duplicated system id. The existing
+  rows (S9 flight actions, NEVER, pod lockout, armed rules) are untouched and their tests pass unchanged apart from
+  naming a target.
+- The armed rule is per vehicle: vehicle 1 flying no longer blocks `PARAM_SET` to vehicle 2 on the ground, and
+  vehicle 2 being on the ground doesn't open vehicle 1.
+- S11: each vehicle's upload uses its own home as seq 0 (checked in SITL for all three).
+- S12: each vehicle logs in on its own; its mission and parameter traffic wait for its own login.
+- Nothing new is transmitted: no new message types, no flight actions. UDP now sends each frame to every peer it has
+  heard; a frame can reach a vehicle it isn't addressed to, which ignores it (and the gateway never sends a
+  broadcast target).
+- The pod status is still one value for the app. When the pod exists it must become per vehicle (ADR-005).
+
+### Open questions / next
+- **Connect no longer replaces the link.** Connecting a second profile opens a second link. With one drone, press
+  Disconnect before connecting another way.
+- **`ponytail:` / known limits** (all in ADR-005 "Not done"): the tlog holds received frames only; old tlogs are
+  never deleted; a vehicle stays listed until its link is disconnected; parameters of a vehicle that isn't selected
+  aren't refreshed on reconnect; tracks are all magenta and photo dots all lime (per-vehicle colours are Pass 32).
+- Vehicle colours repeat after six.
+- Vehicles on the ground 10 m apart overlap at the default zoom; zooming in separates them.
+- Not run on Android this pass (the code is common; the tlog folder is `Android/data/<package>/files/tlogs`).
+- Suggestion, not done: `PlanViewModel.kt:464` has an old `index!!` the compiler now calls unnecessary; two
+  deprecation warnings (`runDesktopComposeUiTest`, `URL(String)`) also predate this pass.
+- **Next: Pass 30** (jobs, multi-polygon KML, splitting an area, per-mission validation).
+- **Stopped after Pass 29, as asked.**

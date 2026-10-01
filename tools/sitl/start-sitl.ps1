@@ -15,6 +15,15 @@
     UDP 14550      MAVProxy forwards here: the GCS's "SITL (UDP 14550)" profile. For the emulator, run
                    `adb emu redir add udp:14550:14550` with the desktop GCS closed (only one can listen).
 
+  Several vehicles (-Count N, ADR-005): N instances of the same vehicle, instance i (0..N-1) with
+    - system id i + 1 (SITL's --sysid, which sets MAV_SYSID);
+    - every port above plus 10 * i (SITL's -I i): instance 1 is 5770 / 5772 / 5773, instance 2 is 5780 / 5782 / 5783;
+    - home 10 m east of the one before, so they don't sit on top of each other;
+    - its own MAVProxy window (its pilot's RC), all forwarding to the same UDP 14550.
+  The GCS then reaches them either as ONE link carrying N vehicles ("SITL (UDP 14550)") or as N links with one vehicle
+  each (TCP 5762, 5772, 5782). -SameSysId gives every instance system id 1: two of those on UDP 14550 is the
+  "duplicate system id on one link" error, on purpose.
+
   Survey camera (Pass 16): camera.parm is loaded too. SITL keeps parameters in eeprom.bin, and a saved value wins
   over the defaults files, so run with -Wipe once per vehicle (or whenever the defaults change) to start fresh.
 
@@ -25,6 +34,9 @@
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools\sitl\start-sitl.ps1 -Vehicle plane
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File tools\sitl\start-sitl.ps1 -Count 3 -Wipe
 #>
 param(
     [ValidateSet("copter", "plane")] [string]$Vehicle = "copter",
@@ -36,7 +48,11 @@ param(
     [string]$Defaults = "",
     # Start from factory parameters: SITL's --wipe clears this vehicle's saved eeprom.bin, so every value in the
     # defaults files (camera.parm included) applies. Without it, a value saved earlier wins over the defaults files.
-    [switch]$Wipe
+    [switch]$Wipe,
+    # How many vehicles to start (see "Several vehicles" above).
+    [ValidateRange(1, 9)] [int]$Count = 1,
+    # Every instance gets system id 1, to see the GCS report a duplicate system id.
+    [switch]$SameSysId
 )
 
 $exe = Join-Path $SitlDir $(if ($Vehicle -eq "plane") { "ArduPlane.exe" } else { "ArduCopter.exe" })
@@ -47,19 +63,28 @@ if (-not (Test-Path $Defaults)) { throw "Default parameters not found: $Defaults
 $Defaults = "$Defaults," + (Join-Path $PSScriptRoot "camera.parm")
 $model = if ($Vehicle -eq "plane") { "plane" } else { "quad" }
 
-# SITL keeps its parameters in eeprom.bin in the working folder. One folder per vehicle, so Plane never boots with
-# Copter's saved parameters (or the other way round). The Cygwin DLLs are found next to the exe.
-$work = Join-Path $SitlDir $Vehicle
-New-Item -ItemType Directory -Force $work | Out-Null
-
-$sitlArgs = @("--model", $model, "--home", $HomeLocation, "--defaults", "`"$Defaults`"", "-I0")
-if ($Wipe) { $sitlArgs += "--wipe" }
-Write-Host "Starting $Vehicle SITL at $HomeLocation$(if ($Wipe) { ' with fresh parameters (--wipe)' }) ..."
-Start-Process -FilePath $exe -WorkingDirectory $work -WindowStyle Minimized -ArgumentList $sitlArgs
-Start-Sleep -Seconds 3
-
-# MAVProxy needs a real console window (it fails without one), so it gets its own.
 $mavproxy = "C:\Program Files (x86)\MAVProxy\mavproxy.exe"
-Start-Process -FilePath $mavproxy -WorkingDirectory $env:TEMP `
-    -ArgumentList "--master=tcp:127.0.0.1:5760", "--out=udp:127.0.0.1:14550"
-Write-Host "MAVProxy is the RC: type the pilot's commands in its window. GCS: UDP 14550, or TCP 127.0.0.1:5762."
+$lat, $lon, $alt, $heading = $HomeLocation.Split(",")
+# One degree of longitude is 111 319.5 m at the equator, shorter by cos(latitude) elsewhere.
+$metresPerDegLon = 111319.5 * [Math]::Cos([double]$lat * [Math]::PI / 180)
+
+for ($i = 0; $i -lt $Count; $i++) {
+    # SITL keeps its parameters in eeprom.bin in the working folder. One folder per vehicle and instance, so Plane
+    # never boots with Copter's saved parameters, nor instance 1 with instance 0's. The Cygwin DLLs are found next to the exe.
+    $work = Join-Path $SitlDir $(if ($i -eq 0) { $Vehicle } else { "$Vehicle-i$i" })
+    New-Item -ItemType Directory -Force $work | Out-Null
+
+    $sysid = if ($SameSysId) { 1 } else { $i + 1 }
+    $instanceHome = "$lat,$(([double]$lon + 10 * $i / $metresPerDegLon).ToString('F7', [Globalization.CultureInfo]::InvariantCulture)),$alt,$heading"
+    $sitlArgs = @("--model", $model, "--home", $instanceHome, "--defaults", "`"$Defaults`"", "-I$i", "--sysid", $sysid)
+    if ($Wipe) { $sitlArgs += "--wipe" }
+    Write-Host "Starting $Vehicle SITL instance $i (system id $sysid) at $instanceHome$(if ($Wipe) { ' with fresh parameters (--wipe)' }) ..."
+    Start-Process -FilePath $exe -WorkingDirectory $work -WindowStyle Minimized -ArgumentList $sitlArgs
+    Start-Sleep -Seconds 3
+
+    # MAVProxy needs a real console window (it fails without one), so each instance's gets its own.
+    Start-Process -FilePath $mavproxy -WorkingDirectory $env:TEMP `
+        -ArgumentList "--master=tcp:127.0.0.1:$(5760 + 10 * $i)", "--out=udp:127.0.0.1:14550"
+}
+Write-Host "MAVProxy is the RC: type the pilot's commands in its window (one window per vehicle)."
+Write-Host "GCS: UDP 14550 (all $Count on one link), or TCP 127.0.0.1:$((0..($Count - 1) | ForEach-Object { 5762 + 10 * $_ }) -join ', ') (one link each)."

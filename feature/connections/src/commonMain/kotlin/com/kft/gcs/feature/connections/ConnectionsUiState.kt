@@ -5,6 +5,7 @@ import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.bluetoothAddressOf
 import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.SerialPortInfo
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.vehicle.KftLoginStatus
@@ -13,18 +14,20 @@ import kotlin.math.roundToInt
 /** Everything the Connections screen draws. Built only by [buildUiState], so the screen never computes anything. */
 @Immutable
 data class ConnectionsUiState(
-    val link: LinkStatusUi,
+    /** One card per open link, oldest first; a single "Not connected" card when none is open. */
+    val links: List<LinkStatusUi>,
     val profiles: List<ProfileRow>,
     val form: ProfileForm,
-    /** True while a link is open or being opened, i.e. there is something to disconnect. */
-    val canDisconnect: Boolean,
     /** Ports offered by the Serial form, from the last refresh. */
     val serialPorts: List<SerialPortInfo>,
 )
 
 /**
- * The status card at the top. [tone] picks the colour; the screen decides which colour each tone is.
- * [login] is the KFT login line (spec S12) while a vehicle is heard; [loginWarning] = the operator must act.
+ * One link's status card. [tone] picks the colour; the screen decides which colour each tone is.
+ * With one vehicle on the link, the card is about that vehicle: [headline] describes it and [login] is its KFT login
+ * line (spec S12; [loginWarning] = the operator must act). With several, [headline] counts them and [vehicles] lists
+ * each with its own login.
+ * @property linkId the link to disconnect, or null on the "Not connected" card.
  */
 data class LinkStatusUi(
     val headline: String,
@@ -32,7 +35,12 @@ data class LinkStatusUi(
     val tone: Tone,
     val login: String? = null,
     val loginWarning: Boolean = false,
+    val linkId: Int? = null,
+    val vehicles: List<VehicleLineUi> = emptyList(),
 )
+
+/** One vehicle on a link that carries several: "ArduCopter · system 2 · disarmed" and its login line. */
+data class VehicleLineUi(val text: String, val login: String?, val loginWarning: Boolean)
 
 enum class Tone { IDLE, BUSY, OK, WARNING }
 
@@ -70,38 +78,51 @@ data class ProfileForm(
 /** Pure: repository data in, screen state out. Tested directly, no ViewModel needed. */
 fun buildUiState(
     profiles: List<ConnectionProfile>,
-    link: LinkState,
+    links: List<OpenLink>,
     form: ProfileForm,
     serialPorts: List<SerialPortInfo>,
-    login: KftLoginStatus?,
+    logins: Map<VehicleId, KftLoginStatus?>,
 ): ConnectionsUiState {
-    val activeConfig = when (link) {
-        LinkState.Disconnected -> null
-        is LinkState.Connecting -> link.config
-        is LinkState.Connected -> link.config
+    val openConfigs = links.mapNotNull { link ->
+        when (val s = link.state) {
+            LinkState.Disconnected -> null
+            is LinkState.Connecting -> s.config
+            is LinkState.Connected -> s.config
+        }
     }
     return ConnectionsUiState(
-        link = link.toStatusUi().let { ui ->
-            val vehicleHeard = (link as? LinkState.Connected)?.vehicle != null
-            if (vehicleHeard && login != null) ui.copy(login = login.label, loginWarning = login.warning) else ui
-        },
-        profiles = profiles.map { ProfileRow(it.id, it.name, it.config.summary, isActive = it.config == activeConfig) },
+        links = links.map { it.state.toStatusUi(it.id, logins) }.ifEmpty { listOf(LinkState.Disconnected.toStatusUi()) },
+        profiles = profiles.map { ProfileRow(it.id, it.name, it.config.summary, isActive = it.config in openConfigs) },
         form = form,
-        canDisconnect = activeConfig != null,
         serialPorts = serialPorts,
     )
 }
 
-fun LinkState.toStatusUi(): LinkStatusUi = when (this) {
+/** The card for one link. [linkId] and [logins] are the link's number and its vehicles' KFT logins, when it is open. */
+fun LinkState.toStatusUi(linkId: Int? = null, logins: Map<VehicleId, KftLoginStatus?> = emptyMap()): LinkStatusUi = when (this) {
     LinkState.Disconnected -> LinkStatusUi("Not connected", null, Tone.IDLE)
     is LinkState.Connecting ->
-        if (attempt == 1) LinkStatusUi("Connecting to ${config.summary}…", null, Tone.BUSY)
-        else LinkStatusUi("Reconnecting to ${config.summary} (attempt $attempt)", lastError, Tone.WARNING)
+        if (attempt == 1) LinkStatusUi("Connecting to ${config.summary}…", null, Tone.BUSY, linkId = linkId)
+        else LinkStatusUi("Reconnecting to ${config.summary} (attempt $attempt)", lastError, Tone.WARNING, linkId = linkId)
     is LinkState.Connected -> {
         val traffic = "${stats.messagesPerSecond} msg/s · ${(stats.lossPercent * 10).roundToInt() / 10.0}% loss"
-        val v = vehicle // local copy: smart casts don't work on another module's public property
-        if (v == null) LinkStatusUi("Link open on ${config.summary}", "Waiting for a vehicle heartbeat · $traffic", Tone.BUSY)
-        else LinkStatusUi(v.describe(), traffic, Tone.OK)
+        fun login(v: VehicleInfo) = linkId?.let { logins[VehicleId(it, v.systemId)] }
+        val duplicate = vehicles.firstOrNull { it.duplicateId }
+        val only = vehicles.singleOrNull()
+        when {
+            // ADR-005 §4: said in words and as a warning, because nothing can be sent to that id until it's fixed.
+            duplicate != null -> LinkStatusUi(
+                "Two vehicles are using system id ${duplicate.systemId} on ${config.summary}",
+                "Give each its own MAV_SYSID (SYSID_THISMAV on older firmware), then reconnect. Nothing is sent to that id until then.",
+                Tone.WARNING, linkId = linkId,
+            )
+            vehicles.isEmpty() -> LinkStatusUi("Link open on ${config.summary}", "Waiting for a vehicle heartbeat · $traffic", Tone.BUSY, linkId = linkId)
+            only != null -> login(only).let { l -> LinkStatusUi(only.describe(), traffic, Tone.OK, l?.label, l?.warning == true, linkId) }
+            else -> LinkStatusUi(
+                "${vehicles.size} vehicles on ${config.summary}", traffic, Tone.OK, linkId = linkId,
+                vehicles = vehicles.map { v -> login(v).let { l -> VehicleLineUi(v.describe(), l?.label, l?.warning == true) } },
+            )
+        }
     }
 }
 

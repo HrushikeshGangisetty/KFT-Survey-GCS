@@ -3,15 +3,14 @@ package com.kft.gcs.feature.connections
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kft.gcs.core.mavlink.LinkState
+import com.kft.gcs.core.mavlink.VehicleId
+import com.kft.gcs.core.mavlink.VehicleInfo
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -36,12 +35,12 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
     private val serialPorts = MutableStateFlow(repository.serialPorts())
 
     val state: StateFlow<ConnectionsUiState> =
-        combine(repository.profiles, repository.linkState, form, serialPorts, repository.login, ::buildUiState)
+        combine(repository.profiles, repository.links, form, serialPorts, repository.logins, ::buildUiState)
             // WhileSubscribed(5 s): keep going through a rotation or a quick tab switch, stop if the screen is gone.
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5_000),
-                buildUiState(emptyList(), LinkState.Disconnected, ProfileForm(), serialPorts.value, login = null),
+                buildUiState(emptyList(), emptyList(), ProfileForm(), serialPorts.value, logins = emptyMap()),
             )
 
     private val _effects = Channel<ConnectionsEffect>(Channel.BUFFERED)
@@ -49,22 +48,21 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
 
     init {
         selectFirstFreePort()
-        // Tell the user once when a vehicle appears or goes quiet, instead of making them watch the status card.
+        // Tell the user once when a vehicle appears or goes quiet, instead of making them watch the status cards.
         viewModelScope.launch {
-            repository.linkState
-                .map { (it as? LinkState.Connected)?.vehicle }
-                .map { it?.describe() }
-                .distinctUntilChanged { old, new -> (old == null) == (new == null) }
-                .drop(1) // the starting value isn't a change
-                .collect { vehicle ->
-                    _effects.send(ConnectionsEffect.ShowMessage(if (vehicle != null) "Vehicle found: $vehicle" else "Vehicle heartbeat lost"))
-                }
+            var heard = emptyMap<VehicleId, VehicleInfo>()
+            repository.links.collect { links ->
+                val now = links.flatMap { link -> (link.state as? LinkState.Connected)?.vehicles.orEmpty().map { VehicleId(link.id, it.systemId) to it } }.toMap()
+                (now - heard.keys).values.forEach { _effects.send(ConnectionsEffect.ShowMessage("Vehicle found: ${it.describe()}")) }
+                (heard - now.keys).keys.forEach { _effects.send(ConnectionsEffect.ShowMessage("Vehicle heartbeat lost: system ${it.systemId}")) }
+                heard = now
+            }
         }
     }
 
     fun onConnectClicked(profileId: String) = repository.connect(profileId)
 
-    fun onDisconnectClicked() = repository.disconnect()
+    fun onDisconnectClicked(linkId: Int) = repository.disconnect(linkId)
 
     fun onDeleteClicked(profileId: String) = repository.deleteProfile(profileId)
 

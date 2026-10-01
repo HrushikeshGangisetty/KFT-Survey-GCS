@@ -3,7 +3,7 @@ package com.kft.gcs.feature.plan
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.geoio.bundledCameras
 import com.kft.gcs.core.geoio.encodeWaypoints
-import com.kft.gcs.core.mavlink.ConnectionManager
+import com.kft.gcs.core.mavlink.Links
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.PodStatus
 import com.kft.gcs.core.mavlink.SerialPorts
@@ -11,8 +11,8 @@ import com.kft.gcs.core.mavlink.T12Link
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.mission.Mission
 import com.kft.gcs.core.planning.SurveyLimits
-import com.kft.gcs.core.vehicle.DefaultMissionRepository
-import com.kft.gcs.core.vehicle.VehicleRepository
+import com.kft.gcs.core.vehicle.Fleet
+import com.kft.gcs.core.vehicle.MissionSync
 import java.io.File
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.seconds
@@ -99,13 +99,13 @@ class PlaneSurveySitlRun {
         val (host, port) = System.getenv("KFT_SITL")?.split(":") ?: return println("KFT_SITL not set: skipped")
         val out = File(System.getenv("KFT_SITL_OUT") ?: ".")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = SerialPorts().let { ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), it, T12Link(scope, Dispatchers.IO, it)) }
-        val vehicles = VehicleRepository(scope, manager.frames, manager.state, manager.gateway, loginKey = null)
-        val missions = DefaultMissionRepository(manager.frames, manager.state, vehicles.state, manager.gateway)
+        val links = SerialPorts().let { Links(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), it, T12Link(scope, Dispatchers.IO, it)) }
+        val fleet = Fleet(scope, links.open, loginKey = null, MissionSync())
+        val missions = fleet.missions // the one vehicle on the link is the selected one
         try {
             runBlocking {
-                manager.connect(LinkConfig.TcpClient(host, port.toInt()))
-                val home = withTimeout(90.seconds) { vehicles.state.first { it.home != null } }.home!!
+                links.connect(LinkConfig.TcpClient(host, port.toInt()))
+                val home = withTimeout(90.seconds) { fleet.selected.first { it.home != null } }.home!!
                 val flat = flatten(listOf(SurveyGroup("Survey", survey(home.position))), kind, SurveyLimits())
                 val plan = flat.groups.single().plan!!
                 println("lines ${plan.stats.lineCount}, spacing ${plan.lineSpacingM}, trigger ${plan.triggerDistanceM}, planned photos ${plan.stats.photoCount}, items ${flat.items.size}")
@@ -114,7 +114,7 @@ class PlaneSurveySitlRun {
                 println("uploaded; wrote ${File(out, "mission.waypoints").absolutePath}")
             }
         } finally {
-            manager.disconnect()
+            links.open.value.forEach { links.disconnect(it.id) }
             scope.cancel()
         }
     }

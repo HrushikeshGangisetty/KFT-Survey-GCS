@@ -1,6 +1,6 @@
 package com.kft.gcs.feature.plan.di
 
-import com.kft.gcs.core.vehicle.VehicleRepository
+import com.kft.gcs.core.vehicle.di.SelectedVehicle
 import com.kft.gcs.feature.plan.PlanSettingsRepository
 import com.kft.gcs.feature.plan.PlanViewModel
 import org.koin.core.module.dsl.viewModel
@@ -12,5 +12,5 @@ import org.koin.dsl.module
  */
 val planModule = module {
     single { PlanSettingsRepository(get()) }
-    viewModel { PlanViewModel(get<VehicleRepository>().state, get(), get(), get(), get()) }
+    viewModel { PlanViewModel(get(SelectedVehicle), get(), get(), get(), get()) }
 }

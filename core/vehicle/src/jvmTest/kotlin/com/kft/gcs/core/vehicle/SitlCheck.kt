@@ -2,7 +2,7 @@ package com.kft.gcs.core.vehicle
 
 import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.mission.MissionCommand
-import com.kft.gcs.core.mavlink.ConnectionManager
+import com.kft.gcs.core.mavlink.Links
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.PodStatus
 import com.kft.gcs.core.mavlink.SerialPorts
@@ -32,37 +32,103 @@ import kotlinx.coroutines.withTimeout
 class SitlCheck {
     private val target = System.getenv("KFT_SITL")
 
-    /** Connects, waits for the vehicle and the startup data, runs [block], and always closes the link. */
-    private fun withSitl(block: suspend (ConnectionManager, VehicleRepository, MissionRepository) -> Unit) =
-        withSitlParams { manager, vehicles, missions, _ -> block(manager, vehicles, missions) }
-
-    private fun withSitlParams(block: suspend (ConnectionManager, VehicleRepository, MissionRepository, ParamRepository) -> Unit) {
-        val (host, port) = target?.split(":") ?: return println("KFT_SITL not set: SITL check skipped")
+    /**
+     * Opens one TCP link per `host:port` in [targets] through the app's own [Links] and [Fleet], waits until that many
+     * vehicles are heard with their startup data, runs [block], and always closes the links.
+     */
+    private fun withFleet(targets: String?, block: suspend (Fleet) -> Unit) {
+        val addresses = targets?.split(",")?.map { it.trim().split(":") } ?: return println("SITL address not set: SITL check skipped")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = SerialPorts().let { ConnectionManager(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), it, T12Link(scope, Dispatchers.IO, it)) }
+        val links = SerialPorts().let { Links(scope, Dispatchers.IO, MutableStateFlow(PodStatus.NoPod), it, T12Link(scope, Dispatchers.IO, it)) }
         // Always attempt the KFT login: with no key configured, a dummy one. Stock SITL answers UNSUPPORTED whatever the
         // key (LEGACY_FIRMWARE); a KFT SITL would say DENIED to the dummy, which is the honest answer.
         val key = parseKftKey(KFT_APP_SECRET_HEX) ?: ByteArray(Kft.KEY_BYTES)
-        val vehicles = VehicleRepository(scope, manager.frames, manager.state, manager.gateway, key)
-        val missions = DefaultMissionRepository(manager.frames, manager.state, vehicles.state, manager.gateway)
-        val params = DefaultParamRepository(manager.frames, manager.state, vehicles.state, manager.gateway)
+        val fleet = Fleet(scope, links.open, key, MissionSync())
         try {
             runBlocking {
-                manager.connect(LinkConfig.TcpClient(host, port.toInt()))
+                addresses.forEach { (host, port) -> links.connect(LinkConfig.TcpClient(host, port.toInt())) }
                 // SITL sets home ~20 s after boot, once its EKF has a GPS origin.
-                withTimeout(60.seconds) { vehicles.state.first { it.connected && it.home != null && it.firmwareVersion != null } }
-                block(manager, vehicles, missions, params)
+                withTimeout(90.seconds) {
+                    fleet.vehicles.first { all ->
+                        all.size == addresses.size && all.all { it.state.connected && it.state.home != null && it.state.firmwareVersion != null }
+                    }
+                }
+                block(fleet)
             }
         } finally {
-            manager.disconnect()
+            links.open.value.forEach { links.disconnect(it.id) }
             scope.cancel()
+        }
+    }
+
+    /** One vehicle at `KFT_SITL`; it is the selected one, so `fleet.selected`, `.missions` and `.params` are its. */
+    private fun withSitl(block: suspend (Fleet) -> Unit) = withFleet(target, block)
+
+    /**
+     * Pass 29 acceptance (ADR-005), against `start-sitl.ps1 -Count 3`: three links, one copter each.
+     * `KFT_SITL_FLEET=127.0.0.1:5762,127.0.0.1:5772,127.0.0.1:5782` (each instance's SERIAL1).
+     *
+     * 1. Telemetry for all three, each with its own system id and its own home.
+     * 2. A different mission to each (vehicle n gets n + 1 waypoints, 222 m apart, north of its own home, at its own
+     *    altitude), read back from each: every vehicle holds its own mission and nobody else's.
+     * 3. With `KFT_SITL_FLY=1`: `sitl_pilot.py` is the pilot of each (ports 5763, 5773, 5783), all three fly in AUTO
+     *    at once, and the GCS sees each one finish its own mission (the last item it reaches is its own item count).
+     */
+    @Test
+    fun threeVehiclesEachGetAndFlyTheirOwnMission() = withFleet(System.getenv("KFT_SITL_FLEET")) { fleet ->
+        val all = fleet.vehicles.value
+        println("fleet: " + all.joinToString { "link ${it.id.link} system ${it.id.systemId} home ${it.state.home?.position}" })
+        assertEquals(all.size, all.map { it.id.systemId }.toSet().size, "start-sitl -Count gives each its own system id")
+        assertEquals(all.size, all.map { it.state.home!!.position }.toSet().size, "each has its own home")
+
+        fun planFor(v: FleetVehicle): List<MissionItem> {
+            val home = v.state.home!!.position
+            // 0.002° of latitude is 222 m: long enough legs that all three are still in AUTO together.
+            val waypoints = (1..v.id.systemId.toInt() + 1).map { i -> MissionItem(MissionCommand.WAYPOINT, LatLon(home.latitude + 0.002 * i, home.longitude), 15.0 + 5 * v.id.systemId.toInt()) }
+            return listOf(MissionItem(MissionCommand.TAKEOFF, altitudeM = 15.0)) + waypoints + MissionItem(MissionCommand.RETURN_TO_LAUNCH)
+        }
+        for (v in all) {
+            fleet.select(v.id)
+            fleet.missions.upload(planFor(v)).getOrThrow()
+        }
+        // Read back in the other order, so a mission that went to the wrong vehicle can't pass by luck.
+        for (v in all.reversed()) {
+            fleet.select(v.id)
+            val back = fleet.missions.download().getOrThrow()
+            val sent = planFor(v)
+            println("system ${v.id.systemId}: ${back.items.size} items, home ${back.home?.position}")
+            assertEquals(sent.size, back.items.size, "system ${v.id.systemId} holds its own item count")
+            assertEquals(sent.map { it.position?.latE7 }, back.items.map { it.position?.latE7 }, "and its own waypoints")
+            assertEquals(v.state.home!!.position, back.home!!.position, "seq 0 is this vehicle's own home (S11)")
+        }
+
+        if (System.getenv("KFT_SITL_FLY") != "1") return@withFleet println("KFT_SITL_FLY not set: the flight is skipped")
+        val root = generateSequence(java.io.File("").absoluteFile) { it.parentFile }.first { java.io.File(it, "tools/sitl").isDirectory }
+        val pilots = System.getenv("KFT_SITL_FLEET").split(",").map { address ->
+            val (host, port) = address.trim().split(":")
+            // SERIAL2 of the same instance: one port up from the GCS's SERIAL1.
+            ProcessBuilder("py", "-3.9", java.io.File(root, "tools/sitl/sitl_pilot.py").path, "tcp:$host:${port.toInt() + 1}", "--alt", "15").inheritIO().start()
+        }
+        try {
+            // All three in the air in AUTO at the same moment, seen through the GCS's own per-vehicle state.
+            withTimeout(180.seconds) { fleet.vehicles.first { list -> list.all { it.state.armed && it.state.flightMode == "Auto" } } }
+            println("all ${all.size} are in AUTO at once: " + fleet.vehicles.value.joinToString { "system ${it.id.systemId} alt ${it.state.altitudeRelativeM}" })
+            // Each reaches its own last waypoint: item (takeoff + its waypoints) = system id + 2.
+            withTimeout(600.seconds) {
+                fleet.vehicles.first { list -> list.all { (it.state.mission?.lastReached ?: 0) >= it.id.systemId.toInt() + 2 } }
+            }
+            println("all missions flown: " + fleet.vehicles.value.joinToString { "system ${it.id.systemId} reached item ${it.state.mission?.lastReached}" })
+            withTimeout(300.seconds) { fleet.vehicles.first { list -> list.none { it.state.armed } } }
+            println("all landed and disarmed")
+        } finally {
+            pilots.forEach { it.destroy() }
         }
     }
 
     /** Pass 12: the login runs first, and on stock ArduPilot it ends LEGACY_FIRMWARE, after which the Pass 6 requests work. */
     @Test
-    fun startupRequestsBringVersionAndHome() = withSitl { _, vehicles, _ ->
-        val state = vehicles.state.value
+    fun startupRequestsBringVersionAndHome() = withSitl { fleet ->
+        val state = fleet.selected.value
         println("SITL: ArduPilot ${state.firmwareVersion}, home ${state.home}, ${state.login?.label}")
         assertNotNull(state.home)
         assertTrue(state.login == KftLoginStatus.LEGACY_FIRMWARE || state.login == KftLoginStatus.AUTHENTICATED, "${state.login}")
@@ -70,8 +136,9 @@ class SitlCheck {
 
     /** Pass 7 acceptance: upload, read back, compare; then clear and read back again. */
     @Test
-    fun missionUploadReadBackCompareAndClear() = withSitl { _, vehicles, missions ->
-        val home = vehicles.state.value.home!!.position
+    fun missionUploadReadBackCompareAndClear() = withSitl { fleet ->
+        val missions = fleet.missions
+        val home = fleet.selected.value.home!!.position
         val plan = listOf(
             MissionItem(MissionCommand.TAKEOFF, altitudeM = 20.0),
             MissionItem(MissionCommand.DO_CHANGE_SPEED, param1 = 1f, param2 = 8f, param3 = -1f),
@@ -95,7 +162,7 @@ class SitlCheck {
             assertEquals(sent.position?.lonE7, read.position?.lonE7)
             assertEquals(sent.param2, read.param2)
         }
-        assertEquals(vehicles.state.value.home!!.position, back.home!!.position)
+        assertEquals(fleet.selected.value.home!!.position, back.home!!.position)
 
         missions.clear().getOrThrow()
         assertEquals(emptyList(), missions.download().getOrThrow().items)
@@ -107,7 +174,8 @@ class SitlCheck {
      * on SITL port 5763, as MAVProxy would. Copter only (Plane arms too, but its check isn't needed twice).
      */
     @Test
-    fun paramsDownloadSetReadBackAndArmedRefusal() = withSitlParams { _, vehicles, _, params ->
+    fun paramsDownloadSetReadBackAndArmedRefusal() = withSitl { fleet ->
+        val params = fleet.params
         var lastPrint = 0
         val all = params.downloadAll { done, total -> if (done - lastPrint >= 200 || done == total) { lastPrint = done; println("params $done/$total") } }.getOrThrow()
         println("downloaded ${all.size} parameters")
@@ -128,13 +196,13 @@ class SitlCheck {
         val host = this.target!!.substringBefore(':')
         val pilot = ProcessBuilder("py", "-3.9", java.io.File(root, "tools/sitl/sitl_pilot.py").path, "tcp:$host:5763", "--arm-only")
             .inheritIO().start()
-        withTimeout(60.seconds) { vehicles.state.first { it.armed } }
+        withTimeout(60.seconds) { fleet.selected.first { it.armed } }
         val refused = params.set(cam, newValue)
         println("while armed: $refused")
         assertTrue(refused is ParamSetResult.NotApplied && refused.reason.contains("disarmed"), "$refused")
         pilot.waitFor()
         // Copter disarms itself on the ground (DISARM_DELAY); wait so the next check starts disarmed.
-        withTimeout(30.seconds) { vehicles.state.first { !it.armed } }
+        withTimeout(30.seconds) { fleet.selected.first { !it.armed } }
         assertEquals(cam.value, params.downloadAll().getOrThrow().single { it.name == "CAM1_TYPE" }.value, "unchanged by the refused set")
     }
 }

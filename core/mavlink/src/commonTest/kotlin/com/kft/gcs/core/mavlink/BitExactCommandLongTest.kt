@@ -69,7 +69,7 @@ class BitExactCommandLongTest {
         val link = FakeMavConnection()
         val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod))
         gateway.attach(link)
-        assertEquals(TxResult.Sent, gateway.send(command(patterns)))
+        assertEquals(TxResult.Sent, gateway.forVehicle(1u).send(command(patterns)))
         val onTheLink = assertIs<BitExactCommandLong>(link.sent.single(), "the gateway swaps in the bit-exact encoder")
 
         // Encode it as a real MAVLink 2 frame, the way the connection does, and look at the bytes.

@@ -1,11 +1,10 @@
 package com.kft.gcs.app
 
-import com.kft.gcs.core.mavlink.ConnectionManager
+import com.kft.gcs.core.mavlink.Links
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.PodStatus
 import com.kft.gcs.core.mavlink.SerialPorts
 import com.kft.gcs.core.mavlink.T12Link
-import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.feature.connections.DefaultConnectionsRepository
 import java.nio.file.Files
 import kotlin.test.Test
@@ -21,10 +20,10 @@ class ProfilePersistenceTest {
 
     /** What the app builds at startup. A new instance = a restart; only the file carries over. */
     private fun startApp(store: FileTextStore) = DefaultConnectionsRepository(
-        SerialPorts().let { ports -> val io = StandardTestDispatcher(scope.testScheduler); ConnectionManager(scope, io, MutableStateFlow(PodStatus.NoPod), ports, T12Link(scope, io, ports)) },
+        SerialPorts().let { ports -> val io = StandardTestDispatcher(scope.testScheduler); Links(scope, io, MutableStateFlow(PodStatus.NoPod), ports, T12Link(scope, io, ports)) },
         SerialPorts(),
         store,
-        MutableStateFlow(VehicleState()),
+        MutableStateFlow(emptyList()),
     )
 
     @Test

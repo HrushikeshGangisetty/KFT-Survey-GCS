@@ -32,12 +32,14 @@ internal actual fun createTransport(config: LinkConfig, serialPorts: SerialPorts
  * UDP. MAVLink over UDP is one frame per datagram, so the source hands out datagrams as a byte stream and the
  * sink sends one datagram per flush (mavlink-kotlin flushes after every frame).
  *
- * With [fixedRemote] == null (listen mode) we reply to whoever sent to us last. Until someone does, there's no
- * address to reply to, so outgoing frames are dropped. That's normal: SITL and radios speak first.
+ * With [fixedRemote] == null (listen mode) every outgoing frame goes to every address that has sent to us (ADR-005
+ * §6): with several vehicles behind several senders, "whoever sent last" would deliver a command to the wrong one's
+ * address. MAVLink frames carry their target system, so the others ignore it; QGroundControl does the same. Until
+ * someone has sent, there's no address, so outgoing frames are dropped. That's normal: SITL and radios speak first.
  */
 internal class UdpTransport(private val bindPort: Int, private val fixedRemote: SocketAddress?) : MavTransport {
-    // Written by the reader thread, read by the writer thread.
-    @Volatile private var replyTo: SocketAddress? = fixedRemote
+    // Written by the reader thread, read by the writer thread: a new immutable set is swapped in for each new sender.
+    @Volatile private var peers: Set<SocketAddress> = setOfNotNull(fixedRemote)
     private var socket: DatagramSocket? = null
 
     override fun open(): MavTransport.Streams {
@@ -57,7 +59,7 @@ internal class UdpTransport(private val bindPort: Int, private val fixedRemote: 
         override fun read(sink: Buffer, byteCount: Long): Long {
             if (pending.size == 0L) {
                 socket.receive(packet) // blocks; throws SocketException when close() is called
-                if (fixedRemote == null) replyTo = packet.socketAddress
+                if (fixedRemote == null && packet.socketAddress !in peers) peers = peers + packet.socketAddress
                 pending.write(packet.data, 0, packet.length)
             }
             return pending.read(sink, byteCount)
@@ -74,8 +76,7 @@ internal class UdpTransport(private val bindPort: Int, private val fixedRemote: 
 
         override fun flush() {
             val bytes = pending.readByteArray()
-            val to = replyTo ?: return
-            socket.send(DatagramPacket(bytes, bytes.size, to))
+            peers.forEach { socket.send(DatagramPacket(bytes, bytes.size, it)) }
         }
 
         override fun timeout() = Timeout.NONE

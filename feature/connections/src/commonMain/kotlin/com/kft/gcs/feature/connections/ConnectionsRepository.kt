@@ -1,13 +1,15 @@
 package com.kft.gcs.feature.connections
 
-import com.kft.gcs.core.mavlink.ConnectionManager
 import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.LinkState
+import com.kft.gcs.core.mavlink.Links
 import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.SerialPorts
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.withHolders
+import com.kft.gcs.core.mavlink.withStates
+import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.KftLoginStatus
-import com.kft.gcs.core.vehicle.VehicleState
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -21,23 +23,33 @@ import kotlinx.serialization.json.Json
 /** A saved way of connecting, e.g. "SITL (UDP 14550)". */
 data class ConnectionProfile(val id: String, val name: String, val config: LinkConfig)
 
+/** One open link: its number ([VehicleId.link]) and where it is. */
+data class OpenLink(val id: Int, val state: LinkState)
+
 /**
- * What the Connections screen needs from the data layer: saved profiles and the live link.
+ * What the Connections screen needs from the data layer: saved profiles and the live links (ADR-005: several links
+ * can be open at once, each carrying one or more vehicles).
  * An interface so the ViewModel test can use a fake instead of real sockets.
  */
 interface ConnectionsRepository {
     val profiles: StateFlow<List<ConnectionProfile>>
-    val linkState: StateFlow<LinkState>
 
-    /** The KFT login for the vehicle on the link (spec S12), null while none is heard. */
-    val login: Flow<KftLoginStatus?>
+    /** Every open link, oldest first. */
+    val links: Flow<List<OpenLink>>
+
+    /** The KFT login of each vehicle heard (spec S12). */
+    val logins: Flow<Map<VehicleId, KftLoginStatus?>>
     fun addProfile(name: String, config: LinkConfig)
     fun deleteProfile(id: String)
+
+    /** Opens the profile as one more link; the links already open stay open. */
     fun connect(profileId: String)
 
     /** Opens [config] straight away, without a saved profile (the Serial form's Connect button). */
     fun connectTo(config: LinkConfig)
-    fun disconnect()
+
+    /** Closes the link numbered [linkId]. */
+    fun disconnect(linkId: Int)
 
     /** Serial ports present right now (COM ports on desktop, USB-OTG devices on Android), with who holds each. */
     fun serialPorts(): List<SerialPortInfo>
@@ -53,14 +65,14 @@ interface ProfileStore {
 }
 
 /**
- * Profiles saved through [store] and reloaded at startup, link delegated to the app-wide [ConnectionManager],
- * ports listed by [SerialPorts], login status read from the vehicle state.
+ * Profiles saved through [store] and reloaded at startup, links delegated to the app-wide [Links], ports listed by
+ * [SerialPorts], login status read from each vehicle's state.
  */
 class DefaultConnectionsRepository(
-    private val manager: ConnectionManager,
+    private val manager: Links,
     private val ports: SerialPorts,
     private val store: ProfileStore,
-    vehicle: StateFlow<VehicleState>,
+    vehicles: Flow<List<FleetVehicle>>,
 ) : ConnectionsRepository {
 
     // Ids only tell rows apart while the app runs, so they're handed out fresh on every start and never saved.
@@ -69,8 +81,8 @@ class DefaultConnectionsRepository(
         (store.read()?.let(::decodeProfiles) ?: DEFAULT_PROFILES).map { (name, config) -> profile(name, config) },
     )
     override val profiles: StateFlow<List<ConnectionProfile>> = _profiles.asStateFlow()
-    override val linkState: StateFlow<LinkState> = manager.state
-    override val login: Flow<KftLoginStatus?> = vehicle.map { it.login }.distinctUntilChanged()
+    override val links: Flow<List<OpenLink>> = manager.open.withStates().map { list -> list.map { (link, state) -> OpenLink(link.id, state) } }
+    override val logins: Flow<Map<VehicleId, KftLoginStatus?>> = vehicles.map { list -> list.associate { it.id to it.state.login } }.distinctUntilChanged()
 
     override fun addProfile(name: String, config: LinkConfig) = save { it + profile(name, config) }
 
@@ -82,7 +94,7 @@ class DefaultConnectionsRepository(
 
     override fun connectTo(config: LinkConfig) = manager.connect(config)
 
-    override fun disconnect() = manager.disconnect()
+    override fun disconnect(linkId: Int) = manager.disconnect(linkId)
 
     // Marked with who holds them in this app (the T12 link, a Serial link), so the form can refuse them.
     override fun serialPorts() = ports.list().withHolders()

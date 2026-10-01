@@ -1,6 +1,7 @@
 package com.kft.gcs.feature.params.di
 
-import com.kft.gcs.core.vehicle.VehicleRepository
+import com.kft.gcs.core.vehicle.Fleet
+import com.kft.gcs.core.vehicle.di.SelectedVehicle
 import com.kft.gcs.feature.params.ParamsViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
@@ -10,5 +11,5 @@ import org.koin.dsl.module
  * [com.kft.gcs.feature.params.MetadataSource] (HTTP and a folder for the downloaded descriptions).
  */
 val paramsModule = module {
-    viewModel { ParamsViewModel(get<VehicleRepository>().state, get(), get(), get()) }
+    viewModel { ParamsViewModel(get(SelectedVehicle), get(), get(), get(), get<Fleet>().selectedId) }
 }

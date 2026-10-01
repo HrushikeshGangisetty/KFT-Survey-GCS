@@ -90,7 +90,7 @@ fun ConnectionsRoute(viewModel: ConnectionsViewModel = koinViewModel()) {
 fun ConnectionsScreen(
     state: ConnectionsUiState,
     onConnect: (String) -> Unit,
-    onDisconnect: () -> Unit,
+    onDisconnect: (linkId: Int) -> Unit,
     onDelete: (String) -> Unit,
     onFormKindChanged: (LinkKind) -> Unit,
     onFormNameChanged: (String) -> Unit,
@@ -109,7 +109,7 @@ fun ConnectionsScreen(
         verticalArrangement = Arrangement.spacedBy(Spacing.l),
     ) {
         Text("Links", style = MaterialTheme.typography.titleLarge)
-        LinkStatusCard(state.link, state.canDisconnect, onDisconnect)
+        state.links.forEach { link -> key(link.linkId) { LinkStatusCard(link, onDisconnect) } }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val profiles = @Composable { mod: Modifier -> ProfileList(state.profiles, onConnect, onDelete, mod) }
             val form = @Composable { mod: Modifier ->
@@ -133,9 +133,12 @@ fun ConnectionsScreen(
     }
 }
 
-/** The link as a status: icon and colour from the tone (never colour alone), then details and the login line. */
+/**
+ * One link as a status: icon and colour from the tone (never colour alone), then details, the login line (one
+ * vehicle) or a line per vehicle (several), and its own Disconnect.
+ */
 @Composable
-private fun LinkStatusCard(link: LinkStatusUi, canDisconnect: Boolean, onDisconnect: () -> Unit) {
+private fun LinkStatusCard(link: LinkStatusUi, onDisconnect: (linkId: Int) -> Unit) {
     val tint = when (link.tone) {
         Tone.IDLE, Tone.BUSY -> MaterialTheme.colorScheme.onSurfaceVariant
         Tone.OK -> KftTheme.status.ok
@@ -155,8 +158,14 @@ private fun LinkStatusCard(link: LinkStatusUi, canDisconnect: Boolean, onDisconn
                 Text(link.headline, style = MaterialTheme.typography.titleMedium)
                 link.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 link.login?.let { StatusChip(it, if (link.loginWarning) Status.WARN else Status.OK, icon = KftIcons.Login) }
+                link.vehicles.forEach { v ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                        Text(v.text, style = MaterialTheme.typography.bodyMedium)
+                        v.login?.let { StatusChip(it, if (v.loginWarning) Status.WARN else Status.OK, icon = KftIcons.Login) }
+                    }
+                }
             }
-            if (canDisconnect) OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
+            link.linkId?.let { id -> OutlinedButton(onClick = { onDisconnect(id) }) { Text("Disconnect") } }
         }
     }
 }

@@ -14,10 +14,14 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 /**
  * A scripted flight controller for protocol tests. Everything the GCS sends lands in [sent]. [reply] decides what
  * the "vehicle" answers to each message (nothing, one frame or several), and [frames] carries those answers back,
- * exactly like `ConnectionManager.frames` does in the app.
+ * exactly like `ConnectionManager.frames` does in the app. Several fakes can share one [frames] flow: that is one
+ * link carrying several vehicles.
  */
-class FakeFc(val systemId: UByte = 1u, val componentId: UByte = 1u) : MavSender {
-    val frames = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = 256)
+class FakeFc(
+    val systemId: UByte = 1u,
+    val componentId: UByte = 1u,
+    val frames: MutableSharedFlow<MavFrame<out MavMessage<*>>> = MutableSharedFlow(extraBufferCapacity = 256),
+) : MavSender {
     val sent = mutableListOf<MavMessage<*>>()
 
     /** The vehicle's answer to each message the GCS sends. Default: silence. */

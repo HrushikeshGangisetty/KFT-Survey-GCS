@@ -1,6 +1,7 @@
 package com.kft.gcs.feature.params
 
 import app.cash.turbine.test
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.vehicle.KftLoginStatus
 import com.kft.gcs.core.vehicle.Param
@@ -201,6 +202,53 @@ class ParamsViewModelTest {
         vehicle.value = VehicleState(connected = true, login = KftLoginStatus.AUTHENTICATED)
         runCurrent()
         assertEquals("3 parameters · 0 modified", vm.state.value.status)
+    }
+
+    /**
+     * ADR-005 §5: one list per vehicle. Drone 1's list (with an edit made to it) is put away when drone 2 is selected,
+     * drone 2's is read because it has none yet, and going back shows drone 1's again without reading it a second time.
+     */
+    @Test
+    fun eachVehicleHasItsOwnListAndASwitchSwapsThem() = runTest(dispatcher) {
+        val (drone1, drone2) = VehicleId(1, 1u) to VehicleId(1, 2u)
+        val selectedId = MutableStateFlow<VehicleId?>(drone1)
+        val vm = ParamsViewModel(vehicle, repo, files, metadata, selectedId)
+        backgroundScope.launch { vm.state.collect {} }
+        vm.onDownloadClicked(); runCurrent()
+        vm.onParamClicked("CAM1_TYPE"); vm.onEditTextChanged("1"); vm.onEditSetClicked(); vm.onEditConfirmClicked(); runCurrent()
+        assertEquals("3 parameters · 1 modified", vm.state.value.status)
+        vm.onParamClicked("WPNAV_SPEED") // an edit dialog left open on drone 1
+        runCurrent()
+        assertNotNull(vm.state.value.edit)
+
+        // Drone 2 holds other values. Selecting it closes drone 1's dialog and reads drone 2's list by itself.
+        repo.vehicle["WPNAV_SPEED"] = repo.vehicle.getValue("WPNAV_SPEED").copy(value = 500f)
+        selectedId.value = drone2
+        runCurrent()
+        assertNull(vm.state.value.edit, "a dialog about drone 1's value must not stay open over drone 2")
+        assertEquals("3 parameters · 0 modified", vm.state.value.status)
+        assertEquals("500", vm.state.value.rows.first { it.name == "WPNAV_SPEED" }.value)
+
+        // Back to drone 1: its own list, as it was left (the edit still marked), not drone 2's and not a fresh read.
+        selectedId.value = drone1
+        runCurrent()
+        assertEquals("3 parameters · 1 modified", vm.state.value.status)
+        assertEquals("1000", vm.state.value.rows.first { it.name == "WPNAV_SPEED" }.value)
+    }
+
+    /** A vehicle that isn't ready when it is selected is not read (and no other vehicle's list is shown instead). */
+    @Test
+    fun selectingAVehicleThatIsNotReadyShowsAnEmptyList() = runTest(dispatcher) {
+        val selectedId = MutableStateFlow<VehicleId?>(VehicleId(1, 1u))
+        val vm = ParamsViewModel(vehicle, repo, files, metadata, selectedId)
+        backgroundScope.launch { vm.state.collect {} }
+        vm.onDownloadClicked(); runCurrent()
+
+        vehicle.value = VehicleState(connected = true, login = KftLoginStatus.LOGGING_IN) // the newly selected drone
+        selectedId.value = VehicleId(1, 2u)
+        runCurrent()
+        assertEquals("Not downloaded", vm.state.value.status)
+        assertTrue(vm.state.value.rows.isEmpty())
     }
 
     @Test

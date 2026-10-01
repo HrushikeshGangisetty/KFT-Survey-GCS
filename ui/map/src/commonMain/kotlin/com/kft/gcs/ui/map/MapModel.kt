@@ -95,8 +95,18 @@ object TileSources {
 
 /** Things features ask the map to draw. Our own types, so no feature ever touches a map library. */
 sealed interface MapOverlay {
-    /** The aircraft, drawn as an arrow along [headingDeg]. When the heading is unknown the arrow points north. */
-    data class Vehicle(val position: LatLon, val headingDeg: Double?) : MapOverlay
+    /**
+     * An aircraft, drawn as an arrow along [headingDeg]. When the heading is unknown the arrow points north.
+     * With several vehicles each has its own colour, picked by [slot] from [VehicleColors], and its [label] under the
+     * arrow; the [selected] one is drawn larger and on top.
+     */
+    data class Vehicle(
+        val position: LatLon,
+        val headingDeg: Double?,
+        val slot: Int = 0,
+        val label: String? = null,
+        val selected: Boolean = true,
+    ) : MapOverlay
 
     /** The path flown so far. */
     data class Track(val points: List<LatLon>) : MapOverlay

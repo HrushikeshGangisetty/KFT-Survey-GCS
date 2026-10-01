@@ -55,8 +55,10 @@ enum class ExportFormat(val extension: String) { QGC_PLAN("plan"), WAYPOINTS("wa
  * with undo/redo, an upload preview, and plan files. It never flies anything: uploading only stores the mission, and
  * the pilot starts it by switching to AUTO on the RC (spec S9).
  *
- * @param vehicle the live vehicle state (home, vehicle kind, mission progress, connected).
- * @param sync shared with the Fly view: this screen writes the plan and what the vehicle holds after each transfer.
+ * @param vehicle the selected vehicle's live state (home, vehicle kind, mission progress, connected).
+ * @param missions transfers with the selected vehicle. It also notes in [sync] what that vehicle holds after each
+ *   one (`Fleet.missions`), because only it knows which vehicle a transfer went to (ADR-005 §5).
+ * @param sync shared with the Fly view: this screen writes the plan into it.
  */
 class PlanViewModel(
     private val vehicle: StateFlow<VehicleState>,
@@ -268,17 +270,13 @@ class PlanViewModel(
         edit.update { it.copy(preview = null) }
         val items = currentFlat().items
         transfer("Uploading") { progress ->
-            missions.upload(items, progress).map {
-                sync.vehicleHolds(items)
-                "Uploaded ${items.size} items. Switch to AUTO on the RC to fly it."
-            }
+            missions.upload(items, progress).map { "Uploaded ${items.size} items. Switch to AUTO on the RC to fly it." }
         }
     }
 
     override fun onReadClicked() = transfer("Reading") { progress ->
         missions.download(progress).map { mission ->
             replacePlan(listOf(WaypointGroup("From vehicle", fromMissionItems(mission.items))))
-            sync.vehicleHolds(mission.items)
             "Read ${mission.items.size} items from the vehicle."
         }
     }
@@ -287,7 +285,6 @@ class PlanViewModel(
     override fun onClearClicked() = transfer("Clearing") { _ ->
         missions.clear().map {
             replacePlan(listOf(WaypointGroup("Waypoints")))
-            sync.vehicleHolds(emptyList())
             "Mission cleared on the vehicle."
         }
     }

@@ -132,6 +132,29 @@ internal object TxPolicy {
         TxCategory.UNLISTED -> "not on the TX allowlist"
     }
 
+    /**
+     * The `target_system` field of [message], or null for a message that has none. A vehicle's sender refuses anything
+     * whose target isn't its own vehicle (ADR-005 §3), so an allowlisted message missing here can't be sent at all:
+     * default-deny, like [classify]. Every one of these has `target_system` in `common.xml`.
+     */
+    fun targetSystem(message: MavMessage<*>): UByte? = when (message) {
+        is ParamRequestRead -> message.targetSystem
+        is ParamRequestList -> message.targetSystem
+        is ParamSet -> message.targetSystem
+        is RequestDataStream -> message.targetSystem
+        is MissionRequestList -> message.targetSystem
+        is MissionRequestInt -> message.targetSystem
+        is MissionAck -> message.targetSystem
+        is MissionCount -> message.targetSystem
+        is MissionItemInt -> message.targetSystem
+        is MissionClearAll -> message.targetSystem
+        is MissionWritePartialList -> message.targetSystem
+        is MissionSetCurrent -> message.targetSystem
+        is CommandLong -> message.targetSystem
+        is CommandInt -> message.targetSystem
+        else -> null
+    }
+
     private val MISSION_LOCKOUT = setOf(PodLockState.LOCKED, PodLockState.TERMINAL, PodLockState.ENGAGE)
 
     private fun missionLockout(pod: PodStatus) =

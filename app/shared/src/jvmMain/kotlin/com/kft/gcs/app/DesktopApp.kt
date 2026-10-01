@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.window.FrameWindowScope
 import com.kft.gcs.core.mavlink.SerialPorts
+import com.kft.gcs.core.mavlink.TlogFiles
+import com.kft.gcs.core.mavlink.VehicleRecorder
 import com.kft.gcs.core.mavlink.di.IoDispatcher
 import com.kft.gcs.feature.connections.ProfileStore
 import com.kft.gcs.feature.fly.VideoStore
@@ -29,11 +31,13 @@ fun FrameWindowScope.DesktopApp(shortcuts: KeyShortcuts) = ProvideDesktopMapHost
 /**
  * Desktop-only bindings: serial ports through jSerialComm, the profile and plan-settings files in `%APPDATA%\KFT-GCS`
  * on Windows (the per-user roaming folder Windows apps use), `~/.kft-gcs` elsewhere, and AWT's file dialogs.
- * Imported MBTiles go in its `maps` folder; downloaded areas live in MapLibre's own cache database.
+ * Imported MBTiles go in its `maps` folder; downloaded areas live in MapLibre's own cache database. Each vehicle's
+ * telemetry log goes in its `tlogs` folder.
  */
 private val desktopModule = module {
     val dir = System.getenv("APPDATA")?.let { File(it, "KFT-GCS") } ?: File(System.getProperty("user.home"), ".kft-gcs")
     single { SerialPorts() }
+    single<VehicleRecorder> { TlogFiles(File(dir, "tlogs"), get(IoDispatcher)) }
     single<ProfileStore> { FileTextStore(File(dir, "connection-profiles.json")) }
     single<SettingsStore> { FileTextStore(File(dir, "plan-settings.json")) }
     single<ThemeStore> { FileTextStore(File(dir, "theme.txt")) }

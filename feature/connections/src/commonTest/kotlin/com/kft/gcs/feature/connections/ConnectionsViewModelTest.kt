@@ -5,6 +5,7 @@ import com.kft.gcs.core.mavlink.LinkConfig
 import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.LinkStats
 import com.kft.gcs.core.mavlink.SerialPortInfo
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.vehicle.KftLoginStatus
@@ -16,6 +17,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -27,10 +30,18 @@ import kotlinx.coroutines.test.setMain
 /** A repository whose link state the test sets by hand. Records what the ViewModel asked for. */
 internal class FakeConnectionsRepository : ConnectionsRepository {
     override val profiles = MutableStateFlow(listOf(ConnectionProfile("p0", "SITL", LinkConfig.UdpListen(14550))))
-    override val linkState = MutableStateFlow<LinkState>(LinkState.Disconnected)
-    override val login = MutableStateFlow<KftLoginStatus?>(null)
+    /** The one link most tests use, as link 1; [LinkState.Disconnected] = no link open. */
+    val linkState = MutableStateFlow<LinkState>(LinkState.Disconnected)
+
+    /** A second open link (link 2), for the multi-link tests. */
+    val secondLink = MutableStateFlow<LinkState>(LinkState.Disconnected)
+    override val links = combine(linkState, secondLink) { a, b -> listOf(OpenLink(1, a), OpenLink(2, b)).filter { it.state != LinkState.Disconnected } }
+
+    /** The login of system 1 on link 1. */
+    val login = MutableStateFlow<KftLoginStatus?>(null)
+    override val logins = login.map { mapOf(VehicleId(1, 1u) to it) }
     val connected = mutableListOf<String>()
-    var disconnects = 0
+    val disconnected = mutableListOf<Int>()
 
     override fun addProfile(name: String, config: LinkConfig) =
         profiles.update { it + ConnectionProfile("p${it.size}", name, config) }
@@ -38,7 +49,7 @@ internal class FakeConnectionsRepository : ConnectionsRepository {
     override fun connect(profileId: String) { connected += profileId }
     val connectedTo = mutableListOf<LinkConfig>()
     override fun connectTo(config: LinkConfig) { connectedTo += config }
-    override fun disconnect() { disconnects++ }
+    override fun disconnect(linkId: Int) { disconnected += linkId }
 
     var ports = listOf(SerialPortInfo("COM7", "Silicon Labs CP210x"))
     override fun serialPorts() = ports
@@ -62,39 +73,82 @@ class ConnectionsViewModelTest {
             repository.linkState.value = LinkState.Connected(udp, copter, LinkStats())
             repository.login.value = KftLoginStatus.LOGGING_IN
             runCurrent()
-            assertEquals("KFT login: in progress…", expectMostRecentItem().link.login)
+            assertEquals("KFT login: in progress…", expectMostRecentItem().links.single().login)
             repository.login.value = KftLoginStatus.NO_KEY
             runCurrent()
-            val noKey = expectMostRecentItem().link
+            val noKey = expectMostRecentItem().links.single()
             assertEquals("KFT login: no key configured", noKey.login)
             assertTrue(noKey.loginWarning)
             repository.login.value = KftLoginStatus.AUTHENTICATED
             runCurrent()
-            assertFalse(expectMostRecentItem().link.loginWarning)
+            assertFalse(expectMostRecentItem().links.single().loginWarning)
             // No vehicle heard: no login line (it would describe a vehicle that isn't there).
             repository.linkState.value = LinkState.Connected(udp, null, LinkStats())
             runCurrent()
-            assertEquals(null, expectMostRecentItem().link.login)
+            assertEquals(null, expectMostRecentItem().links.single().login)
         }
+    }
+
+    /** ADR-005: two links open at once, each with its own card and Disconnect; one of them carries two vehicles. */
+    @Test
+    fun everyOpenLinkHasItsOwnCardAndAManyVehicleLinkListsThem() = runTest(dispatcher) {
+        val tcp = LinkConfig.TcpClient("127.0.0.1", 5772)
+        repository.profiles.value += ConnectionProfile("p1", "Second", tcp)
+        val vm = ConnectionsViewModel(repository)
+        vm.state.test {
+            repository.linkState.value = LinkState.Connected(udp, copter, LinkStats(), listOf(copter, copter.copy(systemId = 2u, armed = true)))
+            repository.secondLink.value = LinkState.Connecting(tcp, attempt = 1, lastError = null)
+            repository.login.value = KftLoginStatus.AUTHENTICATED
+            runCurrent()
+            val state = expectMostRecentItem()
+            assertEquals(listOf(1, 2), state.links.map { it.linkId })
+            val (first, second) = state.links
+            assertEquals("2 vehicles on UDP listen :14550", first.headline)
+            assertEquals(
+                listOf(
+                    VehicleLineUi("ArduCopter · system 1 · disarmed", "KFT login: OK", loginWarning = false),
+                    VehicleLineUi("ArduCopter · system 2 · ARMED", null, loginWarning = false), // no login known for system 2 yet
+                ),
+                first.vehicles,
+            )
+            assertEquals("Connecting to TCP 127.0.0.1:5772…", second.headline)
+            assertEquals(listOf(true, true), state.profiles.map { it.isActive }, "both profiles are open")
+        }
+        vm.onDisconnectClicked(2)
+        assertEquals(listOf(2), repository.disconnected)
+    }
+
+    /** ADR-005 §4: a duplicated system id is a warning that says what to do, not a vehicle. */
+    @Test
+    fun aDuplicateSystemIdIsShownAsAnError() {
+        val ui = LinkState.Connected(udp, copter.copy(duplicateId = true), LinkStats()).toStatusUi(linkId = 1)
+        assertEquals("Two vehicles are using system id 1 on UDP listen :14550", ui.headline)
+        assertEquals(Tone.WARNING, ui.tone)
+        assertTrue(ui.detail!!.contains("MAV_SYSID"))
     }
 
     @Test
     fun stateFollowsTheLinkFromIdleToVehicleFound() = runTest(dispatcher) {
         val vm = ConnectionsViewModel(repository)
         vm.state.test {
-            assertEquals("Not connected", awaitItem().link.headline)
+            runCurrent()
+            val idle = expectMostRecentItem().links.single()
+            assertEquals("Not connected", idle.headline)
+            assertEquals(null, idle.linkId, "nothing to disconnect")
 
             repository.linkState.value = LinkState.Connecting(udp, attempt = 1, lastError = null)
-            val connecting = awaitItem()
-            assertEquals(Tone.BUSY, connecting.link.tone)
+            runCurrent()
+            val connecting = expectMostRecentItem()
+            assertEquals(Tone.BUSY, connecting.links.single().tone)
             assertTrue(connecting.profiles.single().isActive)
-            assertTrue(connecting.canDisconnect)
+            assertEquals(1, connecting.links.single().linkId, "the card can disconnect link 1")
 
             repository.linkState.value = LinkState.Connected(udp, copter, LinkStats(messagesPerSecond = 42, lossPercent = 1.25))
-            val connected = awaitItem()
-            assertEquals("ArduCopter · system 1 · disarmed", connected.link.headline)
-            assertEquals("42 msg/s · 1.3% loss", connected.link.detail)
-            assertEquals(Tone.OK, connected.link.tone)
+            runCurrent()
+            val connected = expectMostRecentItem().links.single()
+            assertEquals("ArduCopter · system 1 · disarmed", connected.headline)
+            assertEquals("42 msg/s · 1.3% loss", connected.detail)
+            assertEquals(Tone.OK, connected.tone)
         }
     }
 
@@ -102,9 +156,9 @@ class ConnectionsViewModelTest {
     fun clicksGoToTheRepository() = runTest(dispatcher) {
         val vm = ConnectionsViewModel(repository)
         vm.onConnectClicked("p0")
-        vm.onDisconnectClicked()
+        vm.onDisconnectClicked(1)
         assertEquals(listOf("p0"), repository.connected)
-        assertEquals(1, repository.disconnects)
+        assertEquals(listOf(1), repository.disconnected)
     }
 
     /** Serial: the first free port is preselected, and Connect opens it at the chosen baud with no profile saved. */
@@ -201,7 +255,7 @@ class ConnectionsViewModelTest {
             repository.linkState.value = LinkState.Connected(udp, copter.copy(armed = true), LinkStats())
             runCurrent()
             repository.linkState.value = LinkState.Connected(udp, null, LinkStats())
-            assertEquals(ConnectionsEffect.ShowMessage("Vehicle heartbeat lost"), awaitItem())
+            assertEquals(ConnectionsEffect.ShowMessage("Vehicle heartbeat lost: system 1"), awaitItem())
         }
     }
 

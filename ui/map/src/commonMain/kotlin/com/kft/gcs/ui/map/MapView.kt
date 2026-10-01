@@ -38,6 +38,7 @@ import org.maplibre.compose.expressions.dsl.image
 import org.maplibre.compose.expressions.value.IconRotationAlignment
 import org.maplibre.compose.expressions.value.LineCap
 import org.maplibre.compose.expressions.value.LineJoin
+import org.maplibre.compose.expressions.value.SymbolAnchor
 import org.maplibre.compose.expressions.value.SymbolPlacement
 import org.maplibre.compose.interaction.ClickResult
 import org.maplibre.compose.interaction.MapInteractions
@@ -104,7 +105,7 @@ fun MapView(
     val markerDrag by rememberUpdatedState(onMarkerDrag)
     val markerDragEnd by rememberUpdatedState(onMarkerDragEnd)
     val viewChanged by rememberUpdatedState(onViewChanged)
-    val vehicleArrow = rememberVectorPainter(VehicleArrow)
+    val vehicleArrows = VehicleArrows.map { rememberVectorPainter(it) }
 
     val mapState = rememberMapState(
         baseStyle = BaseStyle.Uri((TileSources.Street.source as TileSourceConfig.Source.VectorStyle).styleUrl),
@@ -204,18 +205,31 @@ fun MapView(
                 textIgnorePlacement = const(true),
             )
         }
-        overlays.filterIsInstance<MapOverlay.Vehicle>().forEachIndexed { i, vehicle ->
+        // The selected vehicle last, so it is drawn on top of the others.
+        overlays.filterIsInstance<MapOverlay.Vehicle>().sortedBy { it.selected }.forEachIndexed { i, vehicle ->
+            val color = VehicleColors[vehicle.slot.mod(VehicleColors.size)]
             SymbolLayer(
                 id = "vehicle-$i",
-                source = rememberGeoJsonSource(GeoJsonData.JsonString(pointGeoJson(vehicle.position))),
-                iconImage = image(vehicleArrow),
-                iconSize = const(1.6f),
+                source = rememberGeoJsonSource(GeoJsonData.JsonString(labelledPointGeoJson(vehicle.position, vehicle.label.orEmpty()))),
+                iconImage = image(vehicleArrows[vehicle.slot.mod(VehicleColors.size)]),
+                iconSize = const(if (vehicle.selected) 1.6f else 1.2f),
                 // Rotate with the map, so heading 90° always points at map-east even when the map is rotated.
                 iconRotationAlignment = const(IconRotationAlignment.Map),
                 iconRotate = const((vehicle.headingDeg ?: 0.0).toFloat()),
                 // The vehicle must never be hidden to make room for a street label.
                 iconAllowOverlap = const(true),
                 iconIgnorePlacement = const(true),
+                // The label sits under the arrow, in the vehicle's colour with a dark halo, like the lines' casing.
+                textField = format(span(feature["label"].asString())),
+                textFont = const(listOf("Noto Sans Bold")),
+                textSize = const(13.sp),
+                textColor = const(color),
+                textHaloColor = const(MapColors.OUTLINE),
+                textHaloWidth = const(1.5.dp),
+                textAnchor = const(SymbolAnchor.Top),
+                textTranslate = const(DpOffset(0.dp, 20.dp)),
+                textAllowOverlap = const(true),
+                textIgnorePlacement = const(true),
             )
         }
     }
@@ -305,8 +319,22 @@ private object MapColors {
     val PHOTO = Color(0xFF76FF03) // lime: photo positions
     val HOME = Color(0xFF00E676)
     val SELECTED = Color(0xFFFFD600)
-    val VEHICLE = Color(0xFFFF3D00)
 }
+
+/**
+ * One colour per vehicle (ADR-005): the map's arrow and label use the vehicle's `slot` to pick from here, and so does
+ * the vehicle switcher, so a drone is the same colour everywhere. Defined here, with the other map colours, because
+ * the map is what they must be readable on: light, saturated, and none of them the plan's cyan, the track's magenta
+ * or the area's orange. More vehicles than colours start again from the first; the labels still tell them apart.
+ */
+val VehicleColors: List<Color> = listOf(
+    Color(0xFFFF3D00), // red-orange: the single vehicle's colour since Pass 2
+    Color(0xFFB388FF), // violet
+    Color(0xFFFFFFFF), // white
+    Color(0xFFFF80AB), // pink
+    Color(0xFF1DE9B6), // teal
+    Color(0xFFFFD180), // sand
+)
 
 private val MarkerStyle.color
     get() = when (this) {
@@ -374,8 +402,11 @@ internal val configureRuntimeOnce: Unit by lazy {
 private fun LatLon.toPosition() = Position(longitude = longitude, latitude = latitude)
 
 // GeoJSON puts longitude first: [lon, lat].
-internal fun pointGeoJson(p: LatLon) =
-    """{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[${p.longitude},${p.latitude}]}}"""
+internal fun pointGeoJson(p: LatLon) = labelledPointGeoJson(p, null)
+
+/** A point carrying a label for a text layer. Labels are ours (digits and "L2·1"), so they need no escaping. */
+internal fun labelledPointGeoJson(p: LatLon, label: String?) =
+    """{"type":"Feature","properties":{${label?.let { """"label":"$it"""" } ?: ""}},"geometry":{"type":"Point","coordinates":[${p.longitude},${p.latitude}]}}"""
 
 /** Markers as a FeatureCollection; each point carries its label for the text layer. Labels are ours (numbers, "H"). */
 internal fun markersGeoJson(markers: List<MapOverlay.Marker>) = featureCollection(
@@ -414,13 +445,15 @@ internal fun lineGeoJson(points: List<LatLon>) =
     """{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[${points.joinToString(",") { "[${it.longitude},${it.latitude}]" }}]}}"""
 
 /**
- * A 24 dp arrow pointing up (north at heading 0). Red-orange with a white edge inside a dark outline: the dark edge
- * separates it from the pale street map, the white one from dark satellite imagery.
+ * A 24 dp arrow pointing up (north at heading 0), one per vehicle colour. The colour with a white edge inside a dark
+ * outline: the dark edge separates it from the pale street map, the white one from dark satellite imagery.
  */
-private val VehicleArrow = ImageVector.Builder("vehicle-arrow", 24.dp, 24.dp, 24f, 24f)
-    .path(stroke = SolidColor(MapColors.OUTLINE), strokeLineWidth = 3f, strokeLineJoin = StrokeJoin.Round) { arrow() }
-    .path(fill = SolidColor(MapColors.VEHICLE), stroke = SolidColor(Color.White), strokeLineWidth = 1f, strokeLineJoin = StrokeJoin.Round) { arrow() }
-    .build()
+private val VehicleArrows = VehicleColors.mapIndexed { i, color ->
+    ImageVector.Builder("vehicle-arrow-$i", 24.dp, 24.dp, 24f, 24f)
+        .path(stroke = SolidColor(MapColors.OUTLINE), strokeLineWidth = 3f, strokeLineJoin = StrokeJoin.Round) { arrow() }
+        .path(fill = SolidColor(color), stroke = SolidColor(Color.White), strokeLineWidth = 1f, strokeLineJoin = StrokeJoin.Round) { arrow() }
+        .build()
+}
 
 /**
  * The direction chevron repeated along photo lines, 12 dp. Drawn pointing right: MapLibre lays a line-placed icon's

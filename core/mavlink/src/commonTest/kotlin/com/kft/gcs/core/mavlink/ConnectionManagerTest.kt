@@ -1,5 +1,6 @@
 package com.kft.gcs.core.mavlink
 
+import com.divpundir.mavlink.definitions.common.MissionCount
 import com.divpundir.mavlink.definitions.common.MissionSetCurrent
 import com.divpundir.mavlink.definitions.minimal.Heartbeat
 import com.divpundir.mavlink.definitions.minimal.MavType
@@ -58,16 +59,119 @@ class ConnectionManagerTest {
         val manager = manager(link)
         manager.connect(udp)
         runCurrent()
-        val setCurrent = MissionSetCurrent(seq = 3u)
-        assertIs<TxResult.Rejected>(manager.gateway.send(setCurrent), "no vehicle heard yet: fail closed")
+        val setCurrent = MissionSetCurrent(targetSystem = 1u, seq = 3u)
+        val sender = manager.gateway.forVehicle(1u)
+        assertIs<TxResult.Rejected>(sender.send(setCurrent), "no vehicle heard yet: fail closed")
 
         link.receive(copterHeartbeat(armed = false), seq = 0)
         runCurrent()
-        assertEquals(TxResult.Sent, manager.gateway.send(setCurrent))
+        assertEquals(TxResult.Sent, sender.send(setCurrent))
 
         link.receive(copterHeartbeat(armed = true), seq = 1)
         runCurrent()
-        assertIs<TxResult.Rejected>(manager.gateway.send(setCurrent))
+        assertIs<TxResult.Rejected>(sender.send(setCurrent))
+    }
+
+    private fun ConnectionManager.vehicles() = (state.value as LinkState.Connected).vehicles
+
+    /** ADR-005: one link, two system ids = two vehicles, each with its own armed flag, view and timeout. */
+    @Test
+    fun aLinkCarriesSeveralVehiclesEachWithItsOwnState() = runTest {
+        val link = FakeMavConnection()
+        val manager = manager(link)
+        manager.connect(udp)
+        runCurrent()
+        link.receive(copterHeartbeat(armed = true), seq = 0, systemId = 2u)
+        link.receive(copterHeartbeat(armed = false), seq = 0, systemId = 1u)
+        runCurrent()
+        assertEquals(listOf<UByte>(1u, 2u), manager.vehicles().map { it.systemId }, "by system id, not by arrival")
+        assertEquals(listOf(false, true), manager.vehicles().map { it.armed })
+
+        // Each vehicle's view of the link has that vehicle as `vehicle`; a system that isn't there has none.
+        assertEquals(2u.toUByte(), (manager.state.value.forVehicle(2u) as LinkState.Connected).vehicle?.systemId)
+        assertNull((manager.state.value.forVehicle(3u) as LinkState.Connected).vehicle)
+
+        // The gateway judges each by its own flag: vehicle 2 is armed, vehicle 1 isn't.
+        assertEquals(TxResult.Sent, manager.gateway.forVehicle(1u).send(MissionSetCurrent(targetSystem = 1u, seq = 1u)))
+        assertIs<TxResult.Rejected>(manager.gateway.forVehicle(2u).send(MissionSetCurrent(targetSystem = 2u, seq = 1u)))
+
+        // Only vehicle 1 keeps sending: after the timeout vehicle 2 is gone and vehicle 1 stays.
+        repeat(5) { i ->
+            advanceTimeBy(1.seconds)
+            link.receive(copterHeartbeat(), seq = i + 1, systemId = 1u)
+        }
+        runCurrent()
+        assertEquals(listOf<UByte>(1u), manager.vehicles().map { it.systemId })
+    }
+
+    /**
+     * ADR-005 §4. Two autopilots with system id 1, half a second apart: heartbeats at t = 0, 0.5, 1.0, … The 16th
+     * arrives at t = 7.5 s, which is when the id is marked duplicate (15 at t = 7.0 is still below DUPLICATE_BEATS).
+     */
+    @Test
+    fun twoVehiclesWithOneSystemIdAreAnErrorNotAMerge() = runTest {
+        val link = FakeMavConnection()
+        val manager = manager(link)
+        manager.connect(udp)
+        runCurrent()
+        var seq = 0
+        fun heartbeatsEveryHalfSecond(count: Int) = repeat(count) {
+            link.receive(copterHeartbeat(), seq = seq++)
+            runCurrent()
+            advanceTimeBy(500.milliseconds)
+        }
+        heartbeatsEveryHalfSecond(15) // t = 0 .. 7.0 s
+        assertEquals(listOf(false), manager.vehicles().map { it.duplicateId })
+        heartbeatsEveryHalfSecond(1) // the 16th, at t = 7.5 s
+        assertEquals(listOf(true), manager.vehicles().map { it.duplicateId })
+        val refused = assertIs<TxResult.Rejected>(manager.gateway.forVehicle(1u).send(MissionCount(targetSystem = 1u, count = 1u)))
+        assertTrue(refused.reason.contains("two vehicles"), refused.reason)
+
+        // One of them is switched off: 1 Hz again. Once the 10 s window holds one sender's heartbeats, it clears.
+        repeat(12) {
+            link.receive(copterHeartbeat(), seq = seq++)
+            runCurrent()
+            advanceTimeBy(1.seconds)
+        }
+        assertEquals(listOf(false), manager.vehicles().map { it.duplicateId })
+        assertEquals(TxResult.Sent, manager.gateway.forVehicle(1u).send(MissionCount(targetSystem = 1u, count = 1u)))
+    }
+
+    /** One vehicle at ArduPilot's 1 Hz is never a duplicate, however long it runs: at most 11 heartbeats in any 10 s. */
+    @Test
+    fun oneVehicleAtOneHertzIsNeverADuplicate() = runTest {
+        val link = FakeMavConnection()
+        val manager = manager(link)
+        manager.connect(udp)
+        runCurrent()
+        repeat(40) { i ->
+            link.receive(copterHeartbeat(), seq = i)
+            runCurrent()
+            assertEquals(listOf(false), manager.vehicles().map { it.duplicateId }, "at $i s")
+            advanceTimeBy(1.seconds)
+        }
+    }
+
+    /** Links: numbered in opening order, the same config never opened twice, a number never reused. */
+    @Test
+    fun linksAreNumberedAndNeverOpenedTwice() = runTest {
+        val made = mutableListOf<Int>()
+        val links = Links { id ->
+            made += id
+            ConnectionManager(backgroundScope, { FakeMavConnection() }, testScheduler.timeSource, MutableStateFlow(PodStatus.NoPod), id)
+        }
+        val tcp = LinkConfig.TcpClient("127.0.0.1", 5762)
+        links.connect(udp)
+        links.connect(tcp)
+        links.connect(udp) // already open
+        runCurrent()
+        assertEquals(listOf(1, 2), links.open.value.map { it.id })
+        assertEquals(listOf<LinkConfig?>(udp, tcp), links.open.value.map { it.config })
+
+        links.disconnect(1)
+        links.connect(udp)
+        assertEquals(listOf(2, 3), links.open.value.map { it.id }, "1 is not reused: a VehicleId must never change meaning")
+        assertEquals(listOf(1, 2, 3), made)
     }
 
     @Test

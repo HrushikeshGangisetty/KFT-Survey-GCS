@@ -69,6 +69,7 @@ fun FlyScreen(
                 state.login?.let { StatusChip(it.text, if (it.warning) Status.WARN else Status.OK, icon = KftIcons.Login) }
                 if (state.connected) StatusChip(state.gps.value, state.gps.status(), icon = KftIcons.Gps)
                 state.missionWarning?.let { StatusChip(it, Status.WARN) }
+                state.vehicleProblem?.let { StatusChip(it, Status.CRITICAL) }
             }
             MapCard {
                 // Four tiles a row: Mode, State, Alt, Speed / Heading, Battery, Mission, Photos.

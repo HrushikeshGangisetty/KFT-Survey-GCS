@@ -15,6 +15,11 @@ class GeoJsonTest {
     fun coordinatesAreLongitudeFirst() {
         val home = LatLon(-35.363261, 149.16523)
         assertTrue(pointGeoJson(home).contains("[149.16523,-35.363261]"))
+        // A vehicle's point carries its label for the text under the arrow.
+        assertEquals(
+            """{"type":"Feature","properties":{"label":"L2·1"},"geometry":{"type":"Point","coordinates":[149.16523,-35.363261]}}""",
+            labelledPointGeoJson(home, "L2·1"),
+        )
         assertTrue(lineGeoJson(listOf(home, LatLon(-35.0, 149.0))).contains("[[149.16523,-35.363261],[149.0,-35.0]]"))
     }
 

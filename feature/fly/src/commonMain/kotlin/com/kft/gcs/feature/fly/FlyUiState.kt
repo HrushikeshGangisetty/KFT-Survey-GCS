@@ -3,6 +3,7 @@ package com.kft.gcs.feature.fly
 import androidx.compose.runtime.Immutable
 import com.kft.gcs.core.geo.Geodesy
 import com.kft.gcs.core.geo.LatLon
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.vehicle.GpsFix
 import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.Severity
@@ -30,6 +31,10 @@ data class FlyUiState(
      * only: the GCS can't start or change the flight (spec S9), so the operator re-uploads from Plan if needed.
      */
     val missionWarning: String?,
+    /** Set when the selected vehicle can't be trusted or reached, e.g. a system id used by two vehicles (ADR-005 §4). */
+    val vehicleProblem: String?,
+    /** Every known vehicle, for the switcher. One entry or none = nothing to switch. */
+    val vehicles: List<VehicleChipUi>,
     val overlays: List<MapOverlay>,
     val basemaps: List<TileSourceConfig>,
     val selectedBasemap: TileSourceConfig,
@@ -39,6 +44,20 @@ data class FlyUiState(
 )
 
 data class HudItem(val label: String, val value: String, val warning: Boolean = false)
+
+/**
+ * One vehicle in the switcher. [label] is what the map writes under its arrow; [slot] picks its colour, the same one
+ * as on the map. [connected] is false while its heartbeat is lost.
+ */
+data class VehicleChipUi(val id: VehicleId, val label: String, val slot: Int, val selected: Boolean, val connected: Boolean)
+
+/**
+ * A short label per vehicle: its system id ("2"). When two links carry the same system id, those get the link number
+ * too ("L1·1", "L2·1"), so no two labels are ever the same.
+ */
+fun vehicleLabels(ids: List<VehicleId>): Map<VehicleId, String> = ids.associateWith { id ->
+    if (ids.count { it.systemId == id.systemId } > 1) "L${id.link}·${id.systemId}" else "${id.systemId}"
+}
 
 data class MessageUi(val text: String, val severity: Severity)
 
