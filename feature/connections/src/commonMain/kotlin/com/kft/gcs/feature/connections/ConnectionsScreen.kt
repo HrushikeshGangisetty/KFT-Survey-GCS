@@ -15,6 +15,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -24,7 +26,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -78,6 +79,7 @@ fun ConnectionsRoute(viewModel: ConnectionsViewModel = koinViewModel()) {
             onFormSerialPortChanged = viewModel::onFormSerialPortChanged,
             onFormBaudChanged = viewModel::onFormBaudChanged,
             onRefreshSerialPorts = viewModel::onRefreshSerialPortsClicked,
+            onConnectSerial = viewModel::onConnectSerialClicked,
         )
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
@@ -98,6 +100,7 @@ fun ConnectionsScreen(
     onFormSerialPortChanged: (String) -> Unit,
     onFormBaudChanged: (Int) -> Unit,
     onRefreshSerialPorts: () -> Unit,
+    onConnectSerial: () -> Unit,
 ) {
     // One scroll container for everything; the profile list is short, so it's a plain Column, not a LazyColumn
     // (a LazyColumn inside a vertical scroll crashes on an unbounded height).
@@ -112,7 +115,7 @@ fun ConnectionsScreen(
             val form = @Composable { mod: Modifier ->
                 NewProfileForm(
                     state.form, state.serialPorts, onFormKindChanged, onFormNameChanged, onFormHostChanged,
-                    onFormPortChanged, onFormSerialPortChanged, onFormBaudChanged, onRefreshSerialPorts, onSaveProfile, mod,
+                    onFormPortChanged, onFormSerialPortChanged, onFormBaudChanged, onRefreshSerialPorts, onConnectSerial, onSaveProfile, mod,
                 )
             }
             if (maxWidth > 720.dp) {
@@ -199,6 +202,7 @@ private fun NewProfileForm(
     onSerialPortChanged: (String) -> Unit,
     onBaudChanged: (Int) -> Unit,
     onRefreshSerialPorts: () -> Unit,
+    onConnectSerial: () -> Unit,
     onSave: () -> Unit,
     modifier: Modifier,
 ) {
@@ -209,24 +213,8 @@ private fun NewProfileForm(
             OwnTextField(form.name, form.generation, onNameChanged, "Name (optional)")
             if (form.needsHost) OwnTextField(form.host, form.generation, onHostChanged, "Host")
             if (form.isSerial) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Device", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                    TextButton(onClick = onRefreshSerialPorts) { Text("Refresh") }
-                }
-                if (serialPorts.isEmpty()) {
-                    Text("No serial ports found. Plug in the radio or flight controller, or pair a Bluetooth module in the system settings, then Refresh.", style = MaterialTheme.typography.bodySmall)
-                }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
-                    serialPorts.forEach { p ->
-                        FilterChip(
-                            selected = form.serialPort == p.name,
-                            onClick = { onSerialPortChanged(p.name) },
-                            label = { Text(portLabel(p)) },
-                            // Held by the T12 link (or another Serial link): opening it again would take it away.
-                            enabled = p.inUseBy == null,
-                        )
-                    }
-                }
+                Text("Device", style = MaterialTheme.typography.labelLarge)
+                PortDropdown(form.serialPort, serialPorts, onSerialPortChanged, onRefreshSerialPorts)
                 val note = serialPorts.firstOrNull { it.name == form.serialPort }?.let(::bluetoothNote)
                 if (note != null) {
                     // Over Bluetooth the tablet or PC side has no baud rate; the module's own UART setting is what counts.
@@ -245,7 +233,34 @@ private fun NewProfileForm(
             } else {
                 OwnTextField(form.port, form.generation, onPortChanged, "Port", KeyboardType.Number, form.error)
             }
-            Button(onClick = onSave, modifier = Modifier.align(Alignment.End)) { Text("Save profile") }
+            if (form.isSerial) {
+                // Serial connects straight from the form (pick the port, Connect); saving a profile is optional.
+                Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                    OutlinedButton(onClick = onSave) { Text("Save profile") }
+                    Button(onClick = onConnectSerial) { Text("Connect") }
+                }
+            } else {
+                Button(onClick = onSave, modifier = Modifier.align(Alignment.End)) { Text("Save profile") }
+            }
+        }
+    }
+}
+
+/**
+ * The serial ports as a dropdown. Opening it re-lists the ports, so a radio plugged in a moment ago is there without
+ * a Refresh button. Ports held by this app (the T12 link, another Serial link) are shown but can't be picked.
+ */
+@Composable
+private fun PortDropdown(selected: String, ports: List<SerialPortInfo>, onPick: (String) -> Unit, onOpen: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { onOpen(); open = true }, Modifier.fillMaxWidth()) {
+            Text(ports.firstOrNull { it.name == selected }?.let(::portLabel) ?: "No serial port found · plug it in and open this list again")
+        }
+        DropdownMenu(open, { open = false }) {
+            ports.forEach { p ->
+                DropdownMenuItem(text = { Text(portLabel(p)) }, enabled = p.inUseBy == null, onClick = { onPick(p.name); open = false })
+            }
         }
     }
 }

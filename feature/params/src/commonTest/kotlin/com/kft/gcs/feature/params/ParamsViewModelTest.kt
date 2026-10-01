@@ -187,6 +187,22 @@ class ParamsViewModelTest {
         }
     }
 
+    /** Like the configurator: the parameters arrive when the vehicle becomes ready, not only when Download is pressed. */
+    @Test
+    fun parametersDownloadByThemselvesOnceTheVehicleIsReady() = runTest(dispatcher) {
+        vehicle.value = VehicleState() // link up, nothing heard yet
+        val vm = vm()
+        backgroundScope.launch { vm.state.collect {} }
+        runCurrent()
+        assertEquals("Not downloaded", vm.state.value.status)
+        vehicle.value = VehicleState(connected = true, login = KftLoginStatus.LOGGING_IN)
+        runCurrent()
+        assertEquals("Not downloaded", vm.state.value.status, "waits for the login")
+        vehicle.value = VehicleState(connected = true, login = KftLoginStatus.AUTHENTICATED)
+        runCurrent()
+        assertEquals("3 parameters · 0 modified", vm.state.value.status)
+    }
+
     @Test
     fun noEditingWhileArmedOrBeforeTheLogin() = runTest(dispatcher) {
         val vm = vm()

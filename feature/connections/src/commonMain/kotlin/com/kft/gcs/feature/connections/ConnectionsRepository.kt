@@ -34,6 +34,9 @@ interface ConnectionsRepository {
     fun addProfile(name: String, config: LinkConfig)
     fun deleteProfile(id: String)
     fun connect(profileId: String)
+
+    /** Opens [config] straight away, without a saved profile (the Serial form's Connect button). */
+    fun connectTo(config: LinkConfig)
     fun disconnect()
 
     /** Serial ports present right now (COM ports on desktop, USB-OTG devices on Android), with who holds each. */
@@ -76,6 +79,8 @@ class DefaultConnectionsRepository(
     override fun connect(profileId: String) {
         profiles.value.firstOrNull { it.id == profileId }?.let { manager.connect(it.config) }
     }
+
+    override fun connectTo(config: LinkConfig) = manager.connect(config)
 
     override fun disconnect() = manager.disconnect()
 

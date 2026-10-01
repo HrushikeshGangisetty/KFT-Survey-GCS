@@ -56,7 +56,7 @@ class ConnectionsUiTest {
                 ConnectionsScreen(
                     frozen ?: live, vm::onConnectClicked, vm::onDisconnectClicked, vm::onDeleteClicked, vm::onFormKindChanged,
                     vm::onFormNameChanged, vm::onFormHostChanged, vm::onFormPortChanged, vm::onSaveProfileClicked,
-                    vm::onFormSerialPortChanged, vm::onFormBaudChanged, vm::onRefreshSerialPortsClicked,
+                    vm::onFormSerialPortChanged, vm::onFormBaudChanged, vm::onRefreshSerialPortsClicked, vm::onConnectSerialClicked,
                 )
             }
         }

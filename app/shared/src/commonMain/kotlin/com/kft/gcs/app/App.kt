@@ -46,6 +46,7 @@ import com.kft.gcs.feature.fly.FlyRoute
 import com.kft.gcs.feature.fly.FlyViewModel
 import com.kft.gcs.feature.fly.VideoViewModel
 import com.kft.gcs.feature.params.ParamsRoute
+import com.kft.gcs.feature.params.ParamsViewModel
 import com.kft.gcs.feature.plan.PlanRoute
 import com.kft.gcs.feature.plan.PlanViewModel
 import com.kft.gcs.feature.settings.OfflineMapsRoute
@@ -124,6 +125,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val video: VideoViewModel = koinViewModel()
     val plan: PlanViewModel = koinViewModel()
     val maps: OfflineMapsViewModel = koinViewModel()
+    val params: ParamsViewModel = koinViewModel() // window scope so it downloads on connect, before the Params tab is opened
     val mapsState by maps.state.collectAsStateWithLifecycle()
     val flyState by fly.state.collectAsStateWithLifecycle()
     val planState by plan.state.collectAsStateWithLifecycle()
@@ -167,7 +169,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             composable(Destination.MAPS.route) { OfflineMapsRoute(maps) }
             // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
-            composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute() } }
+            composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute(params) } }
         }
         if (videoSource != null) PipControls(pip, video::onSwapClicked, video::onStatsToggled, video::onHideClicked, Modifier.zIndex(3f))
     }

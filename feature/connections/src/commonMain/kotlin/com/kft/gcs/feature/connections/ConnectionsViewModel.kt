@@ -48,6 +48,7 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
     val effects: Flow<ConnectionsEffect> = _effects.receiveAsFlow()
 
     init {
+        selectFirstFreePort()
         // Tell the user once when a vehicle appears or goes quiet, instead of making them watch the status card.
         viewModelScope.launch {
             repository.linkState
@@ -82,6 +83,21 @@ class ConnectionsViewModel(private val repository: ConnectionsRepository) : View
 
     fun onRefreshSerialPortsClicked() {
         serialPorts.value = repository.serialPorts()
+        selectFirstFreePort()
+    }
+
+    /** The Serial form's Connect: opens the chosen port at the chosen baud rate without saving a profile. */
+    fun onConnectSerialClicked() {
+        form.value.toConfigOrError()
+            .onSuccess(repository::connectTo)
+            .onFailure { error -> form.update { it.copy(error = error.message) } }
+    }
+
+    // Like the configurator: a port is already picked when the list opens, and a pick that was unplugged is replaced.
+    private fun selectFirstFreePort() {
+        val ports = serialPorts.value
+        if (ports.any { it.name == form.value.serialPort && it.inUseBy == null }) return
+        ports.firstOrNull { it.inUseBy == null }?.let { first -> form.update { it.copy(serialPort = first.name) } }
     }
 
     fun onSaveProfileClicked() {

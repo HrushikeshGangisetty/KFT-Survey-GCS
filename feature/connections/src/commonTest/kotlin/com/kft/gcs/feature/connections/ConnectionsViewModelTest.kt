@@ -36,6 +36,8 @@ internal class FakeConnectionsRepository : ConnectionsRepository {
         profiles.update { it + ConnectionProfile("p${it.size}", name, config) }
     override fun deleteProfile(id: String) = profiles.update { list -> list.filterNot { it.id == id } }
     override fun connect(profileId: String) { connected += profileId }
+    val connectedTo = mutableListOf<LinkConfig>()
+    override fun connectTo(config: LinkConfig) { connectedTo += config }
     override fun disconnect() { disconnects++ }
 
     var ports = listOf(SerialPortInfo("COM7", "Silicon Labs CP210x"))
@@ -105,6 +107,29 @@ class ConnectionsViewModelTest {
         assertEquals(1, repository.disconnects)
     }
 
+    /** Serial: the first free port is preselected, and Connect opens it at the chosen baud with no profile saved. */
+    @Test
+    fun serialConnectOpensThePreselectedPortDirectly() = runTest(dispatcher) {
+        val vm = ConnectionsViewModel(repository)
+        vm.onFormKindChanged(LinkKind.SERIAL)
+        vm.onFormBaudChanged(115200)
+        vm.onConnectSerialClicked()
+        assertEquals(listOf<LinkConfig>(LinkConfig.Serial("COM7", 115200)), repository.connectedTo)
+        assertEquals(1, repository.profiles.value.size)
+    }
+
+    @Test
+    fun serialConnectWithNoPortShowsAnErrorAndDoesNotConnect() = runTest(dispatcher) {
+        repository.ports = emptyList()
+        val vm = ConnectionsViewModel(repository)
+        vm.onFormKindChanged(LinkKind.SERIAL)
+        backgroundScope.launch { vm.state.collect {} }
+        vm.onConnectSerialClicked()
+        runCurrent()
+        assertTrue(repository.connectedTo.isEmpty())
+        assertEquals("Pick a serial port (plug it in, then Refresh)", vm.state.value.form.error)
+    }
+
     @Test
     fun savingAValidFormAddsAProfileAndClearsTheForm() = runTest(dispatcher) {
         val vm = ConnectionsViewModel(repository)
@@ -130,11 +155,8 @@ class ConnectionsViewModelTest {
         assertEquals(listOf("COM7"), vm.state.value.serialPorts.map { it.name }, "ports listed at start")
 
         vm.onFormKindChanged(LinkKind.SERIAL)
-        vm.onSaveProfileClicked()
         runCurrent()
-        assertEquals("Pick a serial port (plug it in, then Refresh)", vm.state.value.form.error)
-
-        vm.onFormSerialPortChanged("COM7")
+        assertEquals("COM7", vm.state.value.form.serialPort, "the only free port is preselected")
         vm.onFormBaudChanged(115200)
         vm.onSaveProfileClicked()
         runCurrent()

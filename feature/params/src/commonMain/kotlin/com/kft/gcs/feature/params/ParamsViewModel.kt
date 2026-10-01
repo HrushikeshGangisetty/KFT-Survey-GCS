@@ -24,6 +24,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -99,6 +103,14 @@ class ParamsViewModel(
 
     private val _effects = Channel<ParamsEffect>(Channel.BUFFERED)
     val effects: Flow<ParamsEffect> = _effects.receiveAsFlow()
+
+    init {
+        // Like the configurator: read the parameters as soon as the vehicle is ready (heard, and logged in when it
+        // needs that), without a visit to the Params tab. drop(1): a vehicle that is ready at start isn't a new connection.
+        viewModelScope.launch {
+            vehicle.map(::ready).distinctUntilChanged().drop(1).filter { it }.collect { onDownloadClicked() }
+        }
+    }
 
     fun onDownloadClicked() = runExclusive("Downloading…") {
         repository.downloadAll { done, total -> model.update { it.copy(progress = "Downloading $done / $total") } }
