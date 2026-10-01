@@ -129,6 +129,26 @@ history and every reader of the group list, for no behaviour a number doesn't gi
 
 A plan with one mission and no assignment is saved as file version 1, as before. A job is version 2.
 
+### 9. Progress records and resume (Pass 31)
+
+- **A record per uploaded mission** (`MissionRecords`): its plan text, and one appended line per photo
+  (CAMERA_FEEDBACK position) and per item reached, forced to disk as it happens. After a crash or a restart the
+  records are read back; a truncated last line is skipped. Files: `<data folder>/missions/<time>-sys<N>.log` and `.plan`.
+- **What is left** is found from the last photo actually taken, placed on the plan by geometry (the pass it lies on)
+  and by count (which pass the n-th photo belongs to; in a crosshatch this tells crossing lines apart). The rest
+  starts **one photo spacing before it**, so the two flights overlap by one photo.
+- **Resume** adds the rest to the plan as a new mission (takeoff, transit, the run-in before the resume point, camera
+  on there, every later line). It is then assigned and uploaded like any mission: to the same drone after a battery
+  change, or to another one. Nothing is automatic: the operator presses Resume, the pilot flies it (S9).
+- **Another camera** (the drone taking over carries a different one): the old line positions don't suit it, so the
+  area not yet flown is cut out half a spacing before the first unflown line and planned again with that camera, with
+  a warning. The camera is chosen at Resume; the GCS keeps no list of which drone carries which camera.
+- The map draws the lines already photographed in green over the plan.
+
+Alternatives considered: resuming from the last *item reached* (coarse: a whole line could be reflown or, with a
+missed item report, skipped); MISSION_SET_CURRENT on the same vehicle (works only for the same drone, needs it
+disarmed, and reflies from a waypoint, not from the last photo).
+
 ## Level 2 — the GCS starts missions (not built)
 
 What it would need:

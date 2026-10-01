@@ -17,6 +17,7 @@ import com.kft.gcs.core.planning.altitudeForGsdM
 import com.kft.gcs.core.planning.gsdM
 import com.kft.gcs.core.mission.Mission
 import com.kft.gcs.core.vehicle.FleetVehicle
+import com.kft.gcs.core.vehicle.MissionRecords
 import com.kft.gcs.core.vehicle.MissionRepository
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleState
@@ -64,6 +65,8 @@ enum class ExportFormat(val extension: String) { QGC_PLAN("plan"), WAYPOINTS("wa
  * @param sync shared with the Fly view: this screen writes the plan into it.
  * @param fleet every vehicle, for a job: which vehicles a mission can be given to, and each one's home and fence.
  * @param missionsOf transfers with one named vehicle (`Fleet.missionsOf`), for a job's upload.
+ * @param records the progress of every uploaded mission, saved as it happens. This screen starts a record after
+ *   each upload and builds the mission for what is left of a stopped one. Null: nothing is recorded (most tests).
  */
 class PlanViewModel(
     private val vehicle: StateFlow<VehicleState>,
@@ -73,6 +76,7 @@ class PlanViewModel(
     private val files: PlanFiles,
     private val fleet: StateFlow<List<FleetVehicle>> = MutableStateFlow(emptyList()),
     private val missionsOf: (VehicleId) -> MissionRepository = { missions },
+    private val records: MissionRecords? = null,
 ) : ViewModel(), PlanActions {
 
     private val edit = MutableStateFlow(PlanEdit())
@@ -83,8 +87,15 @@ class PlanViewModel(
     /** One-shot messages for a snackbar: transfer and file results, and errors. */
     val effects: Flow<String> = _effects.receiveAsFlow()
 
-    val state: StateFlow<PlanUiState> = combine(edit, vehicle, settings.settings, sync.state, fleet, ::buildPlanUiState)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), buildPlanUiState(edit.value, vehicle.value, settings.settings.value, sync.state.value, fleet.value))
+    // The stopped missions and their photographed lines change only when a record does (about once per photo), so
+    // they are worked out here once, not on every telemetry update like the rest of the state.
+    private val flown: StateFlow<Flown> = (records?.records ?: MutableStateFlow(emptyList()))
+        .let { r -> combine(r, fleet, settings.settings, ::flownOf) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, Flown())
+
+    val state: StateFlow<PlanUiState> =
+        combine(edit, vehicle, settings.settings, sync.state, combine(fleet, flown, ::Pair)) { e, v, s, sy, (f, fl) -> buildPlanUiState(e, v, s, sy, f, fl) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), buildPlanUiState(edit.value, vehicle.value, settings.settings.value, sync.state.value, fleet.value))
 
     init {
         // Keep the shared plan (for Fly's "≠ plan" warning and photo count) up to date, even while this tab is hidden.
@@ -189,6 +200,33 @@ class PlanViewModel(
     override fun onMissionVehicleSelected(mission: Int, vehicle: VehicleId?) = edit.update { e ->
         val others = e.assignments.filter { (m, v) -> m != mission && v != vehicle }
         e.copy(assignments = if (vehicle == null) others else others + (mission to vehicle))
+    }
+
+    /**
+     * Adds the rest of a stopped mission to the plan as a new mission ([remainderOf]), ready to be given to the same
+     * vehicle (after a battery change) or another one. [cameraName] is the camera of the drone that will fly it, when
+     * that isn't the camera the survey was planned with; null keeps the camera.
+     */
+    override fun onResumeClicked(recordId: String, cameraName: String?) {
+        val record = records?.records?.value?.find { it.id == recordId } ?: return
+        val camera = cameraName?.let { name -> settings.settings.value.cameras.firstOrNull { it.name == name } }
+        val kind = fleet.value.find { it.id == record.vehicle }?.state?.vehicleKind ?: vehicle.value.vehicleKind
+        runCatching { decodePlan(record.plan) }
+            .mapCatching { remainderOf(it, record.photos, record.lastReached, kind, settings.settings.value.limitsFor(kind), camera).getOrThrow() }
+            .onSuccess { rest ->
+                edit.update { e ->
+                    // A mission of its own, after everything already in the plan.
+                    val mission = if (e.groups.none(::hasItems)) e.groups.firstOrNull()?.mission ?: 0 else e.groups.maxOf { it.mission } + 1
+                    val groups = e.groups + rest.groups.map { it.inMission(mission) }
+                    e.changed(null, groups).copy(selectedGroup = e.groups.size, selectedItem = null, form = null)
+                }
+                _effects.trySend("Added the rest of ${record.name} as a mission. ${rest.note} Give it a vehicle and upload.")
+            }
+            .onFailure { _effects.trySend("Can't resume ${record.name}: ${it.message}") }
+    }
+
+    override fun onStoppedDismissed(recordId: String) {
+        records?.dismiss(recordId)
     }
 
     /**
@@ -331,7 +369,10 @@ class PlanViewModel(
         val only = targets.singleOrNull()?.takeIf { it.vehicle == null }
         if (only != null) {
             return transfer("Uploading") { progress ->
-                missions.upload(only.items, progress).map { "Uploaded ${only.items.size} items. Switch to AUTO on the RC to fly it." }
+                missions.upload(only.items, progress).map {
+                    sync.state.value.selected?.let { record(only, it) }
+                    "Uploaded ${only.items.size} items. Switch to AUTO on the RC to fly it."
+                }
             }
         }
         val labels = vehicleLabels(fleet.value.map { it.id })
@@ -340,14 +381,22 @@ class PlanViewModel(
                 val vehicle = t.vehicle!! // a job's targets all name their vehicle (uploadTargets)
                 val name = "${t.label} → vehicle ${labels[vehicle] ?: vehicle.systemId}"
                 val result = missionsOf(vehicle).upload(t.items) { done, total -> edit.update { it.copy(transfer = "Uploading $name: $done / $total…") } }
+                result.onSuccess { record(t, vehicle) }
                 result.fold({ "$name: ${t.items.size} items" }, { "$name FAILED: ${it.message}" })
             }
             val failed = results.count { "FAILED" in it }
             Result.success(
-                (if (failed == 0) "Uploaded ${results.size} missions. " else "$failed of ${results.size} uploads failed. ") +
+                (if (failed == 0) "Uploaded ${results.size} mission${if (results.size == 1) "" else "s"}. " else "$failed of ${results.size} uploads failed. ") +
                     results.joinToString("; ") + if (failed == 0) ". Each pilot switches to AUTO on the RC." else ".",
             )
         }
+    }
+
+    /** Starts the progress record of a mission just uploaded: its groups as plan text, so a resume can rebuild it. */
+    private fun record(target: UploadTarget, vehicle: VehicleId) {
+        val groups = edit.value.groups.filter { it.mission == target.mission }.map { it.inMission(0) }
+        val photos = flatten(groups, this.vehicle.value.vehicleKind, settings.settings.value.limitsFor(this.vehicle.value.vehicleKind)).plannedPhotos
+        records?.started(vehicle, missionName(edit.value.groups, target.mission), encodePlan(groups), target.items.size, photos)
     }
 
     override fun onReadClicked() = transfer("Reading") { progress ->
@@ -498,7 +547,7 @@ class PlanViewModel(
     private fun editSurvey(key: String?, change: (SurveySettings, PlanEdit) -> SurveySettings) = edit.update { e ->
         val g = e.selectedGroup ?: return@update e
         val group = e.groups[g] as? SurveyGroup ?: return@update e
-        val survey = change(group.survey, e)
+        val survey = change(group.survey, e).withoutStaleResume(group.survey)
         if (survey == group.survey) return@update e
         val next = e.changed(key?.let { "$it $g" }, e.groups.replace(g, group.copy(survey = survey)))
         if (survey.polygon.size != group.survey.polygon.size) next.copy(selectedItem = null) else next
@@ -571,6 +620,6 @@ private fun PlanEdit.dropStaleAssignments() = copy(assignments = assignments.fil
 private fun PlanEdit.clampSelection() =
     copy(selectedGroup = selectedGroup?.coerceAtMost(groups.lastIndex)?.takeIf { it >= 0 }, selectedItem = null, form = null)
 
-private fun SurveyGroup.withSurvey(change: (SurveySettings) -> SurveySettings) = copy(survey = change(survey))
+private fun SurveyGroup.withSurvey(change: (SurveySettings) -> SurveySettings) = copy(survey = change(survey).withoutStaleResume(survey))
 
 private fun <T> List<T>.replace(index: Int, item: T) = mapIndexed { i, old -> if (i == index) item else old }

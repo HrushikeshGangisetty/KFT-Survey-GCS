@@ -159,6 +159,8 @@ fun MapView(
             iconAllowOverlap = const(true),
             iconIgnorePlacement = const(true),
         )
+        // What is already photographed, over the plan's own lines.
+        CasedLine("route-covered", rememberGeoJsonSource(routeSource(RouteStyle.COVERED)), MapColors.COVERED, 4.dp)
         // The area outlines on top of the plan, so the boundary the operator is editing always stays readable.
         areas.forEach { (selected, source) -> CasedLine("areas-outline-$selected", source, MapColors.AREA, if (selected) 3.dp else 1.5.dp) }
         overlays.filterIsInstance<MapOverlay.Track>().forEachIndexed { i, track ->
@@ -317,6 +319,7 @@ private object MapColors {
     val TRACK = Color(0xFFFF40C8) // magenta: the path already flown, never mistaken for the plan
     val AREA = Color(0xFFFF9100) // orange: survey areas and their corner handles
     val PHOTO = Color(0xFF76FF03) // lime: photo positions
+    val COVERED = Color(0xFF00C853) // green: survey lines already photographed
     val HOME = Color(0xFF00E676)
     val SELECTED = Color(0xFFFFD600)
 }

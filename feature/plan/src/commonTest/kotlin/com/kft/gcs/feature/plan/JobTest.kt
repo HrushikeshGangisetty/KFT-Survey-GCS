@@ -214,7 +214,7 @@ class JobTest {
     private val perVehicle = mapOf(drone1 to FakeMissions(), drone2 to FakeMissions(), drone3 to FakeMissions())
 
     private fun TestScope.viewModel() =
-        PlanViewModel(selected, perVehicle.getValue(drone1), sync, PlanSettingsRepository(MemoryStore()), files, fleet) { perVehicle.getValue(it) }.also { vm ->
+        PlanViewModel(selected, perVehicle.getValue(drone1), sync, PlanSettingsRepository(MemoryStore()), files, fleet, missionsOf = { perVehicle.getValue(it) }).also { vm ->
             backgroundScope.launch { vm.state.collect {} }
             runCurrent()
         }

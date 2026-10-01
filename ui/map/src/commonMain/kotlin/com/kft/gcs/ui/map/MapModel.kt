@@ -146,8 +146,10 @@ sealed interface MapOverlay {
  * - [PHOTO]: a survey line with the camera on. The part that matters: thick and bright, with direction arrows.
  * - [TURN]: survey flight with the camera off (run-in, run-out, lead-in, the turn to the next line). Thin, faded grey.
  * - [TRANSIT]: to or from home. Dashed grey.
+ * - [COVERED]: a survey line already photographed (a mission that stopped part-way). Green, drawn over the plan, so
+ *   on a line flown half-way the green part is done and the cyan part is still to fly.
  */
-enum class RouteStyle { PLAN, PHOTO, TURN, TRANSIT }
+enum class RouteStyle { PLAN, PHOTO, TURN, TRANSIT, COVERED }
 
 /**
  * How a [MapOverlay.Marker] looks. The map decides the colours, so every screen shows the same meaning the same way.

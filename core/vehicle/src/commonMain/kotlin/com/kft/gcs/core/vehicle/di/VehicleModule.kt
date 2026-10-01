@@ -1,6 +1,11 @@
 package com.kft.gcs.core.vehicle.di
 
 import com.kft.gcs.core.mavlink.Links
+import com.kft.gcs.core.mavlink.di.IoDispatcher
+import com.kft.gcs.core.vehicle.MemoryRecordStore
+import com.kft.gcs.core.vehicle.MissionRecords
+import com.kft.gcs.core.vehicle.RecordStore
+import kotlinx.coroutines.CoroutineDispatcher
 import com.kft.gcs.core.vehicle.Fleet
 import com.kft.gcs.core.vehicle.KFT_APP_SECRET_HEX
 import com.kft.gcs.core.vehicle.MissionRepository
@@ -20,6 +25,11 @@ val SelectedVehicle = named("selectedVehicle")
  * and [ParamRepository] taken from it, so screens that act on "the vehicle" get the selected one (ADR-005 §5).
  * The app shell may provide a [com.kft.gcs.core.mavlink.VehicleRecorder] (the tlog files); without one nothing is recorded.
  */
+/** Wall-clock time in milliseconds since 1970. The shells bind the system clock; common code has none of its own. */
+fun interface WallClock {
+    fun nowMs(): Long
+}
+
 val vehicleModule = module {
     // One for the app: Plan writes the plan into it, the fleet what each vehicle holds, Fly reads it.
     single { MissionSync() }
@@ -31,6 +41,10 @@ val vehicleModule = module {
             sync = get(),
             recorder = getOrNull(),
         )
+    }
+    // Progress records. The shells provide the folder (a RecordStore) and the clock; without them, memory only.
+    single {
+        MissionRecords(get(), get<Fleet>().vehicles, getOrNull<RecordStore>() ?: MemoryRecordStore(), getOrNull<WallClock>()?.let { it::nowMs } ?: { 0L }, get<CoroutineDispatcher>(IoDispatcher))
     }
     single<StateFlow<VehicleState>>(SelectedVehicle) { get<Fleet>().selected }
     single<MissionRepository> { get<Fleet>().missions }

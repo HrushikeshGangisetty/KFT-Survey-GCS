@@ -7,6 +7,7 @@ import com.kft.gcs.core.geoio.toEntry
 import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.planning.CameraOrientation
 import com.kft.gcs.core.planning.EntryCorner
+import com.kft.gcs.core.planning.PlanPosition
 import com.kft.gcs.core.mission.AltitudeFrame
 import com.kft.gcs.core.mission.MissionItem
 import kotlinx.serialization.SerialName
@@ -70,7 +71,12 @@ private data class SurveyEntry(
     val corridorLines: Int = 3,
     val includeCentreLine: Boolean = false,
     override val mission: Int = 0,
+    /** Pass 31: the remainder of a stopped survey starts here (leg, pass, metres along it). */
+    val resume: ResumeEntry? = null,
 ) : GroupEntry
+
+@Serializable
+private data class ResumeEntry(val leg: Int, val pass: Int, val alongM: Double)
 
 /** An editor row. A passthrough row (read from the vehicle, not editable) keeps its raw mission item fields. */
 @Serializable
@@ -134,6 +140,7 @@ private fun MissionGroup.toEntry(): GroupEntry = when (this) {
             name, polygon.map { listOf(it.latitude, it.longitude) }, camera.toEntry(), heightMode, altitudeM, gsdCm,
             orientation, sideOverlapPct, frontOverlapPct, gridAngleDeg, entry, speedMs, turnaroundM, returnHome,
             pattern, crosshatch, crosshatchOffsetM, leftWidthM, rightWidthM, corridorLines, includeCentreLine, mission,
+            resume?.let { ResumeEntry(it.leg, it.pass, it.alongM) },
         )
     }
 }
@@ -146,6 +153,7 @@ private fun GroupEntry.toGroup(): MissionGroup = when (this) {
             polygon.map { LatLon(it[0], it[1]) }, camera.toCamera(), heightMode, altitudeM, gsdCm, orientation,
             sideOverlapPct, frontOverlapPct, gridAngleDeg, entry, speedMs, turnaroundM, returnHome,
             pattern, crosshatch, crosshatchOffsetM, leftWidthM, rightWidthM, corridorLines, includeCentreLine,
+            resume?.let { PlanPosition(it.leg, it.pass, it.alongM) },
         ),
         mission,
     )

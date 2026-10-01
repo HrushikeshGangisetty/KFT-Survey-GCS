@@ -78,6 +78,8 @@ interface PlanActions {
     fun onGroupMissionSelected(index: Int, mission: Int?)
     fun onMissionVehicleSelected(mission: Int, vehicle: VehicleId?)
     fun onSplitSurvey(parts: Int?, altitudeStepM: Double)
+    fun onResumeClicked(recordId: String, cameraName: String?)
+    fun onStoppedDismissed(recordId: String)
     fun onRowSelected(index: Int)
     fun onDeleteClicked(index: Int)
     fun onAltitudeChanged(text: String)
@@ -164,6 +166,7 @@ fun PlanScreen(state: PlanUiState, actions: PlanActions) {
                             TextButton(onClick = actions::onCancelTransferClicked) { Text("Cancel") }
                         }
                     }
+                    if (state.stopped.isNotEmpty()) StoppedList(state.stopped, state.cameraNames, actions)
                     if (state.missions.isNotEmpty()) MissionList(state.missions, state.vehicleChoices, actions)
                     GroupList(state.groups, actions)
                     HorizontalDivider()
@@ -228,6 +231,34 @@ private fun Toolbar(state: PlanUiState, actions: PlanActions, onClear: () -> Uni
             StatusChip(it.text, if (it.warning) Status.WARN else Status.OK, icon = if (it.warning) KftIcons.SyncProblem else KftIcons.Sync)
         }
     }
+}
+
+/**
+ * Missions that stopped part-way (battery, link loss, the pilot's decision), from their saved records. Resume adds
+ * what is left as a new mission; its menu also offers another camera, for when a different drone takes over. The
+ * lines already photographed are green on the map.
+ */
+@Composable
+private fun StoppedList(stopped: List<StoppedMission>, cameras: List<String>, actions: PlanActions) {
+    SectionHeader("Stopped missions")
+    stopped.forEach { m ->
+        var menu by remember(m.id) { mutableStateOf(false) }
+        Row(Modifier.fillMaxWidth().padding(start = Spacing.s), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(m.title, style = MaterialTheme.typography.titleSmall)
+                Text(m.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+            }
+            Box {
+                TextButton(onClick = { menu = true }, enabled = m.canResume) { Text("Resume") }
+                DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("With the same camera") }, onClick = { menu = false; actions.onResumeClicked(m.id, null) })
+                    cameras.forEach { c -> DropdownMenuItem(text = { Text("With $c") }, onClick = { menu = false; actions.onResumeClicked(m.id, c) }) }
+                }
+            }
+            TooltipIconButton(KftIcons.Close, "Put away (it is no longer offered for resume)", { actions.onStoppedDismissed(m.id) })
+        }
+    }
+    HorizontalDivider()
 }
 
 /**

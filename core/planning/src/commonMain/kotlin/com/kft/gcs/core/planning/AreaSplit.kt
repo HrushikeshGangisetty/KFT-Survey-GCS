@@ -60,6 +60,30 @@ fun splitArea(polygon: List<LatLon>, gridAngleDeg: Double, lineSpacingM: Double,
 }
 
 /**
+ * The part of a survey area whose lines are still to be flown, when the first [fromLine] lines (counted from the
+ * [entry] corner's side, as [Pass.line] counts them) are done: the area from midway between line [fromLine] − 1 and
+ * line [fromLine] to the far edge. For planning the rest again with different settings (another camera).
+ *
+ * The cut is half a spacing before the first unflown line, exactly where the done lines' share of the area ends, so
+ * a new grid over the rest starts no more than half of its own spacing from it: no gap at the hand-over.
+ *
+ * Null when nothing is left ([fromLine] ≥ the number of lines); the whole area when nothing is done.
+ */
+fun remainingArea(polygon: List<LatLon>, gridAngleDeg: Double, lineSpacingM: Double, entry: EntryCorner, fromLine: Int): List<LatLon>? {
+    requireSurveyablePolygon(polygon)
+    if (fromLine <= 0) return polygon
+    val projection = projectionFor(polygon)
+    val frame = GridFrame(gridAngleDeg)
+    val corners = polygon.map { frame.toGrid(projection.toLocal(it)) }
+    val lines = sweepLines(corners, lineSpacingM)
+    if (fromLine >= lines.size) return null
+    val fromRight = entry == EntryCorner.BOTTOM_RIGHT || entry == EntryCorner.TOP_RIGHT
+    val rest = if (fromRight) clip(corners, lines[lines.lastIndex - fromLine] + lineSpacingM / 2, keepAbove = false)
+    else clip(corners, lines[fromLine] - lineSpacingM / 2, keepAbove = true)
+    return rest.map { projection.toLatLon(frame.fromGrid(it.across, it.along)) }.takeIf { it.size >= 3 }
+}
+
+/**
  * Sutherland–Hodgman against one line `across = at`: keeps the side above it ([keepAbove]) or below, adding the
  * points where edges cross the line. An infinite [at] keeps everything.
  */

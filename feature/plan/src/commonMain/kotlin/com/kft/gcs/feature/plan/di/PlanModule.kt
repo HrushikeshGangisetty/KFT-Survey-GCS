@@ -13,5 +13,5 @@ import org.koin.dsl.module
  */
 val planModule = module {
     single { PlanSettingsRepository(get()) }
-    viewModel { get<Fleet>().let { fleet -> PlanViewModel(get(SelectedVehicle), get(), get(), get(), get(), fleet.vehicles, fleet::missionsOf) } }
+    viewModel { get<Fleet>().let { fleet -> PlanViewModel(get(SelectedVehicle), get(), get(), get(), get(), fleet.vehicles, fleet::missionsOf, get()) } }
 }

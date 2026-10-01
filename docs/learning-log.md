@@ -3655,3 +3655,105 @@ headless UI test, the logic by the SITL run.
 - The limits' defaults (120 m, 2 km) are starting values: set them for the operation.
 - A plan saved as a job (version 2) can't be opened by a build from before this pass; it says so.
 - **Next: Pass 31** (progress saved as it happens, the remainder mission, resume on the same or another drone).
+
+## Pass 31 — Progress saved as it happens, and resuming a stopped survey on the same or another drone (2026-10-02)
+
+### What changed
+- **`core/planning/Resume.kt`** (new): `locateLastPhoto` (where on the plan the last photo was taken),
+  `remainderFrom` (the plan for what is left), `coveredLines`. **`AreaSplit.kt`**: `remainingArea` (the unflown part
+  of an area, for planning it again with another camera).
+- **`core/vehicle/MissionRecords.kt`** (new): one record per uploaded mission, appended to a file per photo and per
+  item reached; `RecordStore` and an in-memory one.
+- **`feature/plan`**: `Remainder.kt` (new, `remainderOf`); `SurveySettings.resume`; `flatten` applies it and reports
+  the covered lines; the plan file keeps it; the ViewModel starts a record after each upload and adds the rest of a
+  stopped mission as a new mission; the panel lists "Stopped missions" with Resume (same or another camera).
+- **`ui/map`**: `RouteStyle.COVERED` (green, over the plan's own lines).
+- **`app/shared`**: `FileRecordStore` (each append is forced to disk); both shells bind the `missions` folder and the clock.
+- **`tools/sitl`**: `sitl_pilot.py --low-battery-after N`; `photo_check.py` takes several photo files and has `--coverage`.
+- **`docs/decisions/ADR-005`**: section 9.
+
+### How it works
+```
+upload ─▶ MissionRecords.started ─▶ <id>.plan + <id>.log
+the drone flies ─▶ VehicleState.photos / mission.lastReached change ─▶ "photo <lat> <lon>" / "reached <n>" appended
+battery RTL, link loss, pilot's stop ─▶ the record is "interrupted" ─▶ Plan lists it under Stopped missions
+
+Resume ─▶ decodePlan(record.plan) ─▶ remainderOf
+            ├─ same camera:    survey.copy(resume = locateLastPhoto(photos))
+            │                  flatten ─▶ planSurvey ─▶ remainderFrom(resume): start one photo back, run-in before it
+            └─ another camera: remainingArea(...) ─▶ a new survey over the unflown part, with that camera, and a warning
+        ─▶ a new mission in the job ─▶ give it a vehicle ─▶ upload ─▶ the pilot flies it
+map: green = coveredLines (already photographed), cyan = still to fly
+```
+
+### Engineering learnings
+- **Append-only files for crash safety.** A record is a header and then one line per event, each forced to disk.
+  Nothing is ever rewritten, so a crash can only cut the last line short, and the reader skips a line it can't
+  parse. A JSON document rewritten on every photo could be left half-written, which loses everything.
+- **Two weak clues make one strong one.** The count of photos says which line was being flown but drifts when photos
+  are missed. The position of the last photo says where it is but can lie on two lines at once (a crosshatch).
+  Using geometry to find the candidates and the count to choose between them is robust to both; where they still
+  tie, the earlier pass wins, because flying a little twice is safe and leaving a gap is not. Each case has a test.
+- **The resume point is data on the survey, not a list of waypoints.** The remainder is still a survey with its
+  parameters, plus "start here". It is saved in the plan file, shows its stats, and regenerates its items. The cost:
+  the point only fits the lines as they were, so any edit that moves the lines clears it (and the panel says so).
+- **One photo back.** Starting exactly at the last photo would leave no shared photo between the two flights. One
+  trigger distance back repeats the last photo, which is what stitching needs. In SITL: line 3 has 13 photos, its
+  own 11 plus the 2 repeated.
+- **A different camera means a different grid.** Line spacing and photo spacing come from the camera, so the old
+  lines are wrong for it. The unflown area is cut where the done lines' share ends and planned afresh. Refusing the
+  cases that can't be cut cleanly (crosshatch, corridor, a plane's skipped-line order) is better than guessing.
+- **Records are opaque to `core:vehicle`.** It stores the plan as text and never reads it; only the Plan tab does.
+  That keeps the dependency direction (features on core, never the other way).
+- **The hand-worked tests moved off round numbers again** (a 100 m line with a 10 m trigger is 10 or 11 photos on a
+  rounding error; 104 m is not).
+- **Ponytail review (lite):** nothing cut. Kept: `RecordStore` (the platform seam, and the test fake).
+
+### What to look at
+1. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/Resume.kt` — `locateLastPhoto` and `remainderFrom`.
+2. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/MissionRecords.kt` — `follow` and `load`.
+3. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/Remainder.kt` — `remainderOf`.
+
+### Tests
+`gradlew.bat check`: pass, 918 test results, 0 failures.
+- `ResumeTest` (10, one field worked by hand in the file's header: 10 lines, 11 photos each): the last photo found
+  on its pass; slightly off the line; with 7 photos missed; off every line (count fallback); the remainder (start at
+  (70, 10), run-in at (70, 5), 87 photos = 85 left + 2 repeated); resuming at a pass's start; covered lines; a
+  crosshatch's crossing lines told apart; the remaining area (from x = 55; from the east, up to x = 235).
+- `MissionRecordsTest` (5): the log file line by line; nothing from before the upload is counted; a restart with the
+  last line cut short, and the record going on being filled when the drone reappears; not attaching to a different
+  mission; dismiss.
+- `RemainderTest` (8): same camera (items start with takeoff, run-in, camera on at (70, 10)); another camera (area
+  from x = 55, 4 lines at 60 m spacing, the warning); crosshatch refused; waypoints after the last item reached;
+  nothing or everything flown; the resume point saved and cleared by a geometry edit; and through the ViewModel:
+  upload → record → the drone stops → listed, drawn green, resumed as a new mission, uploaded to drone 2; a mission
+  still in AUTO can't be resumed yet.
+
+**SITL, run this pass** (`start-sitl.ps1 -Count 2`): `ResumeSitlRun.droneTwoFinishesWhatDroneOneStarted` with
+`KFT_SITL_FLEET=127.0.0.1:5762,127.0.0.1:5772 KFT_SITL_OUT=<dir>`. A 160 m × 110 m survey (8 lines, 88 photos) on
+drone 1; `sitl_pilot.py --low-battery-after 30` dropped SIM_BATT_VOLTAGE to 10 V at photo 30; ArduPilot's battery
+failsafe switched to RTL at photo 33. The Plan tab listed "Survey 1 · vehicle 1 · 33 / 88 photos · item 20 of 51
+reached · stopped"; Resume added "Survey 1 (rest)" (39 items, from line 3); uploaded to drone 2, which took 57
+photos. `photo_check.py --coverage` over both files: **88 planned photo positions, 0 without a photo; largest step
+between neighbouring photos 10.1 m (trigger 10.0 m); line 3 has 13 photos (11 + the 2 repeated)**; every photo
+within 0.3 m of its line. Pass, 8 min.
+Not run in the real window this pass; the green "covered" lines are checked through the overlay list in the tests.
+
+### Safety
+- No allowlist change, no new message. Records are written from telemetry already received.
+- Resume sends nothing by itself: it adds a mission to the plan. Upload and flight are as before (the operator
+  uploads, the pilot switches to AUTO, S9). `MISSION_SET_CURRENT` is not used.
+- The remainder mission starts with its own takeoff and uses the receiving vehicle's home as seq 0 (S11).
+- The simulated low battery in the SITL check is set by the pilot script (`SIM_BATT_VOLTAGE`, `BATT_FS_LOW_ACT`),
+  never by the GCS.
+
+### Open questions / next
+- **`ponytail:` / known limits:** with several surveys in one mission, the survey being flown is picked by photo
+  count; photos taken while the app was down are missing from the record (the resume point is still right); another
+  camera can't resume a crosshatch, a corridor or a plane's skipped-line plan; the camera of the drone taking over is
+  chosen at Resume (the GCS keeps no drone → camera list); old records stay on disk until dismissed.
+- The battery failsafe needs about 10 s (BATT_LOW_TIMER), so a few photos are taken after the battery "runs out";
+  they count as covered.
+- A mission is "stopped" when its vehicle isn't armed in AUTO. A pilot who pauses in LOITER and returns to AUTO makes
+  it "flying" again; nothing is lost.
+- **Next: Pass 32** (fleet dashboard, alerts, per-vehicle colours on the map).

@@ -8,6 +8,7 @@ import com.kft.gcs.core.planning.CameraOrientation
 import com.kft.gcs.core.planning.CorridorShape
 import com.kft.gcs.core.planning.Crosshatch
 import com.kft.gcs.core.planning.EntryCorner
+import com.kft.gcs.core.planning.PlanPosition
 import com.kft.gcs.core.planning.SurveyHeight
 import com.kft.gcs.core.planning.SurveyLimits
 import com.kft.gcs.core.planning.SurveyParams
@@ -15,6 +16,8 @@ import com.kft.gcs.core.planning.SurveyPlan
 import com.kft.gcs.core.planning.Turnaround
 import com.kft.gcs.core.planning.cameraOff
 import com.kft.gcs.core.planning.cameraOffDistanceM
+import com.kft.gcs.core.planning.coveredLines
+import com.kft.gcs.core.planning.remainderFrom
 import com.kft.gcs.core.planning.viaDistancesM
 import com.kft.gcs.core.planning.gsdM
 import com.kft.gcs.core.planning.planSurvey
@@ -70,6 +73,9 @@ enum class SurveyPattern { AREA, CORRIDOR }
  * @property polygon the area's corners, or for a [SurveyPattern.CORRIDOR] its centre line, in order.
  * @property crosshatch area only: fly it again with the lines at 90°, [crosshatchOffsetM] higher (negative: lower).
  * @property leftWidthM / [rightWidthM] / [corridorLines] / [includeCentreLine] corridor only ([CorridorShape]).
+ * @property resume set on the remainder of a survey that stopped part-way: where its last photo was taken. The
+ *   mission then starts there (one photo spacing back) instead of at the first line. It only fits the lines as they
+ *   were flown, so changing the area, angle, overlaps, height or camera clears it ([withoutStaleResume]).
  */
 data class SurveySettings(
     val polygon: List<LatLon> = emptyList(),
@@ -92,8 +98,13 @@ data class SurveySettings(
     val rightWidthM: Double = 25.0,
     val corridorLines: Int = 3,
     val includeCentreLine: Boolean = false,
+    val resume: PlanPosition? = null,
 ) {
     val isCorridor: Boolean get() = pattern == SurveyPattern.CORRIDOR
+
+    /** This survey with [resume] dropped if anything that moves its lines differs from [before]. Speed and "return home" don't. */
+    fun withoutStaleResume(before: SurveySettings): SurveySettings =
+        if (resume != null && copy(speedMs = before.speedMs, returnHome = before.returnHome) != before) copy(resume = null) else this
 
     /** The corridor's shape; null for an area. */
     fun corridorShape(): CorridorShape? =
@@ -150,9 +161,13 @@ fun defaultSurvey(kind: VehicleKind?, camera: Camera): SurveySettings {
 /**
  * One group after flattening: its mission items, the seq number of its first item within its own mission (S11: a
  * mission's first item is 1), and for a survey the worked-out [plan] or the [error] that stopped it (too few corners,
- * bad overlap…).
+ * bad overlap…). For the remainder of a stopped survey, [plan] is what is left and [covered] the lines already
+ * photographed.
  */
-data class FlatGroup(val group: MissionGroup, val items: List<MissionItem>, val firstSeq: Int, val plan: SurveyPlan?, val error: String?)
+data class FlatGroup(
+    val group: MissionGroup, val items: List<MissionItem>, val firstSeq: Int, val plan: SurveyPlan?, val error: String?,
+    val covered: List<List<LatLon>> = emptyList(),
+)
 
 /**
  * The plan's groups with their items, in the editor's order (so index i here is group i there). With one mission,
@@ -182,7 +197,16 @@ fun flatten(groups: List<MissionGroup>, kind: VehicleKind?, limits: SurveyLimits
             is WaypointGroup -> FlatGroup(group, toMissionItems(group.items), first, null, null)
             is SurveyGroup -> {
                 val survey = group.survey
-                val plan = if (survey.polygon.size < survey.minPoints) null else runCatching { planSurvey(survey.toParams(kind), limits) }
+                var covered = emptyList<List<LatLon>>()
+                val plan = if (survey.polygon.size < survey.minPoints) null else runCatching {
+                    val whole = planSurvey(survey.toParams(kind), limits)
+                    val resume = survey.resume ?: return@runCatching whole
+                    require(resume.leg < whole.legs.size && resume.pass < whole.legs[resume.leg].grid.passes.size) {
+                        "The point this survey resumes from no longer fits its lines. Delete this group and resume the stopped mission again."
+                    }
+                    covered = whole.coveredLines(resume)
+                    whole.remainderFrom(resume, limits)
+                }
                 val takeoff = first == 1 && kind != VehicleKind.PLANE
                 when {
                     plan == null -> FlatGroup(
@@ -190,7 +214,7 @@ fun flatten(groups: List<MissionGroup>, kind: VehicleKind?, limits: SurveyLimits
                         if (survey.isCorridor) "Click the map to draw the centre line (at least 2 points)." else "Click the map to add at least 3 corners.",
                     )
                     plan.isFailure -> FlatGroup(group, emptyList(), first, null, plan.exceptionOrNull()?.message)
-                    else -> plan.getOrThrow().let { FlatGroup(group, surveyItems(it, group.survey, takeoff), first, it, null) }
+                    else -> plan.getOrThrow().let { FlatGroup(group, surveyItems(it, group.survey, takeoff), first, it, null, covered) }
                 }
             }
         }

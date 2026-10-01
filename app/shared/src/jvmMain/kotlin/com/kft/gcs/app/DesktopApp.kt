@@ -7,6 +7,8 @@ import com.kft.gcs.core.mavlink.SerialPorts
 import com.kft.gcs.core.mavlink.TlogFiles
 import com.kft.gcs.core.mavlink.VehicleRecorder
 import com.kft.gcs.core.mavlink.di.IoDispatcher
+import com.kft.gcs.core.vehicle.RecordStore
+import com.kft.gcs.core.vehicle.di.WallClock
 import com.kft.gcs.feature.connections.ProfileStore
 import com.kft.gcs.feature.fly.VideoStore
 import com.kft.gcs.feature.params.MetadataSource
@@ -38,6 +40,8 @@ private val desktopModule = module {
     val dir = System.getenv("APPDATA")?.let { File(it, "KFT-GCS") } ?: File(System.getProperty("user.home"), ".kft-gcs")
     single { SerialPorts() }
     single<VehicleRecorder> { TlogFiles(File(dir, "tlogs"), get(IoDispatcher)) }
+    single<RecordStore> { FileRecordStore(File(dir, "missions")) }
+    single { WallClock(System::currentTimeMillis) }
     single<ProfileStore> { FileTextStore(File(dir, "connection-profiles.json")) }
     single<SettingsStore> { FileTextStore(File(dir, "plan-settings.json")) }
     single<ThemeStore> { FileTextStore(File(dir, "theme.txt")) }

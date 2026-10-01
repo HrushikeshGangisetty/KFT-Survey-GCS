@@ -11,10 +11,13 @@ import com.kft.gcs.core.planning.SurveyWarning
 import com.kft.gcs.core.planning.SurveyPlan
 import com.kft.gcs.core.planning.MIN_CORRIDOR_SIDE_OVERLAP
 import com.kft.gcs.core.planning.corridorOutline
+import com.kft.gcs.core.planning.coveredLines
+import com.kft.gcs.core.planning.locateLastPhoto
 import com.kft.gcs.core.planning.entryCornerPositions
 import com.kft.gcs.core.mission.MissionCommand
 import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.FleetVehicle
+import com.kft.gcs.core.vehicle.MissionRecord
 import com.kft.gcs.core.vehicle.MissionSyncState
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.sameMission
@@ -64,7 +67,19 @@ data class PlanUiState(
     /** The upload-check limits, for the settings fields. */
     val maxAltitudeM: Double? = null,
     val maxDistanceM: Double? = null,
+    /** Missions that stopped part-way and can be resumed. */
+    val stopped: List<StoppedMission> = emptyList(),
+    /** Every camera's name, for "resume with another camera". */
+    val cameraNames: List<String> = emptyList(),
 )
+
+/**
+ * A mission that was flown part-way (its record, Pass 31). [canResume] is false while its vehicle is still flying it.
+ */
+data class StoppedMission(val id: String, val title: String, val detail: String, val canResume: Boolean)
+
+/** What the records add to the screen: the list of stopped missions and the lines they have already photographed. */
+internal data class Flown(val stopped: List<StoppedMission> = emptyList(), val covered: List<List<LatLon>> = emptyList())
 
 /** @property mission "M2" when the plan has several missions; [missionChoices] are the missions the group can move to. */
 data class GroupHeader(
@@ -177,7 +192,10 @@ internal fun checkMission(items: List<MissionItem>, state: VehicleState, setting
  * [vehicle] is the selected vehicle's state; [fleet] is every vehicle, for a job's assignments (empty in a
  * single-vehicle setup and in most tests).
  */
-internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: PlanSettings, sync: MissionSyncState, fleet: List<FleetVehicle> = emptyList()): PlanUiState {
+internal fun buildPlanUiState(
+    e: PlanEdit, vehicle: VehicleState, settings: PlanSettings, sync: MissionSyncState,
+    fleet: List<FleetVehicle> = emptyList(), flown: Flown = Flown(),
+): PlanUiState {
     val kind = vehicle.vehicleKind
     val flat = flatten(e.groups, kind, settings.limitsFor(kind))
     val busy = e.transfer != null
@@ -205,6 +223,8 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
         // Each mission's path starts and ends at its own vehicle's home.
         val homes = ids.associateWith { stateOf(it)?.home?.position }
         ids.forEach { addAll(routeOverlays(homes[it], flat.only(it))) }
+        // Lines already photographed: of the stopped missions on record, and of the remainders in this plan.
+        (flown.covered + flat.groups.flatMap { it.covered }).distinct().forEach { add(MapOverlay.Route(it, RouteStyle.COVERED)) }
         home?.let { add(MapOverlay.Marker(HOME_MARKER, it, "H", MarkerStyle.HOME)) }
         homes.values.filterNotNull().filter { it != home }.distinct().forEachIndexed { i, at -> add(MapOverlay.Marker("$HOME_MARKER-other$i", at, "H", MarkerStyle.HOME)) }
         flat.groups.forEachIndexed { g, fg ->
@@ -309,6 +329,45 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
         vehicleChoices = fleet.map { VehicleChoice(it.id, "Vehicle ${labels.getValue(it.id)}") },
         maxAltitudeM = settings.maxAltitudeM,
         maxDistanceM = settings.maxDistanceM,
+        stopped = flown.stopped,
+        cameraNames = settings.cameras.map { it.name },
+    )
+}
+
+/**
+ * The stopped missions among [records] as rows, and the lines each has photographed so far (worked out from the
+ * record's own plan text; a text that can't be read gives no lines).
+ */
+internal fun flownOf(records: List<MissionRecord>, fleet: List<FleetVehicle>, settings: PlanSettings): Flown {
+    val labels = vehicleLabels(fleet.map { it.id })
+    val stopped = records.filter { it.interrupted }
+    return Flown(
+        stopped = stopped.map { r ->
+            val state = fleet.find { it.id == r.vehicle }?.state
+            val flying = state?.armed == true && state.flightMode == "Auto"
+            StoppedMission(
+                id = r.id,
+                title = "${r.name} · vehicle ${labels[r.vehicle] ?: r.vehicle.systemId}",
+                detail = listOfNotNull(
+                    "${r.photos.size} / ${r.plannedPhotos} photos".takeIf { r.plannedPhotos > 0 },
+                    r.lastReached?.let { "item $it of ${r.itemCount} reached" },
+                    if (flying) "flying" else "stopped",
+                ).joinToString(" · "),
+                canResume = !flying,
+            )
+        },
+        covered = stopped.filter { it.photos.isNotEmpty() }.flatMap { r ->
+            runCatching {
+                val kind = fleet.find { it.id == r.vehicle }?.state?.vehicleKind
+                // Each survey of the mission, with the photos that fall to it by count (as remainderOf does).
+                var before = 0
+                flatten(decodePlan(r.plan), kind, settings.limitsFor(kind)).groups.mapNotNull { it.plan }.flatMap { plan ->
+                    val own = r.photos.drop(before).take(plan.stats.photoCount)
+                    before += plan.stats.photoCount
+                    plan.locateLastPhoto(own)?.let { plan.coveredLines(it) } ?: emptyList()
+                }
+            }.getOrDefault(emptyList())
+        },
     )
 }
 
@@ -448,7 +507,9 @@ private fun surveyPanel(group: SurveyGroup, flat: FlatGroup, selectedItem: Int?,
         altitudeM = plan?.altitudeM,
         gsdCm = plan?.gsdM?.times(100),
         stats = stats,
-        warnings = plan?.warnings?.map(::warningText) ?: emptyList(),
+        warnings = listOfNotNull(
+            s.resume?.let { "This is the rest of a stopped survey: the lines already photographed (green on the map) are left out. Changing its area, angle, overlaps, height or camera makes it the whole survey again." },
+        ) + (plan?.warnings?.map(::warningText) ?: emptyList()),
         error = flat.error,
         cornerCount = s.polygon.size,
         cornerSelected = selectedItem != null && selectedItem in s.polygon.indices,

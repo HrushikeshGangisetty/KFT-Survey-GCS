@@ -68,7 +68,7 @@ class PlanUiTest {
         val drone2 = VehicleId(1, 2u)
         val fleet = MutableStateFlow(listOf(FleetVehicle(VehicleId(1, 1u), 0, vehicle.value), FleetVehicle(drone2, 1, vehicle.value)))
         val toDrone2 = FakeMissions()
-        val vm = PlanViewModel(vehicle, FakeMissions(), MissionSync(), PlanSettingsRepository(MemoryStore()), FakeFiles(), fleet) { toDrone2 }
+        val vm = PlanViewModel(vehicle, FakeMissions(), MissionSync(), PlanSettingsRepository(MemoryStore()), FakeFiles(), fleet, missionsOf = { toDrone2 })
         setContent { KftTheme(ThemeMode.DARK) { PlanRoute(vm) } }
         onNodeWithContentDescription("Add survey").performClick()
         area.forEach(vm::onMapClick)
