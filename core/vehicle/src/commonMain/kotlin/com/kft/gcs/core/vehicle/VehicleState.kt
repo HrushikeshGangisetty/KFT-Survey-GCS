@@ -79,11 +79,17 @@ data class VehicleState(
         }
 }
 
+/**
+ * The voltage under which the vehicle's own low-battery failsafe acts (ArduPilot BATT_LOW_VOLT; 0 = that failsafe is
+ * off), or null when the vehicle hasn't reported it.
+ */
+val VehicleState.batteryLowVolts: Double? get() = watchedParams["BATT_LOW_VOLT"]?.toDouble()?.takeIf { it > 0 }
+
 /** An enabled fence's limits; a null limit is one the fence doesn't have. Altitude is above home. */
 data class Fence(val altMaxM: Double?, val radiusM: Double?)
 
 /** Parameters the GCS reads for its own checks; asked for at connect ([VehicleRepository]) and kept in [VehicleState.watchedParams]. */
-val WATCHED_PARAMS = listOf("FENCE_ENABLE", "FENCE_TYPE", "FENCE_ALT_MAX", "FENCE_RADIUS")
+val WATCHED_PARAMS = listOf("FENCE_ENABLE", "FENCE_TYPE", "FENCE_ALT_MAX", "FENCE_RADIUS", "BATT_LOW_VOLT")
 
 /**
  * Photos kept for the map. A day's survey is a few thousand; beyond this the oldest are dropped from the map.

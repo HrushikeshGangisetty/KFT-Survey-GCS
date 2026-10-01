@@ -41,7 +41,7 @@ private val desktopModule = module {
     single { SerialPorts() }
     single<VehicleRecorder> { TlogFiles(File(dir, "tlogs"), get(IoDispatcher)) }
     single<RecordStore> { FileRecordStore(File(dir, "missions")) }
-    single { WallClock(System::currentTimeMillis) }
+    single<WallClock> { SystemWallClock }
     single<ProfileStore> { FileTextStore(File(dir, "connection-profiles.json")) }
     single<SettingsStore> { FileTextStore(File(dir, "plan-settings.json")) }
     single<ThemeStore> { FileTextStore(File(dir, "theme.txt")) }

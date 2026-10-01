@@ -25,9 +25,13 @@ val SelectedVehicle = named("selectedVehicle")
  * and [ParamRepository] taken from it, so screens that act on "the vehicle" get the selected one (ADR-005 §5).
  * The app shell may provide a [com.kft.gcs.core.mavlink.VehicleRecorder] (the tlog files); without one nothing is recorded.
  */
-/** Wall-clock time in milliseconds since 1970. The shells bind the system clock; common code has none of its own. */
-fun interface WallClock {
+/** The device's clock. The shells bind the system clock; common code has none of its own. */
+interface WallClock {
+    /** Milliseconds since 1970. */
     fun nowMs(): Long
+
+    /** The local time of day as text, "14:03:22". */
+    fun timeOfDay(): String
 }
 
 val vehicleModule = module {

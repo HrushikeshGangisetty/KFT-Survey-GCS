@@ -31,8 +31,9 @@ import kotlinx.coroutines.launch
  * One vehicle as the screens see it: who it is, what it reports, and whether it can be trusted.
  * @property slot 0, 1, 2… in the order vehicles were first heard. The map and the switcher pick the vehicle's colour by it.
  * @property duplicateId two autopilots on its link are using its system id (ADR-005 §4): nothing can be sent to it.
+ * @property link its link in words ("UDP listen :14550"), for the fleet dashboard.
  */
-data class FleetVehicle(val id: VehicleId, val slot: Int, val state: VehicleState, val duplicateId: Boolean = false)
+data class FleetVehicle(val id: VehicleId, val slot: Int, val state: VehicleState, val duplicateId: Boolean = false, val link: String = "")
 
 /**
  * Every vehicle on every link (ADR-005 §2), and which one is selected.
@@ -80,11 +81,13 @@ class Fleet(
     /** The vehicle Fly's HUD, Plan's transfers and Params act on. The first vehicle heard is selected by itself. */
     val selectedId: StateFlow<VehicleId?> = _selectedId.asStateFlow()
 
-    /** Every known vehicle with its latest state, in the order they were first heard. */
+    /** Every known vehicle with its latest state, by link and system id (so lists read 1, 2, 3 whichever was heard first). */
     val vehicles: StateFlow<List<FleetVehicle>> = entries
         .flatMapLatest { list ->
             if (list.isEmpty()) flowOf(emptyList())
-            else combine(list.map { e -> combine(e.state, e.link) { state, link -> FleetVehicle(e.id, e.slot, state, link.isDuplicate()) } }) { it.toList() }
+            else combine(list.sortedWith(compareBy({ it.id.link }, { it.id.systemId })).map { e ->
+                combine(e.state, e.link) { state, link -> FleetVehicle(e.id, e.slot, state, link.isDuplicate(), link.summary()) }
+            }) { it.toList() }
         }
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
@@ -194,6 +197,12 @@ class Fleet(
  */
 fun vehicleLabels(ids: List<VehicleId>): Map<VehicleId, String> = ids.associateWith { id ->
     if (ids.count { it.systemId == id.systemId } > 1) "L${id.link}·${id.systemId}" else "${id.systemId}"
+}
+
+private fun LinkState.summary() = when (this) {
+    LinkState.Disconnected -> ""
+    is LinkState.Connecting -> config.summary
+    is LinkState.Connected -> config.summary
 }
 
 private fun LinkState.isDuplicate() = (this as? LinkState.Connected)?.vehicle?.duplicateId == true

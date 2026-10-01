@@ -108,15 +108,21 @@ sealed interface MapOverlay {
         val selected: Boolean = true,
     ) : MapOverlay
 
-    /** The path flown so far. */
-    data class Track(val points: List<LatLon>) : MapOverlay
+    /**
+     * The path flown so far. [slot] is the vehicle's colour slot ([VehicleColors]) when several vehicles are shown,
+     * so each track is its drone's colour; null (one vehicle) keeps the usual magenta.
+     */
+    data class Track(val points: List<LatLon>, val slot: Int? = null) : MapOverlay
 
     /**
      * A piece of the planned path, drawn in [style]. A plan is several of these: the transit from home, waypoint
      * legs, a survey's photo lines and the turns between them. Drawn in a different colour from [Track], the path
      * already flown.
+     *
+     * With [slot] set (a job: the mission belongs to that vehicle), the [RouteStyle.PLAN] and [RouteStyle.PHOTO]
+     * pieces take the vehicle's colour, paler than its track, so plan and flown path can still be told apart.
      */
-    data class Route(val points: List<LatLon>, val style: RouteStyle = RouteStyle.PLAN) : MapOverlay
+    data class Route(val points: List<LatLon>, val style: RouteStyle = RouteStyle.PLAN, val slot: Int? = null) : MapOverlay
 
     /**
      * An area, such as a survey polygon: outline plus a light fill. With fewer than 3 corners it's drawn as a line
@@ -124,8 +130,8 @@ sealed interface MapOverlay {
      */
     data class Polygon(val corners: List<LatLon>, val selected: Boolean) : MapOverlay
 
-    /** Where photos were taken: small dots, one per photo. */
-    data class Photos(val points: List<LatLon>) : MapOverlay
+    /** Where photos were taken: small dots, one per photo, in the vehicle's colour when [slot] is set. */
+    data class Photos(val points: List<LatLon>, val slot: Int? = null) : MapOverlay
 
     /**
      * A labelled point (home, a waypoint). [id] is what click and drag callbacks report back. Only [draggable]

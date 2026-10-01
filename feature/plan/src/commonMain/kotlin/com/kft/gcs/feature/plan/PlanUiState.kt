@@ -222,7 +222,11 @@ internal fun buildPlanUiState(
     val overlays = buildList<MapOverlay> {
         // Each mission's path starts and ends at its own vehicle's home.
         val homes = ids.associateWith { stateOf(it)?.home?.position }
-        ids.forEach { addAll(routeOverlays(homes[it], flat.only(it))) }
+        // In a job with several vehicles, a mission's lines are in the colour of the vehicle it is assigned to.
+        ids.forEach { m ->
+            val slot = fleet.takeIf { it.size > 1 }?.find { it.id == targetOf(m, ids, e.assignments, sync.selected) }?.slot
+            addAll(routeOverlays(homes[m], flat.only(m)).map { if (slot != null) it.copy(slot = slot) else it })
+        }
         // Lines already photographed: of the stopped missions on record, and of the remainders in this plan.
         (flown.covered + flat.groups.flatMap { it.covered }).distinct().forEach { add(MapOverlay.Route(it, RouteStyle.COVERED)) }
         home?.let { add(MapOverlay.Marker(HOME_MARKER, it, "H", MarkerStyle.HOME)) }

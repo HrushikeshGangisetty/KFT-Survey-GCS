@@ -15,6 +15,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,6 +35,7 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
@@ -42,6 +45,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.kft.gcs.app.di.allModules
 import com.kft.gcs.feature.connections.ConnectionsRoute
+import com.kft.gcs.feature.fly.FleetRoute
+import com.kft.gcs.feature.fly.FleetViewModel
 import com.kft.gcs.feature.fly.FlyRoute
 import com.kft.gcs.feature.fly.FlyViewModel
 import com.kft.gcs.feature.fly.VideoViewModel
@@ -129,6 +134,10 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val plan: PlanViewModel = koinViewModel()
     val maps: OfflineMapsViewModel = koinViewModel()
     val params: ParamsViewModel = koinViewModel() // window scope so it downloads on connect, before the Params tab is opened
+    val fleet: FleetViewModel = koinViewModel() // window scope so alerts are raised whichever tab is showing
+    // A fleet alert (link lost, battery low, RTL, mission done) is a toast on every tab, and a line on the Fleet tab.
+    val alerts = remember { SnackbarHostState() }
+    LaunchedEffect(fleet) { fleet.effects.collect { alerts.showSnackbar("${it.vehicle}: ${it.text}") } }
     val mapsState by maps.state.collectAsStateWithLifecycle()
     val flyState by fly.state.collectAsStateWithLifecycle()
     val planState by plan.state.collectAsStateWithLifecycle()
@@ -173,7 +182,9 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
             composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute(params) } }
+            composable(Destination.FLEET.route) { Surface(Modifier.fillMaxSize()) { FleetRoute(fleet) { slot -> VehicleColors[slot.mod(VehicleColors.size)] } } }
         }
+        SnackbarHost(alerts, Modifier.align(Alignment.TopCenter).zIndex(4f))
         if (videoSource != null) PipControls(pip, video::onSwapClicked, video::onStatsToggled, video::onHideClicked, Modifier.zIndex(3f))
     }
 }
@@ -205,6 +216,7 @@ private fun planShortcut(event: KeyEvent, plan: PlanViewModel): Boolean {
 /** Top-level destinations, in rail order. A navigation rail suits tablets and desktop, the P0 screens (spec §2.5). */
 internal enum class Destination(val route: String, val label: String) {
     FLY("fly", "Fly"),
+    FLEET("fleet", "Fleet"),
     PLAN("plan", "Plan"),
     PARAMS("params", "Params"),
     MAPS("maps", "Maps"),
@@ -229,6 +241,7 @@ private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (
                 label = destination.label,
                 icon = when (destination) {
                     Destination.FLY -> KftIcons.Fly
+                    Destination.FLEET -> KftIcons.Stats
                     Destination.PLAN -> KftIcons.Plan
                     Destination.PARAMS -> KftIcons.Params
                     Destination.MAPS -> KftIcons.Maps

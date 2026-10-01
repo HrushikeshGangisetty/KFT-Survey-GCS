@@ -185,6 +185,19 @@ class FleetTest {
         assertEquals(VehicleState(), fleet.selected.value)
     }
 
+    /** Lists read 1, 2, 3 even when 3 was heard first; a vehicle keeps the colour slot it got when it was first heard. */
+    @Test
+    fun vehiclesAreListedBySystemIdAndKeepTheirSlot() = runTest {
+        val link = link(1, 1, 3)
+        links.value = listOf(link)
+        val fleet = fleet()
+        link.hears(3)
+        runCurrent()
+        link.hears(1, 3)
+        runCurrent()
+        assertEquals(listOf(VehicleId(1, 1u) to 1, VehicleId(1, 3u) to 0), fleet.vehicles.value.map { it.id to it.slot })
+    }
+
     /** A vehicle whose heartbeat stops stays in the list, shown as not connected, until its link is closed. */
     @Test
     fun aSilentVehicleStaysListedAsNotConnected() = runTest {

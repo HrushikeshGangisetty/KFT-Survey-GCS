@@ -139,7 +139,10 @@ fun MapView(
         // The plan, faintest first, so a photo line is never under a turn. All under the track: once the vehicle flies
         // the plan, the flown path must show on top of the planned one.
         val routes = overlays.filterIsInstance<MapOverlay.Route>()
-        fun routeSource(style: RouteStyle) = GeoJsonData.JsonString(routeGeoJson(routes.filter { it.style == style }))
+        // Only the plan's own lines (PLAN, PHOTO) take a vehicle's colour; turns and transit are grey for everyone.
+        fun routeSource(style: RouteStyle, slot: Int? = null) = GeoJsonData.JsonString(
+            routeGeoJson(routes.filter { it.style == style && (if (style == RouteStyle.PLAN || style == RouteStyle.PHOTO) it.slot?.mod(VehicleColors.size) == slot else slot == null) }),
+        )
         // Camera-off flight is neutral grey, so the cyan left on the map is exactly where photos are taken. Grey alone
         // disappears on the pale street map, so both keep a dark casing, faded like the line itself.
         CasedLine("route-turn", rememberGeoJsonSource(routeSource(RouteStyle.TURN)), MapColors.NEUTRAL, 1.5.dp, opacity = 0.6f)
@@ -159,24 +162,35 @@ fun MapView(
             iconAllowOverlap = const(true),
             iconIgnorePlacement = const(true),
         )
+        // A job's missions in their vehicles' colours, paler than the tracks so the flown path stands out on top.
+        // Declared for every slot, used or not, so the layer list keeps its order.
+        VehicleColors.forEachIndexed { slot, color ->
+            CasedLine("route-plan-v$slot", rememberGeoJsonSource(routeSource(RouteStyle.PLAN, slot)), color, 3.dp, opacity = 0.6f)
+            CasedLine("route-photo-v$slot", rememberGeoJsonSource(routeSource(RouteStyle.PHOTO, slot)), color, 4.dp, opacity = 0.6f)
+        }
         // What is already photographed, over the plan's own lines.
         CasedLine("route-covered", rememberGeoJsonSource(routeSource(RouteStyle.COVERED)), MapColors.COVERED, 4.dp)
         // The area outlines on top of the plan, so the boundary the operator is editing always stays readable.
         areas.forEach { (selected, source) -> CasedLine("areas-outline-$selected", source, MapColors.AREA, if (selected) 3.dp else 1.5.dp) }
         overlays.filterIsInstance<MapOverlay.Track>().forEachIndexed { i, track ->
             if (track.points.size >= 2) {
-                CasedLine("track-$i", rememberGeoJsonSource(GeoJsonData.JsonString(lineGeoJson(track.points))), MapColors.TRACK, 3.dp)
+                val color = track.slot?.let { VehicleColors[it.mod(VehicleColors.size)] } ?: MapColors.TRACK
+                CasedLine("track-$i", rememberGeoJsonSource(GeoJsonData.JsonString(lineGeoJson(track.points))), color, 3.dp)
             }
         }
         // Photo dots under the markers: there can be hundreds, and a waypoint must never hide behind them.
-        CircleLayer(
-            id = "photos",
-            source = rememberGeoJsonSource(GeoJsonData.JsonString(pointsGeoJson(overlays.filterIsInstance<MapOverlay.Photos>().flatMap { it.points }))),
-            radius = const(4.dp),
-            color = const(MapColors.PHOTO),
-            strokeColor = const(MapColors.OUTLINE),
-            strokeWidth = const(1.dp),
-        )
+        val photos = overlays.filterIsInstance<MapOverlay.Photos>()
+        // One layer for photos with no vehicle colour (lime), and one per colour slot, always declared (as above).
+        (listOf<Int?>(null) + VehicleColors.indices).forEach { slot ->
+            CircleLayer(
+                id = "photos${slot?.let { "-v$it" } ?: ""}",
+                source = rememberGeoJsonSource(GeoJsonData.JsonString(pointsGeoJson(photos.filter { it.slot?.mod(VehicleColors.size) == slot }.flatMap { it.points }))),
+                radius = const(4.dp),
+                color = const(slot?.let { VehicleColors[it] } ?: MapColors.PHOTO),
+                strokeColor = const(MapColors.OUTLINE),
+                strokeWidth = const(1.dp),
+            )
+        }
         MarkerStyle.entries.forEach { style ->
             val source = rememberGeoJsonSource(GeoJsonData.JsonString(markersGeoJson(markers.filter { it.style == style })))
             CircleLayer(

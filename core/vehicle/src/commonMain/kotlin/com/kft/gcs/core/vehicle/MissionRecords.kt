@@ -168,10 +168,10 @@ class MissionRecords(
 
     /** After a restart: this vehicle is still holding the mission of its newest unfinished record. */
     private fun reattach(vehicle: FleetVehicle): Tracking? {
-        val total = vehicle.state.mission?.total ?: return null
+        val mission = vehicle.state.mission ?: return null
         val record = _records.value.firstOrNull { it.vehicle.systemId == vehicle.id.systemId } ?: return null
-        if (record.complete || record.dismissed || record.itemCount != total || tracking.values.any { it.recordId == record.id }) return null
-        return Tracking(record.id, vehicle.state.photos.size, vehicle.state.mission?.lastReached).also { tracking[vehicle.id] = it }
+        if (record.complete || record.dismissed || record.itemCount != mission.total || tracking.values.any { it.recordId == record.id }) return null
+        return Tracking(record.id, vehicle.state.photos.size, mission.lastReached).also { tracking[vehicle.id] = it }
     }
 
     private fun change(id: String, change: (MissionRecord) -> MissionRecord) {

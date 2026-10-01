@@ -44,7 +44,7 @@ fun AndroidApp(context: Context) {
             // the logs can be copied off over USB. Falls back to private storage if shared storage isn't mounted.
             single<VehicleRecorder> { TlogFiles(File(app.getExternalFilesDir(null) ?: app.filesDir, "tlogs"), Dispatchers.IO) }
             single<RecordStore> { FileRecordStore(File(app.filesDir, "missions")) }
-            single { WallClock(System::currentTimeMillis) }
+            single<WallClock> { SystemWallClock }
             single<ProfileStore> { FileTextStore(File(app.filesDir, "connection-profiles.json")) }
             single<SettingsStore> { FileTextStore(File(app.filesDir, "plan-settings.json")) }
             single<ThemeStore> { FileTextStore(File(app.filesDir, "theme.txt")) }

@@ -115,9 +115,10 @@ class FlyViewModel(
             vehicleProblem = selected?.takeIf { it.duplicateId }?.let { "Two vehicles are using system id ${it.id.systemId}: nothing can be sent" },
             vehicles = all.map { VehicleChipUi(it.id, labels.getValue(it.id), it.slot, selected = it.id == selectedId, connected = it.state.connected) },
             // One track per vehicle (an empty one when there is no vehicle, so the overlay list keeps its shape),
-            // every vehicle's photo dots, then the vehicles. A label only when there is more than one to tell apart.
-            overlays = all.map { MapOverlay.Track(l.tracks[it.id].orEmpty()) }.ifEmpty { listOf(MapOverlay.Track(emptyList())) } +
-                MapOverlay.Photos(all.flatMap(::photosOf)) +
+            // each vehicle's photo dots, then the vehicles. With more than one vehicle, each one's track and dots are
+            // in its own colour and it carries a label; a single vehicle keeps the usual magenta and lime.
+            overlays = all.map { MapOverlay.Track(l.tracks[it.id].orEmpty(), it.slot.takeIf { all.size > 1 }) }.ifEmpty { listOf(MapOverlay.Track(emptyList())) } +
+                (if (all.size > 1) all.map { MapOverlay.Photos(photosOf(it), it.slot) } else listOf(MapOverlay.Photos(all.flatMap(::photosOf)))) +
                 all.filter { !it.duplicateId }.mapNotNull { fv ->
                     fv.state.position?.let { MapOverlay.Vehicle(it, fv.state.headingDeg, fv.slot, labels[fv.id].takeIf { all.size > 1 }, selected = fv.id == selectedId) }
                 },

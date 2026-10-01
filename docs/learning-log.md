@@ -3757,3 +3757,103 @@ Not run in the real window this pass; the green "covered" lines are checked thro
 - A mission is "stopped" when its vehicle isn't armed in AUTO. A pilot who pauses in LOITER and returns to AUTO makes
   it "flying" again; nothing is lost.
 - **Next: Pass 32** (fleet dashboard, alerts, per-vehicle colours on the map).
+
+## Pass 32 — Fleet view: a dashboard of every vehicle, alerts, per-vehicle colours on the map (2026-10-02)
+
+### What changed
+- **`feature/fly/Fleet.kt`** (new): `fleetAlerts` (the alert rules), `fleetRows` (the dashboard rows), `batteryLow`,
+  `FleetViewModel`. **`FleetScreen.kt`** (new): one card per vehicle and the alert list.
+- **`app/shared/App.kt`**: a "Fleet" tab in the rail; the window-scoped `FleetViewModel`; alerts as toasts on every tab.
+  **`SystemWallClock.kt`** (new): the device's time of day for the alert list.
+- **`core/vehicle`**: `FleetVehicle.link` (the link in words); `WallClock` gained `timeOfDay()`.
+- **`ui/map`**: `Track`, `Photos` and `Route` carry an optional colour slot; the map draws slotted tracks and photo dots
+  in the vehicle's colour and a job's plan and photo lines in a paler version of it.
+- **`feature/fly/FlyViewModel.kt`**: with two or more vehicles, each track and each vehicle's photo dots get its slot.
+  **`feature/plan/PlanUiState.kt`**: a mission's lines get the slot of the vehicle it is assigned to.
+- **`tools/sitl/link_relay.py`** (new): a link that can be cut without stopping the drone.
+- **Tests**: `FleetViewModelTest`; additions to `FlyViewModelTest` and `JobTest`; `FleetSitlRun`.
+
+### How it works
+```
+Fleet.vehicles ─┬─▶ fleetRows(all, selected, records) ─▶ FleetScreen: a card per vehicle
+                │      link · login · battery · mode · mission · photos · what is wrong right now
+                └─▶ fleetAlerts(before, now): link lost / restored, battery low, RTL, mission complete
+                       ├─▶ the alert list (newest first, with the time of day)
+                       └─▶ effects ─▶ App(): a toast on whichever tab is showing
+map: Track(slot) / Photos(slot) / Route(slot) ─▶ VehicleColors[slot]; no slot = the usual magenta, lime and cyan
+```
+An alert is an **edge**: its condition is true now and was not a moment ago. The card's chips are the **level**: what
+is true right now. So "Battery low" is announced once and stays on the card until it stops being true.
+
+### Engineering learnings
+- **Edges for alerts, levels for status.** Comparing the previous fleet with the current one in a pure function gives
+  one alert per event without any "already told" bookkeeping, and every rule is a one-line test. A vehicle seen for the
+  first time raises nothing, so connecting to a drone that is already in RTL doesn't open with a burst of toasts.
+- **Low battery is two signals.** ArduPilot's percentage comes from consumed mAh, so a voltage failsafe can fire at
+  "62 %". The rule is under 20 % **or** ArduPilot's own failsafe text ("Battery 1 is low …"). The SITL run showed why:
+  the simulated battery dropped to 10 V while the percentage stayed where it was.
+- **One ViewModel at window scope.** Alerts must be raised while the operator is on Plan or Params, so the dashboard's
+  ViewModel is created with the window (like Fly's), not with its tab.
+- **Colour only when it tells things apart.** One vehicle keeps magenta track, lime photos, cyan plan, as since
+  Pass 2. From two vehicles on, track and photos take the vehicle's colour and its mission a paler version, so "plan"
+  and "flown" are still two different things in one colour.
+- **Layers declared for every colour, used or not.** MapLibre draws layers in declaration order; declaring a layer
+  per colour slot up front keeps that order fixed (the rule the map already followed for marker styles).
+- **A link that can be cut.** Windows SITL exits when its first port's client goes away, and MAVProxy can't drop one
+  output from outside. A 40-line byte relay between the vehicle's second port and a UDP port is a radio that can be
+  switched off: the drone flies on, the GCS hears nothing, and switching it on again restores the same vehicle.
+- **Ponytail review (lite):** nothing cut. The dashboard reuses `StatusChip`, `StatTile`, `missionText` and the
+  vehicle colours; the only new pieces are the two pure functions and the screen.
+
+### What to look at
+1. `feature/fly/src/commonMain/kotlin/com/kft/gcs/feature/fly/Fleet.kt` — `fleetAlerts` and `fleetRows`.
+2. `feature/fly/src/commonMain/kotlin/com/kft/gcs/feature/fly/FleetScreen.kt`.
+3. `ui/map/src/commonMain/kotlin/com/kft/gcs/ui/map/MapView.kt` — the per-slot layers.
+
+### Tests
+`gradlew.bat check`: pass, 933 test results, 0 failures.
+- `FleetViewModelTest` (6): link lost and restored (and not repeated); battery low by percent, at the 20 % edge, and
+  by ArduPilot's text; RTL (not on the ground) and mission complete; a new vehicle is quiet, two things at once are
+  two alerts; a row's every field; the ViewModel's list (newest first, with the time), toasts, select, clear.
+- `FlyViewModelTest`: tracks and photo dots carry their vehicle's slot with two vehicles.
+- `JobTest`: each mission's photo lines carry its vehicle's slot.
+
+**SITL, run this pass** (`start-sitl.ps1 -Count 3`): `FleetSitlRun` with `KFT_SITL_FLEET_RUN=1`.
+Three copters on three links: drones 1 and 2 over TCP, drone 3 over UDP through `link_relay.py`. A job of three fields
+(Pass 30's KML), a mission each. What the dashboard said, in order (times from the run):
+- 01:12:10 `Vehicle 3: Link lost: no heartbeat` after the relay was killed; its card read "UDP listen :14553 DOWN ·
+  Auto ARMED · [Link lost]" while the drone flew on. 01:12:16 `Vehicle 3: Link restored` after the relay was restarted.
+- All three armed and flying at once (vehicles 2 and 3 in Auto, vehicle 1 climbing in Guided, then Auto).
+- 01:13:23 `Vehicle 1: Battery low (9.8 V)` (the pilot script dropped the simulated battery after photo 15; the
+  percentage still read 79 %, so it was the voltage rule that caught it). 01:13:33 `Vehicle 1: Returning to launch
+  (RTL)`. Its card: "RTL ARMED · 9.6 V · 79% · mission 15 / 39 · photos 16 / 48 · [Battery low, RTL]".
+- 01:16:19 and 01:16:36 `Mission complete` for vehicles 2 and 3, each with photos 48 / 48 on its card.
+- The Plan tab listed "Field A · vehicle 1 · 16 / 48 photos · item 14 of 39 reached · stopped". Resume, given to
+  vehicle 2, uploaded (33 items), flown: 01:20:30 `Vehicle 2: Mission complete`, card "photos 34 / 34".
+- Field A: 16 photos by vehicle 1 + 34 by vehicle 2 = 50 = the 48 planned + the 2 repeated at the hand-over.
+- Also seen: `Vehicle 2: Battery low (12.3 V)` on its second flight (the simulated battery fell under 20 %): correct.
+Pass, 8 min 52 s. In the real window (`docs/design/32-desktop-fleet-three-vehicles.jpg`, the three copters on one
+UDP link afterwards): three cards with link, login, mode, battery, mission and their chips, and the alert list.
+
+Three earlier attempts failed for reasons in the test rig, all now fixed in the scripts:
+- SITL refuses to arm for a while after it starts, and longer after `-Wipe`. `tools/sitl/wait_ready.py` waits for
+  it (pre-arm checks passed and an EKF position), and the pilot script retries arming for three minutes.
+- `py` is a launcher: destroying it leaves `python.exe` running, so a pilot from a failed run went on and drained
+  drone 1's battery in the next one. The fleet run now stops its scripts by name.
+- SITL saves parameters: a battery left at 10 V started the next session with a battery failsafe. The pilot script
+  now puts the voltage back.
+
+### Safety
+- No allowlist change and nothing new transmitted: the dashboard reads state the GCS already has. Its one action is
+  selecting a vehicle.
+- No flight-action buttons on the Fleet tab (S9). An alert tells; the pilot acts.
+
+### Open questions / next
+- **`ponytail:` / known limits:** alerts aren't kept across a restart; no sound; the 20 % threshold is fixed (as the
+  HUD's); a job's coloured photo lines have no direction arrows (the single-vehicle cyan ones do); colours repeat
+  after six vehicles.
+- The Fleet tab uses the "stats" icon; a dedicated icon needs a Material Symbols file added.
+- **The batch (Passes 29–32) is complete.** ADR-005 lists what Level 2 (the GCS starting missions) and Level 3
+  (formation) would need and why both collide with S4 and S9; neither is built.
+- Suggested next: run the batch on the hardware (two real drones on two radios), where radio loss and real cameras
+  replace the simulated ones; and decide the release items still open from Pass 28.

@@ -18,6 +18,8 @@ With --low-battery-after N (needs --photos) the simulated battery runs low after
 the battery failsafe to RTL (BATT_FS_LOW_ACT 2; BATT_LOW_VOLT stays at its 10.5 V default), and after the N-th photo
 it drops the simulator's battery to 10.0 V (SIM_BATT_VOLTAGE). ArduPilot's failsafe then switches to RTL about 10 s
 later (BATT_LOW_TIMER). That is the Pass 31 check: a survey that stops part-way and is resumed by another drone.
+Once the vehicle has left AUTO the simulated voltage is put back to 12.6 V: SITL saves parameters, and a battery left
+at 10 V makes the next start begin with a battery failsafe (start-sitl.ps1 -Wipe clears that too).
 These are simulator and vehicle settings made by the "pilot", not by the GCS.
 
 Needs pymavlink (it comes with `pip install MAVProxy`). Connect to a SITL port the GCS isn't using: SERIAL2 (5763).
@@ -62,8 +64,9 @@ def main():
         wait_mode(master, "GUIDED")
         print("GUIDED")
 
-    # MAVProxy: arm throttle. SITL may refuse until its EKF and GPS are happy, so retry for a while.
-    for _ in range(30):
+    # MAVProxy: arm throttle. SITL refuses until its EKF and GPS are happy (a minute or more after it starts), so
+    # retry for about three minutes.
+    for _ in range(90):
         master.arducopter_arm()                      # COMMAND_LONG COMPONENT_ARM_DISARM(1), valid for Plane too
         time.sleep(1)
         master.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
@@ -122,6 +125,9 @@ def log_photos(master, path, low_battery_after=None):
                 break
             elif t == "MISSION_CURRENT" and getattr(m, "mission_state", 0) == 5:
                 break
+    if low_battery_after:
+        set_param(master, "SIM_BATT_VOLTAGE", 12.6)  # for the next run; this flight's failsafe stays in force
+        time.sleep(1)
     print(f"{n} photos written to {path} (mission over: {master.flightmode})")
 
 

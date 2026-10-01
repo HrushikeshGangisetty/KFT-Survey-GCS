@@ -1,6 +1,6 @@
 # ADR-005 — Multi-vehicle: several links, several vehicles per link
 
-**Status:** Accepted for Level 1 (monitor and plan for many vehicles). Levels 2 and 3 are described, not built.
+**Status:** Accepted and built for Level 1 (Passes 29–32). Levels 2 and 3 are described, not built.
 **Date:** 2026-10-01 · **Pass:** 29 (foundation), 30–32 build on it · **Spec:** S4, S9, S11, S12
 
 ## Context
@@ -148,6 +148,18 @@ A plan with one mission and no assignment is saved as file version 1, as before.
 Alternatives considered: resuming from the last *item reached* (coarse: a whole line could be reflown or, with a
 missed item report, skipped); MISSION_SET_CURRENT on the same vehicle (works only for the same drone, needs it
 disarmed, and reflies from a waypoint, not from the last photo).
+
+### 10. Fleet view (Pass 32)
+
+- A **Fleet tab**: one card per vehicle (link, KFT login, battery, mode, armed, mission progress, photos against the
+  plan, and what is wrong right now), and the list of alerts. Tapping a card selects that vehicle everywhere.
+- **Alerts** are raised when a condition starts (link lost, link restored, battery low, RTL, mission complete), as a
+  toast on whichever tab is showing and a line in the list. A vehicle seen for the first time raises none.
+- **Battery low** is under 20 %, or under the vehicle's own BATT_LOW_VOLT (read at connect), or ArduPilot's failsafe
+  text. The voltage rule is the one that catches a voltage failsafe while the percentage still looks fine.
+- **On the map**, from two vehicles on, each vehicle's track and photo dots are in its colour, and a job's mission
+  lines in a paler version of the colour of the vehicle they are assigned to. One vehicle keeps the usual colours.
+- The dashboard is monitoring only. It adds no message to the allowlist and has no flight-action button (S9).
 
 ## Level 2 — the GCS starts missions (not built)
 

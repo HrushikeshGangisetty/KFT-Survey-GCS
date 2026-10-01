@@ -250,6 +250,9 @@ class JobTest {
         vm.onMissionVehicleSelected(2, drone3)
         runCurrent()
         assertEquals(listOf("Vehicle 1", "Vehicle 2", "Vehicle 3"), vm.state.value.missions.map { it.vehicle })
+        // On the map each mission's photo lines are in its vehicle's colour slot (0, 1, 2).
+        val lines = vm.state.value.overlays.filterIsInstance<com.kft.gcs.ui.map.MapOverlay.Route>().filter { it.style == com.kft.gcs.ui.map.RouteStyle.PHOTO }
+        assertEquals(setOf<Int?>(0, 1, 2), lines.map { it.slot }.toSet())
 
         vm.onUploadClicked()
         runCurrent()

@@ -100,8 +100,18 @@ class FlyViewModelTest {
             listOf(VehicleChipUi(drone, "1", 0, selected = true, connected = true), VehicleChipUi(drone2, "2", 1, selected = false, connected = true)),
             vm.state.value.vehicles,
         )
-        // One track each: both start at their vehicle's own position.
-        assertEquals(listOf(listOf(home), listOf(north)), vm.state.value.overlays.filterIsInstance<MapOverlay.Track>().map { it.points })
+        // One track each, in its vehicle's colour slot: both start at their vehicle's own position.
+        assertEquals(
+            listOf(MapOverlay.Track(listOf(home), slot = 0), MapOverlay.Track(listOf(north), slot = 1)),
+            vm.state.value.overlays.filterIsInstance<MapOverlay.Track>(),
+        )
+        // And each vehicle's photo dots in its colour too.
+        fleet.value = fleet.value.map { it.copy(state = it.state.copy(photos = listOf(it.state.position!!))) }
+        runCurrent()
+        assertEquals(
+            listOf(MapOverlay.Photos(listOf(home), slot = 0), MapOverlay.Photos(listOf(north), slot = 1)),
+            vm.state.value.overlays.filterIsInstance<MapOverlay.Photos>(),
+        )
     }
 
     @Test
