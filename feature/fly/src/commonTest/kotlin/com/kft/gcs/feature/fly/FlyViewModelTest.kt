@@ -22,6 +22,7 @@ import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleRepository
 import com.kft.gcs.core.vehicle.VehicleState
+import com.kft.gcs.core.vehicle.vehicleLabels
 import com.kft.gcs.ui.map.MapOverlay
 import com.kft.gcs.ui.map.TileSourceConfig
 import com.kft.gcs.ui.map.TileSources

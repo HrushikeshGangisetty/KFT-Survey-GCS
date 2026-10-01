@@ -7,6 +7,7 @@ import com.divpundir.mavlink.definitions.common.CommandLong
 import com.divpundir.mavlink.definitions.common.HomePosition
 import com.divpundir.mavlink.definitions.common.MavCmd
 import com.divpundir.mavlink.definitions.common.MavDataStream
+import com.divpundir.mavlink.definitions.common.ParamRequestRead
 import com.divpundir.mavlink.definitions.common.RequestDataStream
 import com.divpundir.mavlink.definitions.standard.AutopilotVersion
 import com.kft.gcs.core.mavlink.LinkState
@@ -169,6 +170,9 @@ class VehicleRepository(
         commands.send(requestMessage(v, AutopilotVersion.id))
         commands.send(requestMessage(v, HomePosition.id))
         commands.send(messageInterval(v, HomePosition.id, HOME_INTERVAL))
+        // The fence, for the upload checks. PARAM_REQUEST_READ (common.xml #20) by name, index -1; ArduPilot answers
+        // each with a PARAM_VALUE and says nothing for a name it doesn't have (GCS_Param.cpp handle_param_request_read).
+        WATCHED_PARAMS.forEach { sender.send(ParamRequestRead(v.systemId, v.componentId, paramId = it, paramIndex = -1)) }
     }
     private sealed interface Update {
         data class Link(val state: LinkState) : Update

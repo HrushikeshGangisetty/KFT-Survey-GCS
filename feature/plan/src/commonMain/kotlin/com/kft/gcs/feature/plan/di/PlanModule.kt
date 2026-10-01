@@ -1,5 +1,6 @@
 package com.kft.gcs.feature.plan.di
 
+import com.kft.gcs.core.vehicle.Fleet
 import com.kft.gcs.core.vehicle.di.SelectedVehicle
 import com.kft.gcs.feature.plan.PlanSettingsRepository
 import com.kft.gcs.feature.plan.PlanViewModel
@@ -12,5 +13,5 @@ import org.koin.dsl.module
  */
 val planModule = module {
     single { PlanSettingsRepository(get()) }
-    viewModel { PlanViewModel(get(SelectedVehicle), get(), get(), get(), get()) }
+    viewModel { get<Fleet>().let { fleet -> PlanViewModel(get(SelectedVehicle), get(), get(), get(), get(), fleet.vehicles, fleet::missionsOf) } }
 }

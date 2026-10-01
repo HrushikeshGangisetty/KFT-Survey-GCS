@@ -11,13 +11,17 @@ import kotlin.math.ln
 /** A file read and waiting for the operator's answer: add it as survey areas or as waypoints? */
 internal data class ImportChoice(val fileName: String, val shapes: ImportedShapes)
 
-/** The "Import as…" dialog. [canSurvey] only when the file has areas: a survey needs an outline. */
-data class ImportDialog(val title: String, val summary: String, val canSurvey: Boolean)
+/**
+ * The "Import as…" dialog. [canSurvey] only when the file has areas: a survey needs an outline. [canMissions] when it
+ * has several: then each area can also become a mission of its own, for a drone of its own.
+ */
+data class ImportDialog(val title: String, val summary: String, val canSurvey: Boolean, val canMissions: Boolean = false)
 
 internal fun ImportChoice.dialog() = ImportDialog(
     title = "Import $fileName",
     summary = shapes.summary(),
     canSurvey = shapes.areas.isNotEmpty(),
+    canMissions = shapes.areas.size > 1,
 )
 
 /** "2 areas, 1 line, 3 points". */

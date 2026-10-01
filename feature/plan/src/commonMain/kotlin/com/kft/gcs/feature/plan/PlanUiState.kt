@@ -3,6 +3,7 @@ package com.kft.gcs.feature.plan
 import androidx.compose.runtime.Immutable
 import com.kft.gcs.core.geo.Geodesy
 import com.kft.gcs.core.geo.LatLon
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.planning.SurveyLimits
@@ -13,9 +14,11 @@ import com.kft.gcs.core.planning.corridorOutline
 import com.kft.gcs.core.planning.entryCornerPositions
 import com.kft.gcs.core.mission.MissionCommand
 import com.kft.gcs.core.mission.MissionItem
+import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.MissionSyncState
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.sameMission
+import com.kft.gcs.core.vehicle.vehicleLabels
 import com.kft.gcs.ui.map.CameraRequest
 import com.kft.gcs.ui.map.MapOverlay
 import com.kft.gcs.ui.map.MarkerStyle
@@ -54,9 +57,28 @@ data class PlanUiState(
     val importDialog: ImportDialog? = null,
     /** Where the map should look: set after an import, so the imported area is on screen. */
     val cameraRequest: CameraRequest? = null,
+    /** The job's missions with their vehicles and checks; empty while the plan is one mission. */
+    val missions: List<MissionRow> = emptyList(),
+    /** The vehicles a mission can be given to. */
+    val vehicleChoices: List<VehicleChoice> = emptyList(),
+    /** The upload-check limits, for the settings fields. */
+    val maxAltitudeM: Double? = null,
+    val maxDistanceM: Double? = null,
 )
 
-data class GroupHeader(val index: Int, val name: String, val kind: String, val summary: String, val selected: Boolean)
+/** @property mission "M2" when the plan has several missions; [missionChoices] are the missions the group can move to. */
+data class GroupHeader(
+    val index: Int, val name: String, val kind: String, val summary: String, val selected: Boolean,
+    val mission: String? = null, val missionChoices: List<Pair<Int, String>> = emptyList(),
+)
+
+/**
+ * One mission of a job. [vehicle] is who flies it ("Vehicle 2", "Not assigned"); [problems] are the upload checks
+ * that didn't pass, already as sentences.
+ */
+data class MissionRow(val id: Int, val tag: String, val name: String, val summary: String, val vehicle: String, val problems: List<String>)
+
+data class VehicleChoice(val id: VehicleId, val label: String)
 
 /** A row in the waypoint list. [seq] is the vehicle's item number (S11: 1 = first after home). */
 data class PlanRow(val index: Int, val seq: Int, val title: String, val detail: String, val selected: Boolean)
@@ -89,8 +111,11 @@ data class SurveyPanel(
 
 data class CameraChoice(val name: String, val unverified: Boolean, val custom: Boolean)
 
-/** What an upload will send, one line per item, seq 0 (home) first, plus everything worth a second look. */
-data class UploadPreview(val lines: List<String>, val warnings: List<String>)
+/**
+ * What an upload will send, one line per item, seq 0 (home) first, plus everything worth a second look. For a job,
+ * each mission is a block of [lines] under a heading that names its vehicle.
+ */
+data class UploadPreview(val lines: List<String>, val warnings: List<String>, val title: String = "Upload ${lines.size - 1} items?")
 
 /**
  * The editor's own state: the plan (as groups), the selection, the undo history and the dialogs. The ViewModel keeps
@@ -111,6 +136,8 @@ internal data class PlanEdit(
     val preview: UploadPreview? = null,
     val importChoice: ImportChoice? = null,
     val camera: CameraRequest? = null,
+    /** Which vehicle each mission is for, by mission number ([MissionGroup.mission]). Not part of the undo history. */
+    val assignments: Map<Int, VehicleId> = emptyMap(),
 )
 
 /** Marker ids for the map: the group index and the row, corner or [EntryCorner] index. */
@@ -134,13 +161,37 @@ internal fun PlanSettings.limitsFor(kind: VehicleKind?) = SurveyLimits(
 
 internal fun VehicleKind?.orCopter() = if (this == VehicleKind.PLANE) VehicleKind.PLANE else VehicleKind.COPTER
 
-/** Pure: editor data, vehicle, settings and sync state in, screen state out. */
-internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: PlanSettings, sync: MissionSyncState): PlanUiState {
+/** The vehicle a mission will be uploaded to: the one it is assigned to, or (a plan with one mission) the selected one. */
+internal fun targetOf(mission: Int, ids: List<Int>, assignments: Map<Int, VehicleId>, selected: VehicleId?): VehicleId? =
+    assignments[mission] ?: selected.takeIf { ids.size == 1 }
+
+/** The checks for one mission flown by a vehicle in [state] (its home, kind and fence). */
+internal fun checkMission(items: List<MissionItem>, state: VehicleState, settings: PlanSettings): List<String> {
+    val kind = state.vehicleKind
+    val limits = MissionLimits(settings.maxAltitudeM, settings.maxDistanceM, settings.batteryMinutes[kind.orCopter()]?.let { it * 60 }, state.fence)
+    return missionProblems(estimateMission(items, state.home?.position, kind), limits)
+}
+
+/**
+ * Pure: editor data, the selected vehicle, settings, sync state and the fleet in, screen state out.
+ * [vehicle] is the selected vehicle's state; [fleet] is every vehicle, for a job's assignments (empty in a
+ * single-vehicle setup and in most tests).
+ */
+internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: PlanSettings, sync: MissionSyncState, fleet: List<FleetVehicle> = emptyList()): PlanUiState {
     val kind = vehicle.vehicleKind
     val flat = flatten(e.groups, kind, settings.limitsFor(kind))
     val busy = e.transfer != null
+    val ids = flat.missions
+    // The mission the selected vehicle is to fly: its progress and its "on vehicle" state are about that one.
+    val own = missionFor(sync.selected, ids, e.assignments)
     val flying = vehicle.mission?.takeIf { !it.complete }?.current
     val home = vehicle.home?.position
+    val labels = vehicleLabels(fleet.map { it.id })
+    fun stateOf(mission: Int): VehicleState? = when (val id = targetOf(mission, ids, e.assignments, sync.selected)) {
+        null -> vehicle.takeIf { ids.size == 1 }
+        sync.selected -> vehicle
+        else -> fleet.find { it.id == id }?.state
+    }
     val selected = e.selectedGroup?.let(flat.groups::getOrNull)
     val surveyGroup = selected?.group as? SurveyGroup
     val starts = selected?.plan?.takeIf { surveyGroup?.survey?.isCorridor == false }?.let { plan ->
@@ -151,8 +202,11 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
     val armedIn = if (vehicle.connected && vehicle.armed) "Vehicle is ARMED in ${vehicle.flightMode?.uppercase() ?: "an unknown mode"}" else null
 
     val overlays = buildList<MapOverlay> {
-        addAll(routeOverlays(home, flat))
+        // Each mission's path starts and ends at its own vehicle's home.
+        val homes = ids.associateWith { stateOf(it)?.home?.position }
+        ids.forEach { addAll(routeOverlays(homes[it], flat.only(it))) }
         home?.let { add(MapOverlay.Marker(HOME_MARKER, it, "H", MarkerStyle.HOME)) }
+        homes.values.filterNotNull().filter { it != home }.distinct().forEachIndexed { i, at -> add(MapOverlay.Marker("$HOME_MARKER-other$i", at, "H", MarkerStyle.HOME)) }
         flat.groups.forEachIndexed { g, fg ->
             when (val group = fg.group) {
                 is WaypointGroup -> {
@@ -161,7 +215,7 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
                         val at = item.position ?: return@forEachIndexed
                         val style = when {
                             g == e.selectedGroup && i == e.selectedItem -> MarkerStyle.SELECTED
-                            seqs[i] == flying -> MarkerStyle.CURRENT
+                            seqs[i] == flying && group.mission == own -> MarkerStyle.CURRENT
                             else -> MarkerStyle.WAYPOINT
                         }
                         add(MapOverlay.Marker(markerId(g, i), at, seqs[i].toString(), style, draggable = item.editable))
@@ -198,9 +252,10 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
     } ?: emptyList()
 
     val onVehicle = sync.onVehicle
+    val ownItems = own?.let { flat.only(it).items } ?: emptyList()
     val syncUi = when {
-        onVehicle == null && flat.items.isEmpty() -> null
-        onVehicle != null && sameMission(flat.items, onVehicle) ->
+        onVehicle == null && ownItems.isEmpty() -> null
+        onVehicle != null && sameMission(ownItems, onVehicle) ->
             if (sync.differsFrom(vehicle.mission?.total) && vehicle.connected) SyncUi("Vehicle mission changed elsewhere", true)
             else SyncUi("On vehicle", false)
         else -> SyncUi("Not uploaded", true)
@@ -208,14 +263,16 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
 
     return PlanUiState(
         groups = flat.groups.mapIndexed { i, fg ->
-            GroupHeader(i, fg.group.name, groupKind(fg.group), groupSummary(fg, kind), i == e.selectedGroup)
+            // The mission tag and "move to" menu appear once there is something to tell apart or to move between.
+            val choices = if (e.groups.size > 1) ids.map { it to missionTag(ids, it) } else emptyList()
+            GroupHeader(i, fg.group.name, groupKind(fg.group), groupSummary(fg, kind), i == e.selectedGroup, missionTag(ids, fg.group.mission).takeIf { ids.size > 1 }, choices)
         },
         rows = rows,
         form = e.form,
         survey = surveyGroup?.let { surveyPanel(it, selected, e.selectedItem, kind, settings, starts[it.survey.entry]) },
         overlays = overlays,
         transfer = e.transfer,
-        canUpload = !busy && vehicle.connected && flat.items.isNotEmpty(),
+        canUpload = !busy && flat.items.isNotEmpty() && (vehicle.connected || fleet.any { it.state.connected && it.id in e.assignments.values }),
         canRead = !busy && vehicle.connected,
         canClear = !busy && vehicle.connected,
         clearWarning = armedIn?.let { "$it: clearing deletes the mission it is flying." }
@@ -236,6 +293,22 @@ internal fun buildPlanUiState(e: PlanEdit, vehicle: VehicleState, settings: Plan
         preview = e.preview,
         importDialog = e.importChoice?.dialog(),
         cameraRequest = e.camera,
+        missions = if (ids.size < 2) emptyList() else ids.map { m ->
+            val items = flat.only(m).items
+            val state = stateOf(m)
+            val estimate = estimateMission(items, state?.home?.position, kind)
+            MissionRow(
+                id = m,
+                tag = missionTag(ids, m),
+                name = missionName(e.groups, m),
+                summary = "${items.size} items · ${distanceText(estimate.distanceM)} · ≈${durationText(estimate.timeS)}",
+                vehicle = e.assignments[m]?.let { "Vehicle ${labels[it] ?: it.systemId}" + if (fleet.none { v -> v.id == it }) " (not connected)" else "" } ?: "Not assigned",
+                problems = if (state == null) emptyList() else checkMission(items, state, settings),
+            )
+        },
+        vehicleChoices = fleet.map { VehicleChoice(it.id, "Vehicle ${labels.getValue(it.id)}") },
+        maxAltitudeM = settings.maxAltitudeM,
+        maxDistanceM = settings.maxDistanceM,
     )
 }
 
@@ -289,19 +362,65 @@ internal fun routeOverlays(home: LatLon?, flat: FlatMission): List<MapOverlay.Ro
     return routes
 }
 
-/** The preview: every item with its seq, and the warnings (survey checks, armed vehicle, unknown home). */
-internal fun uploadPreview(e: PlanEdit, vehicle: VehicleState, settings: PlanSettings): UploadPreview {
-    val flat = flatten(e.groups, vehicle.vehicleKind, settings.limitsFor(vehicle.vehicleKind))
-    val lines = listOf("0  Home (the vehicle's own, sent as seq 0)") + flat.items.mapIndexed { i, item -> "${i + 1}  ${itemLine(item)}" }
-    val warnings = buildList {
-        if (vehicle.connected && vehicle.armed) add("Vehicle is ARMED in ${vehicle.flightMode?.uppercase() ?: "an unknown mode"}: uploading replaces the mission it is flying.")
-        if (vehicle.home == null) add("Home isn't known yet: the upload will fail until the vehicle has a GPS fix.")
-        flat.groups.forEach { fg ->
-            fg.error?.let { add("${fg.group.name}: not included. $it") }
-            fg.plan?.warnings?.forEach { add("${fg.group.name}: ${warningText(it)}") }
-        }
+/** One mission of an upload: where it goes and what is sent. [vehicle] null = the selected vehicle (a one-mission plan). */
+internal data class UploadTarget(val mission: Int, val label: String, val vehicle: VehicleId?, val items: List<MissionItem>)
+
+/**
+ * What Upload will send where: every mission that has items and a vehicle. In a job, a mission without a vehicle is
+ * left out (the preview says so); a plan with one unassigned mission goes to the selected vehicle.
+ */
+internal fun uploadTargets(e: PlanEdit, flat: FlatMission, selected: VehicleId?): List<UploadTarget> {
+    val ids = flat.missions
+    return ids.mapNotNull { m ->
+        val items = flat.only(m).items.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+        val vehicle = e.assignments[m]
+        if (vehicle == null && ids.size > 1) null else UploadTarget(m, "${missionTag(ids, m)} ${missionName(e.groups, m)}", vehicle, items)
     }
-    return UploadPreview(lines, warnings)
+}
+
+/**
+ * The preview: every item with its seq, and the warnings (survey checks, armed vehicle, unknown home, and the
+ * per-mission checks of [checkMission]). With several missions, each is a block headed by its vehicle, and each
+ * warning starts with its mission.
+ */
+internal fun uploadPreview(e: PlanEdit, vehicle: VehicleState, settings: PlanSettings, selected: VehicleId? = null, fleet: List<FleetVehicle> = emptyList()): UploadPreview {
+    val flat = flatten(e.groups, vehicle.vehicleKind, settings.limitsFor(vehicle.vehicleKind))
+    val ids = flat.missions
+    val job = ids.size > 1
+    val labels = vehicleLabels(fleet.map { it.id })
+    val lines = mutableListOf<String>()
+    val warnings = mutableListOf<String>()
+    for (m in ids) {
+        val mission = flat.only(m)
+        val name = "${missionTag(ids, m)} ${missionName(e.groups, m)}"
+        val prefix = if (job) "$name: " else ""
+        val target = e.assignments[m]
+        val state = if (target == null || target == selected) vehicle.takeIf { target != null || !job } else fleet.find { it.id == target }?.state
+        if (job) {
+            lines += "— $name → ${target?.let { "vehicle ${labels[it] ?: it.systemId}" } ?: "no vehicle"} · ${mission.items.size} items —"
+            if (target == null) warnings += "${prefix}no vehicle assigned: it will not be uploaded."
+            else if (state?.connected != true) warnings += "${prefix}its vehicle is not connected: the upload will fail."
+        }
+        lines += "0  Home (the vehicle's own, sent as seq 0)"
+        lines += mission.items.mapIndexed { i, item -> "${i + 1}  ${itemLine(item)}" }
+        if (state != null) {
+            if (state.connected && state.armed) warnings += "${prefix}Vehicle is ARMED in ${state.flightMode?.uppercase() ?: "an unknown mode"}: uploading replaces the mission it is flying."
+            if (state.home == null) warnings += "${prefix}Home isn't known yet: the upload will fail until the vehicle has a GPS fix."
+            // The job is planned for the selected vehicle's kind (takeoff item, turns). ponytail: one kind per job;
+            // plan a mixed copter/plane job as two plans until someone flies one.
+            val (plannedFor, flownBy) = vehicle.vehicleKind to state.vehicleKind
+            if (plannedFor != null && flownBy != null && plannedFor != flownBy) {
+                warnings += "${prefix}planned for a ${plannedFor.name.lowercase()}, but its vehicle is a ${flownBy.name.lowercase()}. Select that vehicle and check the plan."
+            }
+        }
+        mission.groups.forEach { fg ->
+            fg.error?.let { warnings += "${fg.group.name}: not included. $it" }
+            fg.plan?.warnings?.forEach { warnings += "${fg.group.name}: ${warningText(it)}" }
+        }
+        if (state != null) checkMission(mission.items, state, settings).forEach { warnings += "${prefix.ifEmpty { "The mission " }}$it" }
+    }
+    val sent = uploadTargets(e, flat, selected).size
+    return if (job) UploadPreview(lines, warnings, "Upload $sent of ${ids.size} missions?") else UploadPreview(lines, warnings)
 }
 
 private fun surveyPanel(group: SurveyGroup, flat: FlatGroup, selectedItem: Int?, kind: VehicleKind?, settings: PlanSettings, start: LatLon?): SurveyPanel {

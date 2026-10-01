@@ -18,11 +18,17 @@ import kotlinx.serialization.json.Json
  * @property batteryMinutes usable flight time per battery, per vehicle kind, with the landing reserve already taken
  *   off. Missing = not set, and the survey panel asks for it instead of guessing.
  * @property maxGsdCm warn when a survey's GSD is coarser than this; null = no warning.
+ * @property maxAltitudeM the upload check warns when a mission climbs higher above home than this. 120 m is the usual
+ *   legal ceiling for small drones (India's Drone Rules 2021 green zones: 400 ft; EASA open category: 120 m).
+ * @property maxDistanceM the upload check warns when a mission goes further from home than this. 2 km is a starting
+ *   value, not a rule: set it to what the radio link and the operation's permission allow.
  */
 data class PlanSettings(
     val customCameras: List<Camera> = emptyList(),
     val batteryMinutes: Map<VehicleKind, Double> = emptyMap(),
     val maxGsdCm: Double? = null,
+    val maxAltitudeM: Double? = 120.0,
+    val maxDistanceM: Double? = 2000.0,
 ) {
     /** What the camera list offers: the bundled presets first, then the operator's own. */
     val cameras: List<Camera> get() = bundledCameras + customCameras
@@ -56,6 +62,10 @@ class PlanSettingsRepository(private val store: SettingsStore) {
 
     fun setMaxGsdCm(cm: Double?) = save { it.copy(maxGsdCm = cm) }
 
+    fun setMaxAltitudeM(m: Double?) = save { it.copy(maxAltitudeM = m) }
+
+    fun setMaxDistanceM(m: Double?) = save { it.copy(maxDistanceM = m) }
+
     private fun save(change: (PlanSettings) -> PlanSettings) {
         _settings.update(change)
         store.write(encodeSettings(_settings.value))
@@ -68,12 +78,15 @@ private data class SettingsFile(
     val customCameras: List<CameraEntry> = emptyList(),
     val batteryMinutes: Map<String, Double> = emptyMap(),
     val maxGsdCm: Double? = null,
+    // Pass 30. A file from before has neither, and gets the defaults; "no limit" is saved as 0.
+    val maxAltitudeM: Double = 120.0,
+    val maxDistanceM: Double = 2000.0,
 )
 
 private val json = Json { prettyPrint = true; encodeDefaults = true; ignoreUnknownKeys = true }
 
 internal fun encodeSettings(s: PlanSettings): String = json.encodeToString(
-    SettingsFile(s.customCameras.map { it.toEntry() }, s.batteryMinutes.mapKeys { it.key.name }, s.maxGsdCm),
+    SettingsFile(s.customCameras.map { it.toEntry() }, s.batteryMinutes.mapKeys { it.key.name }, s.maxGsdCm, s.maxAltitudeM ?: 0.0, s.maxDistanceM ?: 0.0),
 )
 
 /** Null for a broken file (bad JSON, a camera the checks reject); the caller then starts from defaults. */
@@ -83,6 +96,8 @@ internal fun decodeSettings(text: String): PlanSettings? = try {
         customCameras = file.customCameras.map { it.toCamera() },
         batteryMinutes = file.batteryMinutes.mapNotNull { (k, v) -> VehicleKind.entries.firstOrNull { it.name == k }?.let { it to v } }.toMap(),
         maxGsdCm = file.maxGsdCm,
+        maxAltitudeM = file.maxAltitudeM.takeIf { it > 0 },
+        maxDistanceM = file.maxDistanceM.takeIf { it > 0 },
     )
 } catch (e: IllegalArgumentException) {
     null

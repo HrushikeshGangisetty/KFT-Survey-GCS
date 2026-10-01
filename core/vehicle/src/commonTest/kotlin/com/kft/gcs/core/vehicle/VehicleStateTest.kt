@@ -22,6 +22,23 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class VehicleStateTest {
+    private fun param(name: String, value: Float) = com.divpundir.mavlink.definitions.common.ParamValue(paramId = name, paramValue = value)
+
+    /**
+     * The fence comes from four PARAM_VALUEs. FENCE_TYPE 3 = bits 0 and 1: altitude and circle. Type 1 is altitude
+     * only, so the radius parameter (which always has a value) is not a limit. Disabled or unknown = no fence.
+     */
+    @Test
+    fun theFenceIsReadFromItsParameters() {
+        val known = listOf("FENCE_TYPE" to 3f, "FENCE_ALT_MAX" to 100f, "FENCE_RADIUS" to 300f, "WPNAV_SPEED" to 1000f)
+            .fold(VehicleState()) { s, (name, value) -> s.reduce(param(name, value)) }
+        assertEquals(null, known.fence, "FENCE_ENABLE not reported yet")
+        assertEquals(setOf("FENCE_TYPE", "FENCE_ALT_MAX", "FENCE_RADIUS"), known.watchedParams.keys, "other parameters aren't kept")
+        assertEquals(Fence(altMaxM = 100.0, radiusM = 300.0), known.reduce(param("FENCE_ENABLE", 1f)).fence)
+        assertEquals(Fence(altMaxM = 100.0, radiusM = null), known.reduce(param("FENCE_ENABLE", 1f)).reduce(param("FENCE_TYPE", 1f)).fence)
+        assertEquals(null, known.reduce(param("FENCE_ENABLE", 0f)).fence)
+    }
+
 
     /** Each CAMERA_FEEDBACK adds its position (degrees × 1e7, as GLOBAL_POSITION_INT); 0,0 (no position) adds nothing. */
     @Test

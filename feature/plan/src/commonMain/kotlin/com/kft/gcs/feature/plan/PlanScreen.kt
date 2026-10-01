@@ -44,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.CameraOrientation
 import com.kft.gcs.ui.design.ConfirmDialog
@@ -74,6 +75,9 @@ interface PlanActions {
     fun onGroupSelected(index: Int)
     fun onGroupRenamed(index: Int, name: String)
     fun onGroupDeleted(index: Int)
+    fun onGroupMissionSelected(index: Int, mission: Int?)
+    fun onMissionVehicleSelected(mission: Int, vehicle: VehicleId?)
+    fun onSplitSurvey(parts: Int?, altitudeStepM: Double)
     fun onRowSelected(index: Int)
     fun onDeleteClicked(index: Int)
     fun onAltitudeChanged(text: String)
@@ -88,6 +92,8 @@ interface PlanActions {
     fun onCameraDeleted(name: String)
     fun onBatteryMinutesChanged(minutes: Double?)
     fun onMaxGsdChanged(cm: Double?)
+    fun onMaxAltitudeChanged(m: Double?)
+    fun onMaxDistanceChanged(m: Double?)
     fun onUndoClicked()
     fun onRedoClicked()
     fun onUploadClicked()
@@ -101,6 +107,7 @@ interface PlanActions {
     fun onOpenClicked()
     fun onImportClicked()
     fun onImportAsSurveys()
+    fun onImportAsMissions()
     fun onImportAsWaypoints()
     fun onImportDismissed()
 }
@@ -157,9 +164,10 @@ fun PlanScreen(state: PlanUiState, actions: PlanActions) {
                             TextButton(onClick = actions::onCancelTransferClicked) { Text("Cancel") }
                         }
                     }
+                    if (state.missions.isNotEmpty()) MissionList(state.missions, state.vehicleChoices, actions)
                     GroupList(state.groups, actions)
                     HorizontalDivider()
-                    state.survey?.let { SurveyEditor(it, state.groups.firstOrNull { g -> g.selected }?.index ?: 0, actions) }
+                    state.survey?.let { SurveyEditor(it, state, state.groups.firstOrNull { g -> g.selected }?.index ?: 0, actions) }
                         ?: WaypointEditor(state, actions)
                 }
                 state.survey?.stats?.takeIf { it.isNotEmpty() }?.let { StatsFooter(it) }
@@ -222,6 +230,35 @@ private fun Toolbar(state: PlanUiState, actions: PlanActions, onClear: () -> Uni
     }
 }
 
+/**
+ * The job's missions (shown once there are two or more): each with its size, the vehicle it is for (tap to choose),
+ * and any upload check it doesn't pass. Upload sends every mission that has a vehicle to that vehicle.
+ */
+@Composable
+private fun MissionList(missions: List<MissionRow>, vehicles: List<VehicleChoice>, actions: PlanActions) {
+    SectionHeader("Missions")
+    missions.forEach { m ->
+        var menu by remember(m.id) { mutableStateOf(false) }
+        Row(Modifier.fillMaxWidth().padding(start = Spacing.s), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("${m.tag}  ${m.name}", style = MaterialTheme.typography.titleSmall)
+                Text(m.summary, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+            }
+            Box {
+                TextButton(onClick = { menu = true }) { Text(m.vehicle) }
+                DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                    vehicles.forEach { v -> DropdownMenuItem(text = { Text(v.label) }, onClick = { menu = false; actions.onMissionVehicleSelected(m.id, v.id) }) }
+                    if (vehicles.isEmpty()) DropdownMenuItem(text = { Text("No vehicle connected") }, enabled = false, onClick = {})
+                    DropdownMenuItem(text = { Text("Not assigned") }, onClick = { menu = false; actions.onMissionVehicleSelected(m.id, null) })
+                }
+            }
+        }
+        m.problems.forEach { WarningLine("${m.tag} $it") }
+    }
+    HorizontalDivider()
+    SectionHeader("Groups")
+}
+
 @Composable
 private fun GroupList(groups: List<GroupHeader>, actions: PlanActions) {
     var renaming by remember { mutableStateOf<GroupHeader?>(null) }
@@ -234,6 +271,19 @@ private fun GroupList(groups: List<GroupHeader>, actions: PlanActions) {
             Column(Modifier.weight(1f)) {
                 Text(g.name, style = MaterialTheme.typography.titleSmall)
                 Text("${g.kind} · ${g.summary}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+            }
+            // Which mission the group is in, and the way to move it to another or to a new one of its own.
+            if (g.missionChoices.isNotEmpty()) {
+                var menu by remember(g.index) { mutableStateOf(false) }
+                Box {
+                    TextButton(onClick = { menu = true }) { Text(g.mission ?: "M1") }
+                    DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                        g.missionChoices.forEach { (id, tag) ->
+                            DropdownMenuItem(text = { Text("Mission $tag") }, onClick = { menu = false; actions.onGroupMissionSelected(g.index, id) })
+                        }
+                        DropdownMenuItem(text = { Text("A new mission") }, onClick = { menu = false; actions.onGroupMissionSelected(g.index, null) })
+                    }
+                }
             }
             TooltipIconButton(KftIcons.Edit, "Rename", { renaming = g })
             TooltipIconButton(KftIcons.Close, "Delete group", { actions.onGroupDeleted(g.index) })
@@ -280,7 +330,7 @@ private fun WaypointEditor(state: PlanUiState, actions: PlanActions) {
  * first, above the sections, so they're seen without scrolling. The stats are the panel's pinned footer.
  */
 @Composable
-private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
+private fun SurveyEditor(panel: SurveyPanel, state: PlanUiState, group: Int, actions: PlanActions) {
     val s = panel.settings
     panel.error?.let { WarningLine(it) }
     panel.warnings.forEach { WarningLine(it) }
@@ -344,10 +394,34 @@ private fun SurveyEditor(panel: SurveyPanel, group: Int, actions: PlanActions) {
             style = MaterialTheme.typography.bodySmall,
         )
     }
+    if (!s.isCorridor) Section("Split for several drones", startExpanded = false) { SplitSection(panel, actions) }
     Section("Battery & limits (kept between runs)", startExpanded = false) {
         OptionalNumberField(if (panel.isPlane) "Plane battery, usable" else "Copter battery, usable", "min", panel.batteryMinutes, actions::onBatteryMinutesChanged, Modifier.fillMaxWidth())
         OptionalNumberField("Warn above GSD", "cm/px", panel.maxGsdCm, actions::onMaxGsdChanged, Modifier.fillMaxWidth())
+        // Checked for every mission in the upload preview (blank = no limit).
+        OptionalNumberField("Warn above altitude", "m", state.maxAltitudeM, actions::onMaxAltitudeChanged, Modifier.fillMaxWidth())
+        OptionalNumberField("Warn beyond distance from home", "m", state.maxDistanceM, actions::onMaxDistanceChanged, Modifier.fillMaxWidth())
     }
+}
+
+/**
+ * Splits the area into parts, each a mission for a drone of its own. The cuts run along the flight lines, between
+ * lines, so no line is broken. "One battery each" takes as many parts as that needs (the battery time is set below).
+ */
+@Composable
+private fun SplitSection(panel: SurveyPanel, actions: PlanActions) {
+    var parts by remember { mutableStateOf("3") }
+    var step by remember { mutableStateOf("0") }
+    val stepM = step.trim().toDoubleOrNull()
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+        NumberField("Parts", parts, { parts = it }, "", Modifier.weight(1f))
+        NumberField("Each part higher by", step, { step = it }, "m", Modifier.weight(1f))
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+        OutlinedButton(onClick = { actions.onSplitSurvey(parts.trim().toIntOrNull(), stepM ?: 0.0) }, enabled = parts.trim().toIntOrNull() != null && stepM != null) { Text("Split into parts") }
+        OutlinedButton(onClick = { actions.onSplitSurvey(null, stepM ?: 0.0) }, enabled = stepM != null && panel.batteryMinutes != null) { Text("One battery each") }
+    }
+    Text("Each part becomes a mission of its own. A height step keeps drones flying side by side apart in altitude too.", style = MaterialTheme.typography.bodySmall)
 }
 
 /** A checkbox with its label, the whole row a 48 dp touch target. */
@@ -525,11 +599,13 @@ private fun ImportAsDialog(dialog: ImportDialog, actions: PlanActions) {
         text = {
             Text(
                 "It holds ${dialog.summary}. Add " + (if (dialog.canSurvey) "each area as a survey, or " else "") +
-                    "the points and lines as waypoints? Waypoints get the default altitude above home; altitudes in the file aren't used.",
+                    "the points and lines as waypoints? Waypoints get the default altitude above home; altitudes in the file aren't used." +
+                    if (dialog.canMissions) " \"A mission per area\" makes each area its own mission, for a drone of its own; \"Survey areas\" puts them all in one mission." else "",
             )
         },
         confirmButton = {
             Row {
+                if (dialog.canMissions) TextButton(onClick = actions::onImportAsMissions) { Text("A mission per area") }
                 if (dialog.canSurvey) TextButton(onClick = actions::onImportAsSurveys) { Text("Survey areas") }
                 TextButton(onClick = actions::onImportAsWaypoints) { Text("Waypoints") }
             }
@@ -542,7 +618,7 @@ private fun ImportAsDialog(dialog: ImportDialog, actions: PlanActions) {
 private fun UploadPreviewDialog(preview: UploadPreview, actions: PlanActions) {
     AlertDialog(
         onDismissRequest = actions::onPreviewDismissed,
-        title = { Text("Upload ${preview.lines.size - 1} items?") },
+        title = { Text(preview.title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 preview.warnings.forEach { WarningLine(it) }

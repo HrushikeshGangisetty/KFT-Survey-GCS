@@ -5,6 +5,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -12,8 +13,10 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runDesktopComposeUiTest
 import com.kft.gcs.core.geo.LatLon
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.mission.Home
+import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.ui.design.KftTheme
@@ -55,6 +58,40 @@ class PlanUiTest {
     }
 
     private fun PlanViewModel.survey() = state.value.survey!!.settings
+
+    /**
+     * Pass 30, on the screen: a survey split into 3 from its panel shows three missions; one is given to vehicle 2
+     * from its menu, and the upload preview is a job's ("Upload 1 of 3 missions?").
+     */
+    @Test
+    fun splitASurveyAndGiveAMissionToAVehicle() = runDesktopComposeUiTest(width = 1400, height = 1000) {
+        val drone2 = VehicleId(1, 2u)
+        val fleet = MutableStateFlow(listOf(FleetVehicle(VehicleId(1, 1u), 0, vehicle.value), FleetVehicle(drone2, 1, vehicle.value)))
+        val toDrone2 = FakeMissions()
+        val vm = PlanViewModel(vehicle, FakeMissions(), MissionSync(), PlanSettingsRepository(MemoryStore()), FakeFiles(), fleet) { toDrone2 }
+        setContent { KftTheme(ThemeMode.DARK) { PlanRoute(vm) } }
+        onNodeWithContentDescription("Add survey").performClick()
+        area.forEach(vm::onMapClick)
+        waitForIdle()
+
+        onNodeWithText("Split for several drones").performScrollTo().performClick()
+        onNodeWithText("Split into parts").performScrollTo().performClick()
+        waitForIdle()
+        onNodeWithText("Missions").assertExists()
+        onNodeWithText("M2  Survey 1 2/3").assertExists()
+        assertEquals(3, vm.state.value.missions.size)
+
+        onAllNodesWithText("Not assigned")[1].performScrollTo().performClick() // mission 2's vehicle menu
+        onNodeWithText("Vehicle 2").performClick()
+        waitForIdle()
+        assertEquals(listOf("Not assigned", "Vehicle 2", "Not assigned"), vm.state.value.missions.map { it.vehicle })
+
+        onNodeWithContentDescription("Upload mission to vehicle").performClick()
+        onNodeWithText("Upload 1 of 3 missions?").assertExists()
+        onNodeWithText("Upload").performClick()
+        waitForIdle()
+        assertTrue(toDrone2.uploaded.isNotEmpty(), "mission 2 went to vehicle 2")
+    }
 
     /**
      * Altitude and overlap typed into the panel reach the plan, and the screen shows the result: 80 m gives the GSD

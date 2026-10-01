@@ -111,6 +111,24 @@ frames carry their target, so the others ignore it (QGroundControl does the same
 `<data folder>/tlogs/<date>_<time>_link<L>_sys<N>.tlog`, MAVProxy format: 8-byte big-endian microseconds since 1970,
 then the MAVLink v2 frame. Received frames only (see "Not done").
 
+### 8. Jobs: several missions in one plan (Pass 30)
+
+A job is the plan with a **mission number on every group** and a map "mission → vehicle". There is no Job class.
+
+- Groups with the same number are one vehicle's mission, flown in list order and numbered from seq 1 on their own.
+- A KML with several areas can be imported as "a mission per area"; an area can be split into parts, each a mission
+  (`splitArea`: cuts along the flight lines, between two lines, parts balanced by line length; an optional altitude
+  step per part separates drones in height as well).
+- Upload sends each mission to its own vehicle (`Fleet.missionsOf`). A mission without a vehicle is left out and the
+  preview says so. A vehicle has at most one mission.
+- The preview checks every mission against the operator's limits (altitude, distance from home, one battery) and the
+  vehicle's own fence. They are warnings: the pilot decides.
+
+Alternative considered: mission objects that contain groups. It would have changed the editor's state, its undo
+history and every reader of the group list, for no behaviour a number doesn't give.
+
+A plan with one mission and no assignment is saved as file version 1, as before. A job is version 2.
+
 ## Level 2 — the GCS starts missions (not built)
 
 What it would need:

@@ -124,6 +124,23 @@ class FleetTest {
         assertEquals(VehicleId(1, 2u), fleet.selectedId.value)
     }
 
+    /** A job sends each mission to its own vehicle, whichever one is selected. */
+    @Test
+    fun missionsOfReachesANamedVehicleWithoutSelectingIt() = runTest {
+        val link = link(1, 1, 2)
+        val (fc1, fc2) = link.fcs
+        links.value = listOf(link)
+        val fleet = fleet()
+        link.hears(1, 2)
+        runCurrent()
+        assertTrue(fleet.missionsOf(VehicleId(1, 2u)).clear().isSuccess)
+        assertEquals(VehicleId(1, 1u), fleet.selectedId.value, "the selection is untouched")
+        assertEquals(1, fc2.sentOf<MissionClearAll>().size)
+        assertTrue(fc1.sentOf<MissionClearAll>().isEmpty())
+        assertEquals(setOf(VehicleId(1, 2u)), sync.state.value.held.keys)
+        assertContains(fleet.missionsOf(VehicleId(1, 7u)).clear().exceptionOrNull()!!.message!!, "Vehicle 7 is not connected")
+    }
+
     /** The operator selects vehicle 2 while vehicle 1's transfer is running: the result is still recorded for vehicle 1. */
     @Test
     fun aTransferStaysWithTheVehicleItStartedOn() = runTest {

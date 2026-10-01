@@ -51,14 +51,6 @@ data class HudItem(val label: String, val value: String, val warning: Boolean = 
  */
 data class VehicleChipUi(val id: VehicleId, val label: String, val slot: Int, val selected: Boolean, val connected: Boolean)
 
-/**
- * A short label per vehicle: its system id ("2"). When two links carry the same system id, those get the link number
- * too ("L1·1", "L2·1"), so no two labels are ever the same.
- */
-fun vehicleLabels(ids: List<VehicleId>): Map<VehicleId, String> = ids.associateWith { id ->
-    if (ids.count { it.systemId == id.systemId } > 1) "L${id.link}·${id.systemId}" else "${id.systemId}"
-}
-
 data class MessageUi(val text: String, val severity: Severity)
 
 data class LoginUi(val text: String, val warning: Boolean)

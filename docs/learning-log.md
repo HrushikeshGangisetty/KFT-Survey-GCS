@@ -3546,3 +3546,112 @@ plan and upload, then in each MAVProxy window `mode guided`, `arm throttle`, `ta
   deprecation warnings (`runDesktopComposeUiTest`, `URL(String)`) also predate this pass.
 - **Next: Pass 30** (jobs, multi-polygon KML, splitting an area, per-mission validation).
 - **Stopped after Pass 29, as asked.**
+
+## Pass 30 — Jobs: several missions, a mission per KML area, splitting an area, upload checks (2026-10-02)
+
+### What changed
+- **`core/planning/AreaSplit.kt`** (new): `splitArea` cuts an area into parts along the flight lines, between lines.
+  `SurveyGrid.kt`: the line placement moved into `sweepLines`, which the grid and the splitter share.
+- **`core/vehicle`**: `VehicleState.fence` (from four FENCE_ parameters the GCS now asks for at connect);
+  `Fleet.missionsOf(id)` (transfers with one named vehicle); `vehicleLabels` moved here from Fly.
+- **`feature/plan`**
+  - `MissionGroups.kt`: every group has a `mission` number; `flatten` numbers each mission from 1 on its own;
+    `FlatMission.missions` / `only(mission)`.
+  - `Job.kt` (new): mission ids, tags and names; `estimateMission`; `missionProblems` (the checks); `splitSurvey`.
+  - `PlanUiState.kt`: the Missions rows, `uploadTargets`, the per-mission upload preview, `checkMission`.
+  - `PlanViewModel.kt`: import "a mission per area", split, give a mission to a vehicle, move a group between
+    missions, upload each mission to its vehicle.
+  - `PlanDocument.kt`: file version 2 for a job (mission numbers and vehicles); a one-mission plan is still version 1.
+  - `PlanSettings.kt`: `maxAltitudeM` (120) and `maxDistanceM` (2000), kept between runs.
+  - `PlanScreen.kt`: the Missions list, the mission tag and "move to" menu on a group, "Split for several drones",
+    "A mission per area" in the import dialog, the two limit fields.
+- **Tests**: `AreaSplitTest`, `JobTest`, additions to `FleetTest`, `VehicleStateTest`, `PlanUiTest`; `JobSitlRun`.
+- **`docs/decisions/ADR-005-multi-vehicle.md`**: a "Jobs" section.
+
+### How it works
+```
+KML with 3 Placemarks ─▶ importGeometry ─▶ "A mission per area" ─▶ 3 SurveyGroups, mission 0 / 1 / 2
+one big SurveyGroup ──▶ splitSurvey ─▶ splitArea (cuts between lines) ─▶ N SurveyGroups, a mission each
+                                                                              │
+flatten(groups) ─▶ FlatMission (every group, seq restarted per mission) ─▶ only(m) = one vehicle's items
+Missions list: mission ─▶ vehicle (PlanEdit.assignments)
+Upload ─▶ uploadPreview: per mission, estimateMission + missionProblems (altitude, distance, battery, fence)
+       ─▶ uploadTargets ─▶ for each: Fleet.missionsOf(vehicle).upload(items)   (home = that vehicle's, seq 0)
+```
+A job is not a new object. It is the plan, whose groups carry a mission number, plus a map "mission → vehicle".
+With every group in mission 0 and no assignment, everything behaves as before, and the old tests pass untouched.
+
+### Engineering learnings
+- **A tag instead of a container.** Missions could have been objects that hold groups. That would have changed the
+  editor's state, its undo history and every function that reads `groups`. A number on each group changed almost
+  nothing: selection, undo, drag, the file format (one new field) all kept working, and "move this survey to another
+  drone" is changing one number. The price: a mission has no place of its own for a name, so the name is derived
+  (its group's name when it has one group).
+- **Cut where the grid already is.** A cut placed "at 1/3 of the width" breaks lines or leaves a sliver. The splitter
+  places the sweep lines exactly as the grid will (one shared function, so they can't drift apart) and cuts midway
+  between two lines. Each part planned on its own then has whole lines; across a cut the gap is 0.75–1 spacing, so
+  the side overlap is the chosen one or more. That reasoning is in the KDoc, and a test plans the parts and counts
+  lines (3 + 4 + 3 = 10).
+- **Balance by line length, not line count.** A triangle split by count gives one drone 1100 m of lines and the other
+  350 m. The hand-worked triangle test fixes the rule (boundary where the running length is nearest j/N of the total).
+- **Hand-worked tests find things.** The first versions used a field exactly 300 m wide with 30 m spacing and failed:
+  through the projection 300 m is 300.003 m, which is 11 lines, not 10. That is a property of the existing grid, not
+  of the splitter (a width of exactly k spacings is on a knife edge), so the tests moved to 290 m. Worth knowing when
+  a customer draws a field by typing round numbers: one line more or less is possible, both cover the field.
+- **Checks warn, they don't block.** Altitude, distance, battery and fence problems are sentences in the upload
+  preview. The pilot decides (S9 keeps the GCS out of flying); a hard block would be wrong for a permitted 150 m
+  flight. A fence is worded most strongly because the vehicle itself will act there.
+- **The time estimate is deliberately simple** (straight legs at the set speed, climb and descent for a copter) and
+  says so. It can be checked by hand (272 s for the 3-4-5 triangle), which a clever model couldn't.
+- **"The plan" now depends on who is selected.** Fly's "vehicle mission ≠ plan" compares with the mission meant for
+  the selected vehicle (`missionFor`), so selecting drone 2 shows drone 2's mission state.
+- **Reading four parameters instead of all.** The fence needs FENCE_ENABLE/TYPE/ALT_MAX/RADIUS. Asking for those by
+  name at connect (4 small messages) works for every vehicle, selected or not; a full parameter download for every
+  vehicle would not (Pass 29).
+- **Ponytail review (lite):** nothing cut. Left in on purpose: `PlanJob` (two values that travel together to and from
+  the file). Noted for later: `buildPlanUiState` and `uploadPreview` each work out a mission's vehicle state; they
+  could share it.
+
+### What to look at
+1. `core/planning/src/commonMain/kotlin/com/kft/gcs/core/planning/AreaSplit.kt` — the whole file is 80 lines.
+2. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/Job.kt` — `estimateMission`, `missionProblems`, `splitSurvey`.
+3. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanViewModel.kt` — `onUploadConfirmed`.
+
+### Tests
+`gradlew.bat check`: pass, 871 test results, 0 failures; the same three old warnings as Pass 29.
+- `AreaSplitTest` (6, hand-worked on paper in the comments): a rectangle in two (cut at x = 145), in three
+  (3 + 4 + 3 lines, cuts at 85 and 205), a cut at grid angle 90°, a triangle balanced by line length (cut at 85, area
+  21 037.5 m²), never more parts than lines, the parts add up to the whole area at an odd angle.
+- `JobTest` (15): the estimate (1200 m, 272 s; a plane 240 s; default speed; unknown home); every check's sentence
+  and the at-the-limit cases; `missionFor`; per-mission numbering and takeoff; the job file round trip and version;
+  `splitSurvey` (13 lines → 4 + 5 + 4, altitudes 50/55/60, "one battery each" = 3 parts by reasoning); and through
+  the ViewModel: a KML of three fields → three missions named from the placemarks; each uploaded to its own vehicle
+  (checked by where each vehicle's waypoints lie); an unassigned mission is left out; the plan follows the selection;
+  the preview's altitude and fence warnings; a split is one undo step.
+- `PlanUiTest.splitASurveyAndGiveAMissionToAVehicle` (headless): split from the panel, the Missions list, the vehicle
+  menu, "Upload 1 of 3 missions?".
+- `FleetTest.missionsOfReachesANamedVehicleWithoutSelectingIt`, `VehicleStateTest.theFenceIsReadFromItsParameters`.
+
+**SITL, run this pass** (`start-sitl.ps1 -Count 3`, three TCP links): `JobSitlRun.oneKmlThreeFieldsThreeDrones` with
+`KFT_SITL_FLEET=127.0.0.1:5762,127.0.0.1:5772,127.0.0.1:5782`. Through the real Plan ViewModel: import a KML with
+Field A, B, C → "a mission per area" → M1/M2/M3 (39 items, 712 m, ≈2 min 22 s each) → a vehicle each → preview
+"Upload 3 of 3 missions?" → uploaded → `sitl_pilot.py` flies each → all three in AUTO at once → **48 / 48 / 48
+photos, exactly what each mission planned**, all landed. Pass, 5 min 34 s.
+Not run in the real window this pass (the file dialog makes it a long click-through): the screen is covered by the
+headless UI test, the logic by the SITL run.
+
+### Safety
+- No allowlist change. One new request at connect: `PARAM_REQUEST_READ` by name for four FENCE_ parameters (already
+  ALWAYS on the allowlist; read-only; addressed to the vehicle through its own sender).
+- A job's upload goes through `Fleet.missionsOf(vehicle)`, so each mission is sent by the sender bound to its own
+  vehicle (Pass 29 rule) with that vehicle's home as seq 0 (S11).
+- The checks never send anything and never block: they are text in the preview.
+- The GCS still starts nothing (S9): each pilot switches to AUTO.
+
+### Open questions / next
+- **`ponytail:` / known limits:** one vehicle kind per job (a mixed copter/plane job warns in the preview); polygon
+  fences aren't read (only altitude and circle); the time estimate has no wind, turns or RTL climb; Read and Clear
+  still act on the selected vehicle and replace the whole plan; a job's missions all draw in the same colours (Pass 32).
+- The limits' defaults (120 m, 2 km) are starting values: set them for the operation.
+- A plan saved as a job (version 2) can't be opened by a build from before this pass; it says so.
+- **Next: Pass 31** (progress saved as it happens, the remainder mission, resume on the same or another drone).

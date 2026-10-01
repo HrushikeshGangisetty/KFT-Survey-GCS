@@ -8,6 +8,7 @@ import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.MissionSyncState
 import com.kft.gcs.core.vehicle.VehicleState
+import com.kft.gcs.core.vehicle.vehicleLabels
 import com.kft.gcs.ui.map.CameraRequest
 import com.kft.gcs.ui.map.MapOverlay
 import com.kft.gcs.ui.map.TileSourceConfig

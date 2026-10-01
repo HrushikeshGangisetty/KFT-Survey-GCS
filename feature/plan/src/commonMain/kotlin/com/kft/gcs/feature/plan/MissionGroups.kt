@@ -26,20 +26,28 @@ import com.kft.gcs.core.mission.MissionItem
  * One block of the mission, in flight order. The plan is a list of these, not a flat item list: a survey keeps its
  * parameters (so changing the overlap re-generates its lines) and the flat list is made only to upload or export
  * ([flatten]). Home is never part of any group; the upload adds it as seq 0 (S11).
+ *
+ * [mission] is which mission of the job the group belongs to (see `Job.kt`). Groups with the same number are flown
+ * one after another by one vehicle, in list order; a different number is a different vehicle's mission. Everything in
+ * mission 0 is the plain single-mission plan.
  */
 sealed interface MissionGroup {
     val name: String
+    val mission: Int
     fun renamed(name: String): MissionGroup
+    fun inMission(mission: Int): MissionGroup
 }
 
 /** Hand-placed items: the Pass 8 waypoint editor, now one group among others. */
-data class WaypointGroup(override val name: String, val items: List<PlanItem> = emptyList()) : MissionGroup {
+data class WaypointGroup(override val name: String, val items: List<PlanItem> = emptyList(), override val mission: Int = 0) : MissionGroup {
     override fun renamed(name: String) = copy(name = name)
+    override fun inMission(mission: Int) = copy(mission = mission)
 }
 
 /** An area survey or a corridor scan: its settings, from which the lines and mission items are generated. */
-data class SurveyGroup(override val name: String, val survey: SurveySettings) : MissionGroup {
+data class SurveyGroup(override val name: String, val survey: SurveySettings, override val mission: Int = 0) : MissionGroup {
     override fun renamed(name: String) = copy(name = name)
+    override fun inMission(mission: Int) = copy(mission = mission)
 }
 
 /** Which of altitude and GSD the operator typed; the other one is computed ([SurveyHeight]). */
@@ -140,25 +148,36 @@ fun defaultSurvey(kind: VehicleKind?, camera: Camera): SurveySettings {
 }
 
 /**
- * One group after flattening: its mission items, the seq number of its first item (S11: the mission's first item is
- * 1), and for a survey the worked-out [plan] or the [error] that stopped it (too few corners, bad overlap…).
+ * One group after flattening: its mission items, the seq number of its first item within its own mission (S11: a
+ * mission's first item is 1), and for a survey the worked-out [plan] or the [error] that stopped it (too few corners,
+ * bad overlap…).
  */
 data class FlatGroup(val group: MissionGroup, val items: List<MissionItem>, val firstSeq: Int, val plan: SurveyPlan?, val error: String?)
 
-/** The whole plan as the vehicle will get it. */
+/**
+ * The plan's groups with their items, in the editor's order (so index i here is group i there). With one mission,
+ * [items] is what the vehicle gets. A job's missions are taken out one at a time with [only].
+ */
 data class FlatMission(val groups: List<FlatGroup>) {
     val items: List<MissionItem> get() = groups.flatMap { it.items }
     val plannedPhotos: Int get() = groups.sumOf { it.plan?.stats?.photoCount ?: 0 }
+
+    /** The missions in the plan, in the order their first group appears. */
+    val missions: List<Int> get() = groups.map { it.group.mission }.distinct()
+
+    /** One mission's groups: its [items] are what that mission's vehicle gets. */
+    fun only(mission: Int) = FlatMission(groups.filter { it.group.mission == mission })
 }
 
 /**
- * Groups → items, in order. A copter survey that starts the mission gets a NAV_TAKEOFF first (the waypoint group
- * does the same through [addWaypoint]); a survey that can't be planned yet contributes nothing and reports why.
+ * Groups → items, in order, each mission numbered on its own. A copter survey that starts its mission gets a
+ * NAV_TAKEOFF first (the waypoint group does the same through [addWaypoint]); a survey that can't be planned yet
+ * contributes nothing and reports why.
  */
 fun flatten(groups: List<MissionGroup>, kind: VehicleKind?, limits: SurveyLimits): FlatMission {
-    var nextSeq = 1
+    val nextSeq = HashMap<Int, Int>() // per mission
     val flat = groups.map { group ->
-        val first = nextSeq
+        val first = nextSeq[group.mission] ?: 1
         val result = when (group) {
             is WaypointGroup -> FlatGroup(group, toMissionItems(group.items), first, null, null)
             is SurveyGroup -> {
@@ -175,7 +194,7 @@ fun flatten(groups: List<MissionGroup>, kind: VehicleKind?, limits: SurveyLimits
                 }
             }
         }
-        nextSeq += result.items.size
+        nextSeq[group.mission] = first + result.items.size
         result
     }
     return FlatMission(flat)

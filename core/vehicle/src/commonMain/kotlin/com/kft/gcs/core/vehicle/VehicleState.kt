@@ -11,6 +11,7 @@ import com.divpundir.mavlink.definitions.common.HomePosition
 import com.divpundir.mavlink.definitions.common.MissionCurrent
 import com.divpundir.mavlink.definitions.common.MissionItemReached
 import com.divpundir.mavlink.definitions.common.MissionState
+import com.divpundir.mavlink.definitions.common.ParamValue
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
 import com.divpundir.mavlink.definitions.common.VfrHud
@@ -58,7 +59,31 @@ data class VehicleState(
     val login: KftLoginStatus? = null,
     /** Where the camera took each photo since the link came up, oldest first (CAMERA_FEEDBACK), at most [MAX_PHOTOS]. */
     val photos: List<LatLon> = emptyList(),
-)
+    /** The few parameters the GCS itself reads ([WATCHED_PARAMS]), as last reported in a PARAM_VALUE. */
+    val watchedParams: Map<String, Float> = emptyMap(),
+) {
+    /**
+     * The vehicle's simple geofence, or null when it is off or not known yet. ArduPilot's AC_Fence parameters (Copter
+     * and Plane, parameter docs 4.5+): FENCE_ENABLE 0/1; FENCE_TYPE is a bitmask, bit 0 = maximum altitude, bit 1 =
+     * circle centred on home; FENCE_ALT_MAX and FENCE_RADIUS are metres.
+     * ponytail: polygon fences (FENCE_TYPE bit 2) are stored as a fence "mission", which the GCS doesn't read.
+     */
+    val fence: Fence?
+        get() {
+            if ((watchedParams["FENCE_ENABLE"] ?: 0f) < 1f) return null
+            val type = watchedParams["FENCE_TYPE"]?.toInt() ?: return null
+            return Fence(
+                altMaxM = watchedParams["FENCE_ALT_MAX"]?.toDouble()?.takeIf { type and 1 != 0 },
+                radiusM = watchedParams["FENCE_RADIUS"]?.toDouble()?.takeIf { type and 2 != 0 },
+            )
+        }
+}
+
+/** An enabled fence's limits; a null limit is one the fence doesn't have. Altitude is above home. */
+data class Fence(val altMaxM: Double?, val radiusM: Double?)
+
+/** Parameters the GCS reads for its own checks; asked for at connect ([VehicleRepository]) and kept in [VehicleState.watchedParams]. */
+val WATCHED_PARAMS = listOf("FENCE_ENABLE", "FENCE_TYPE", "FENCE_ALT_MAX", "FENCE_RADIUS")
 
 /**
  * Photos kept for the map. A day's survey is a few thousand; beyond this the oldest are dropped from the map.
@@ -131,6 +156,10 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
     // lat/lng are the vehicle's position from the AHRS at that moment; 0,0 means it had none.
     is CameraFeedback -> if (message.lat == 0 && message.lng == 0) this
         else copy(photos = (photos + LatLon.fromE7(message.lat, message.lng)).takeLast(MAX_PHOTOS))
+    // PARAM_VALUE (common.xml #22): the answer to a read, a set or a list request, whoever asked.
+    is ParamValue -> message.paramId.trimEnd('\u0000').let { name ->
+        if (name in WATCHED_PARAMS) copy(watchedParams = watchedParams + (name to message.paramValue)) else this
+    }
     // AUTOPILOT_VERSION is in standard.xml.
     is AutopilotVersion -> copy(firmwareVersion = firmwareVersionName(message.flightSwVersion))
     else -> this

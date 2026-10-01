@@ -139,13 +139,9 @@ fun buildSurveyGrid(spec: GridSpec): SurveyGrid {
     val corners = spec.polygon.map { frame.toGrid(projection.toLocal(it)) }
 
     // 3. Sweep lines, centred across the polygon's width.
-    val minAcross = corners.minOf { it.across }
-    val width = corners.maxOf { it.across } - minAcross
-    val lineCount = max(1, ceil(width / spec.lineSpacingM - 1e-9).toInt()) // 1e-9: a width of exactly k spacings is k lines
-    require(lineCount <= MAX_LINES) { "$lineCount lines is too many (max $MAX_LINES): check the spacing and the area" }
-    val firstAcross = minAcross + (width - (lineCount - 1) * spec.lineSpacingM) / 2
-    val byEntry = (0 until lineCount).map { firstAcross + it * spec.lineSpacingM }
-        .let { if (spec.entry == EntryCorner.BOTTOM_RIGHT || spec.entry == EntryCorner.TOP_RIGHT) it.reversed() else it }
+    val lines = sweepLines(corners, spec.lineSpacingM)
+    val lineCount = lines.size
+    val byEntry = if (spec.entry == EntryCorner.BOTTOM_RIGHT || spec.entry == EntryCorner.TOP_RIGHT) lines.reversed() else lines
     val skip = (spec.turnaround as? Turnaround.Plane)?.let { minLineSkip(spec.lineSpacingM, it.turnRadiusM) } ?: 1
     val order = planeLineOrder(lineCount, skip)
     val sweepOrder = order?.map(byEntry::get) ?: byEntry
@@ -203,6 +199,21 @@ fun buildSurveyGrid(spec: GridSpec): SurveyGrid {
         lineSkip = if (order == null) 1 else skip,
         loopTurns = loopTurns,
     )
+}
+
+/**
+ * Step 3 of [buildSurveyGrid]: the `across` position of every sweep line, left to right. n = ⌈width / spacing⌉ lines
+ * exactly [lineSpacingM] apart, centred in the polygon's width. Shared with [splitArea], which must cut between the
+ * very same lines.
+ */
+internal fun sweepLines(corners: List<GridPoint>, lineSpacingM: Double): List<Double> {
+    require(lineSpacingM > 0) { "line spacing must be positive: $lineSpacingM" }
+    val minAcross = corners.minOf { it.across }
+    val width = corners.maxOf { it.across } - minAcross
+    val lineCount = max(1, ceil(width / lineSpacingM - 1e-9).toInt()) // 1e-9: a width of exactly k spacings is k lines
+    require(lineCount <= MAX_LINES) { "$lineCount lines is too many (max $MAX_LINES): check the spacing and the area" }
+    val firstAcross = minAcross + (width - (lineCount - 1) * lineSpacingM) / 2
+    return (0 until lineCount).map { firstAcross + it * lineSpacingM }
 }
 
 /**
@@ -408,7 +419,7 @@ fun entryCornerPositions(polygon: List<LatLon>, gridAngleDeg: Double, outsetM: D
 }
 
 /** Centred on the corners' average, so no corner is far from where the flat map is most exact. */
-private fun projectionFor(polygon: List<LatLon>) =
+internal fun projectionFor(polygon: List<LatLon>) =
     LocalProjection(LatLon(polygon.sumOf { it.latitude } / polygon.size, polygon.sumOf { it.longitude } / polygon.size))
 
 /** A point in the grid frame: [across] sideways from the lines, [along] in the line direction (metres). */

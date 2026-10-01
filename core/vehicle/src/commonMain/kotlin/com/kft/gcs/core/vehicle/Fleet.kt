@@ -149,23 +149,29 @@ class Fleet(
      * Mission transfers with the selected vehicle. The vehicle is fixed when a call starts: the whole transfer, and
      * the note in [MissionSync] of what that vehicle now holds, stay with it even if the selection changes meanwhile.
      */
-    val missions: MissionRepository = object : MissionRepository {
+    val missions: MissionRepository = missionRepository(NO_VEHICLE) { selectedEntry() }
+
+    /** Mission transfers with one named vehicle, selected or not: a job uploads each mission to its own vehicle. */
+    fun missionsOf(id: VehicleId): MissionRepository =
+        missionRepository("Vehicle ${id.systemId} is not connected.") { entries.value.find { it.id == id } }
+
+    private fun missionRepository(missing: String, entry: () -> Entry?) = object : MissionRepository {
         override suspend fun upload(items: List<MissionItem>, onProgress: (Int, Int) -> Unit): Result<Unit> {
-            val e = selectedEntry() ?: return noVehicle()
+            val e = entry() ?: return noVehicle()
             return e.missions.upload(items, onProgress).onSuccess { sync.vehicleHolds(e.id, items) }
         }
 
         override suspend fun download(onProgress: (Int, Int) -> Unit): Result<Mission> {
-            val e = selectedEntry() ?: return noVehicle()
+            val e = entry() ?: return noVehicle()
             return e.missions.download(onProgress).onSuccess { sync.vehicleHolds(e.id, it.items) }
         }
 
         override suspend fun clear(): Result<Unit> {
-            val e = selectedEntry() ?: return noVehicle()
+            val e = entry() ?: return noVehicle()
             return e.missions.clear().onSuccess { sync.vehicleHolds(e.id, emptyList()) }
         }
 
-        private fun <T> noVehicle(): Result<T> = Result.failure(MissionTransferException(NO_VEHICLE))
+        private fun <T> noVehicle(): Result<T> = Result.failure(MissionTransferException(missing))
     }
 
     /** Parameters of the selected vehicle; like [missions], each call stays with the vehicle it started on. */
@@ -180,6 +186,14 @@ class Fleet(
     private companion object {
         const val NO_VEHICLE = "No vehicle connected."
     }
+}
+
+/**
+ * A short label per vehicle: its system id ("2"). When two links carry the same system id, those get the link number
+ * too ("L1·1", "L2·1"), so no two labels are ever the same. The map, the switcher and the Plan tab all use these.
+ */
+fun vehicleLabels(ids: List<VehicleId>): Map<VehicleId, String> = ids.associateWith { id ->
+    if (ids.count { it.systemId == id.systemId } > 1) "L${id.link}·${id.systemId}" else "${id.systemId}"
 }
 
 private fun LinkState.isDuplicate() = (this as? LinkState.Connected)?.vehicle?.duplicateId == true

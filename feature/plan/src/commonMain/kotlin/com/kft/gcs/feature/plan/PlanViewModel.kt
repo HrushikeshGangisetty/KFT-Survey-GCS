@@ -8,6 +8,7 @@ import com.kft.gcs.core.geoio.decodeWaypoints
 import com.kft.gcs.core.geoio.encodeQgcPlan
 import com.kft.gcs.core.geoio.encodeWaypoints
 import com.kft.gcs.core.geoio.importGeometry
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.planning.Camera
 import com.kft.gcs.core.planning.CameraOrientation
@@ -15,9 +16,11 @@ import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.planning.altitudeForGsdM
 import com.kft.gcs.core.planning.gsdM
 import com.kft.gcs.core.mission.Mission
+import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.MissionRepository
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleState
+import com.kft.gcs.core.vehicle.vehicleLabels
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -59,6 +62,8 @@ enum class ExportFormat(val extension: String) { QGC_PLAN("plan"), WAYPOINTS("wa
  * @param missions transfers with the selected vehicle. It also notes in [sync] what that vehicle holds after each
  *   one (`Fleet.missions`), because only it knows which vehicle a transfer went to (ADR-005 §5).
  * @param sync shared with the Fly view: this screen writes the plan into it.
+ * @param fleet every vehicle, for a job: which vehicles a mission can be given to, and each one's home and fence.
+ * @param missionsOf transfers with one named vehicle (`Fleet.missionsOf`), for a job's upload.
  */
 class PlanViewModel(
     private val vehicle: StateFlow<VehicleState>,
@@ -66,6 +71,8 @@ class PlanViewModel(
     private val sync: MissionSync,
     private val settings: PlanSettingsRepository,
     private val files: PlanFiles,
+    private val fleet: StateFlow<List<FleetVehicle>> = MutableStateFlow(emptyList()),
+    private val missionsOf: (VehicleId) -> MissionRepository = { missions },
 ) : ViewModel(), PlanActions {
 
     private val edit = MutableStateFlow(PlanEdit())
@@ -76,14 +83,21 @@ class PlanViewModel(
     /** One-shot messages for a snackbar: transfer and file results, and errors. */
     val effects: Flow<String> = _effects.receiveAsFlow()
 
-    val state: StateFlow<PlanUiState> = combine(edit, vehicle, settings.settings, sync.state, ::buildPlanUiState)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), buildPlanUiState(edit.value, vehicle.value, settings.settings.value, sync.state.value))
+    val state: StateFlow<PlanUiState> = combine(edit, vehicle, settings.settings, sync.state, fleet, ::buildPlanUiState)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), buildPlanUiState(edit.value, vehicle.value, settings.settings.value, sync.state.value, fleet.value))
 
     init {
         // Keep the shared plan (for Fly's "≠ plan" warning and photo count) up to date, even while this tab is hidden.
+        // "The plan" is the mission meant for the selected vehicle, so it follows the selection and the assignments.
         viewModelScope.launch {
-            combine(edit.map { it.groups }, vehicle.map { it.vehicleKind }.distinctUntilChanged(), settings.settings) { groups, kind, s ->
-                flatten(groups, kind, s.limitsFor(kind))
+            combine(
+                edit.map { it.groups to it.assignments }.distinctUntilChanged(),
+                vehicle.map { it.vehicleKind }.distinctUntilChanged(),
+                settings.settings,
+                sync.state.map { it.selected }.distinctUntilChanged(),
+            ) { (groups, assignments), kind, s, selected ->
+                val flat = flatten(groups, kind, s.limitsFor(kind))
+                missionFor(selected, flat.missions, assignments)?.let(flat::only) ?: FlatMission(emptyList())
             }.collect { sync.planChanged(it.items, it.plannedPhotos) }
         }
     }
@@ -94,7 +108,7 @@ class PlanViewModel(
         val g = e.selectedGroup ?: return@update e
         when (val group = e.groups[g]) {
             is WaypointGroup -> {
-                val items = group.items.addWaypoint(at, vehicle.value.vehicleKind, startsMission = e.groups.take(g).none(::hasItems))
+                val items = group.items.addWaypoint(at, vehicle.value.vehicleKind, startsMission = e.groups.take(g).none { it.mission == group.mission && hasItems(it) })
                 e.changed(null, e.groups.replace(g, group.copy(items = items))).selectRow(items.lastIndex)
             }
             is SurveyGroup -> {
@@ -164,10 +178,46 @@ class PlanViewModel(
         e.changed(null, e.groups.replace(index, group.renamed(trimmed)))
     }
 
+    /** Moves a group to another mission of the job; [mission] null starts a new mission with it. */
+    override fun onGroupMissionSelected(index: Int, mission: Int?) = edit.update { e ->
+        val group = e.groups.getOrNull(index) ?: return@update e
+        val to = mission ?: ((e.groups.maxOf { it.mission }) + 1)
+        e.changed(null, e.groups.replace(index, group.inMission(to))).dropStaleAssignments()
+    }
+
+    /** Gives a mission to a vehicle ([vehicle] null: to nobody). A vehicle flies one mission, so it loses any other. */
+    override fun onMissionVehicleSelected(mission: Int, vehicle: VehicleId?) = edit.update { e ->
+        val others = e.assignments.filter { (m, v) -> m != mission && v != vehicle }
+        e.copy(assignments = if (vehicle == null) others else others + (mission to vehicle))
+    }
+
+    /**
+     * Splits the selected survey area into parts, each a mission of its own ([splitSurvey]). [parts] null = as many
+     * as it takes for each to fit one battery. One undo step puts the whole area back.
+     */
+    override fun onSplitSurvey(parts: Int?, altitudeStepM: Double) {
+        val e = edit.value
+        val g = e.selectedGroup ?: return
+        val group = e.groups.getOrNull(g) as? SurveyGroup ?: return
+        val kind = vehicle.value.vehicleKind
+        splitSurvey(group, kind, settings.settings.value.limitsFor(kind), parts, altitudeStepM)
+            .onSuccess { split ->
+                // The first part stays in the survey's mission; each of the others starts a new one.
+                val next = e.groups.maxOf { it.mission } + 1
+                val tagged = split.mapIndexed { i, s -> if (i == 0) s else s.inMission(next + i - 1) }
+                edit.update { now ->
+                    if (now.groups != e.groups) return@update now // edited meanwhile: don't overwrite it
+                    now.changed(null, now.groups.take(g) + tagged + now.groups.drop(g + 1)).copy(selectedGroup = g, selectedItem = null, form = null)
+                }
+                _effects.trySend("Split ${group.name} into ${split.size} missions. Give each a vehicle under Missions.")
+            }
+            .onFailure { _effects.trySend(it.message ?: "Couldn't split the survey.") }
+    }
+
     override fun onGroupDeleted(index: Int) = edit.update { e ->
         if (index !in e.groups.indices) return@update e
         val groups = e.groups.filterIndexed { i, _ -> i != index }
-        e.changed(null, groups).copy(selectedGroup = groups.indices.lastOrNull()?.coerceAtMost(index), selectedItem = null, form = null)
+        e.changed(null, groups).copy(selectedGroup = groups.indices.lastOrNull()?.coerceAtMost(index), selectedItem = null, form = null).dropStaleAssignments()
     }
 
     // ---- waypoint rows ----
@@ -247,6 +297,10 @@ class PlanViewModel(
 
     override fun onMaxGsdChanged(cm: Double?) = settings.setMaxGsdCm(cm?.takeIf { it > 0 })
 
+    override fun onMaxAltitudeChanged(m: Double?) = settings.setMaxAltitudeM(m?.takeIf { it > 0 })
+
+    override fun onMaxDistanceChanged(m: Double?) = settings.setMaxDistanceM(m?.takeIf { it > 0 })
+
     // ---- undo / redo ----
 
     override fun onUndoClicked() = edit.update { e ->
@@ -262,15 +316,37 @@ class PlanViewModel(
     // ---- vehicle ----
 
     /** Opens the preview. Nothing is sent until [onUploadConfirmed]. */
-    override fun onUploadClicked() = edit.update { it.copy(preview = uploadPreview(it, vehicle.value, settings.settings.value)) }
+    override fun onUploadClicked() =
+        edit.update { it.copy(preview = uploadPreview(it, vehicle.value, settings.settings.value, sync.state.value.selected, fleet.value)) }
 
     override fun onPreviewDismissed() = edit.update { it.copy(preview = null) }
 
+    /**
+     * Sends each mission to its vehicle, one after another. One mission for the selected vehicle is the plain upload
+     * of before. In a job, a mission that fails doesn't stop the others; the message says which went where.
+     */
     override fun onUploadConfirmed() {
         edit.update { it.copy(preview = null) }
-        val items = currentFlat().items
-        transfer("Uploading") { progress ->
-            missions.upload(items, progress).map { "Uploaded ${items.size} items. Switch to AUTO on the RC to fly it." }
+        val targets = uploadTargets(edit.value, currentFlat(), sync.state.value.selected)
+        val only = targets.singleOrNull()?.takeIf { it.vehicle == null }
+        if (only != null) {
+            return transfer("Uploading") { progress ->
+                missions.upload(only.items, progress).map { "Uploaded ${only.items.size} items. Switch to AUTO on the RC to fly it." }
+            }
+        }
+        val labels = vehicleLabels(fleet.value.map { it.id })
+        transfer("Uploading") { _ ->
+            val results = targets.map { t ->
+                val vehicle = t.vehicle!! // a job's targets all name their vehicle (uploadTargets)
+                val name = "${t.label} → vehicle ${labels[vehicle] ?: vehicle.systemId}"
+                val result = missionsOf(vehicle).upload(t.items) { done, total -> edit.update { it.copy(transfer = "Uploading $name: $done / $total…") } }
+                result.fold({ "$name: ${t.items.size} items" }, { "$name FAILED: ${it.message}" })
+            }
+            val failed = results.count { "FAILED" in it }
+            Result.success(
+                (if (failed == 0) "Uploaded ${results.size} missions. " else "$failed of ${results.size} uploads failed. ") +
+                    results.joinToString("; ") + if (failed == 0) ". Each pilot switches to AUTO on the RC." else ".",
+            )
         }
     }
 
@@ -297,15 +373,20 @@ class PlanViewModel(
 
     override fun onSaveClicked() {
         viewModelScope.launch {
-            val name = files.save("mission.kftplan", encodePlan(edit.value.groups)) ?: return@launch
+            val name = files.save("mission.kftplan", encodePlan(edit.value.groups, edit.value.assignments)) ?: return@launch
             _effects.send("Saved $name.")
         }
     }
 
-    /** Exports the flat items (no survey parameters: other tools can't use them) with the vehicle's home as seq 0. */
+    /**
+     * Exports the flat items (no survey parameters: other tools can't use them) with the vehicle's home as seq 0.
+     * QGC and Mission Planner files hold one mission, so from a job it is the selected group's mission.
+     */
     override fun onExportClicked(format: ExportFormat) {
         viewModelScope.launch {
-            val mission = Mission(vehicle.value.home, currentFlat().items)
+            val flat = currentFlat()
+            val one = edit.value.selectedGroup?.let(edit.value.groups::getOrNull)?.mission ?: flat.missions.firstOrNull()
+            val mission = Mission(vehicle.value.home, one?.let(flat::only)?.items ?: emptyList())
             val text = when (format) {
                 ExportFormat.QGC_PLAN -> encodeQgcPlan(mission, plane = vehicle.value.vehicleKind == VehicleKind.PLANE)
                 ExportFormat.WAYPOINTS -> encodeWaypoints(mission)
@@ -321,7 +402,10 @@ class PlanViewModel(
             val file = files.open() ?: return@launch
             val message = try {
                 when {
-                    isOwnPlan(file.text) -> decodePlan(file.text).also(::replacePlan).let { "Opened ${file.name}." }
+                    isOwnPlan(file.text) -> decodeJob(file.text).let { job ->
+                        replacePlan(job.groups, job.assignments)
+                        "Opened ${file.name}." + if (missionIds(job.groups).size > 1) " It is a job of ${missionIds(job.groups).size} missions." else ""
+                    }
                     file.text.trimStart().startsWith("QGC WPL") -> importItems(file.name, decodeWaypoints(file.text).mission, 0)
                     else -> decodeQgcPlan(file.text).let { importItems(file.name, it.mission, it.skipped) }
                 }
@@ -352,9 +436,21 @@ class PlanViewModel(
         addImported(choice, surveyGroupsFrom(choice.shapes, choice.fileName, template))
     }
 
+    /**
+     * One survey per area, each a mission of its own (a KML of three fields becomes three missions for three drones).
+     * If nothing is planned yet, the first area takes the plan's own mission; otherwise every area gets a new one.
+     */
+    override fun onImportAsMissions() {
+        val choice = edit.value.importChoice ?: return
+        val template = defaultSurvey(vehicle.value.vehicleKind, settings.settings.value.cameras.first())
+        val existing = edit.value.groups
+        val first = if (existing.none(::hasItems)) existing.firstOrNull()?.mission ?: 0 else existing.maxOf { it.mission } + 1
+        addImported(choice, surveyGroupsFrom(choice.shapes, choice.fileName, template).mapIndexed { i, g -> g.inMission(first + i) })
+    }
+
     override fun onImportAsWaypoints() {
         val choice = edit.value.importChoice ?: return
-        val startsMission = edit.value.groups.none(::hasItems)
+        val startsMission = edit.value.groups.none { it.mission == 0 && hasItems(it) }
         addImported(choice, waypointGroupsFrom(choice.shapes, choice.fileName, vehicle.value.vehicleKind, startsMission))
     }
 
@@ -371,7 +467,8 @@ class PlanViewModel(
         }
         val what = if (added.first() is SurveyGroup) "survey" else "waypoint group"
         val notes = choice.shapes.notes.joinToString(" ", prefix = " ").trimEnd()
-        _effects.trySend("Added ${added.size} $what${if (added.size == 1) "" else "s"} from ${choice.fileName}.$notes")
+        val job = if (missionIds(added).size > 1) " Each is a mission of its own: give each a vehicle under Missions." else ""
+        _effects.trySend("Added ${added.size} $what${if (added.size == 1) "" else "s"} from ${choice.fileName}.$notes$job")
     }
 
     private fun importItems(name: String, mission: Mission, skipped: Int): String {
@@ -384,10 +481,13 @@ class PlanViewModel(
 
     private fun currentFlat() = flatten(edit.value.groups, vehicle.value.vehicleKind, settings.settings.value.limitsFor(vehicle.value.vehicleKind))
 
-    /** Replaces the whole plan (read, clear, open). Undoable, like any edit. */
-    private fun replacePlan(groups: List<MissionGroup>) = edit.update { it.changed(null, groups).copy(selectedGroup = 0, selectedItem = null, form = null) }
+    /** Replaces the whole plan (read, clear, open) and its vehicle assignments. The groups are undoable, like any edit. */
+    private fun replacePlan(groups: List<MissionGroup>, assignments: Map<Int, VehicleId> = emptyMap()) =
+        edit.update { it.changed(null, groups).copy(selectedGroup = 0, selectedItem = null, form = null, assignments = assignments) }
 
-    private fun addGroup(group: MissionGroup) = edit.update { e ->
+    /** A new group joins the mission of the selected group, so "add a survey" in mission 2 stays in mission 2. */
+    private fun addGroup(new: MissionGroup) = edit.update { e ->
+        val group = new.inMission(e.selectedGroup?.let(e.groups::getOrNull)?.mission ?: e.groups.lastOrNull()?.mission ?: 0)
         val groups = e.groups + group
         e.changed(null, groups).copy(selectedGroup = groups.lastIndex, selectedItem = null, form = null)
     }
@@ -464,14 +564,12 @@ private fun PlanEdit.selectRow(index: Int?): PlanEdit {
     return copy(selectedItem = index.takeIf { item != null }, form = item?.takeIf { it.editable }?.let { formFor(index!!, it) })
 }
 
+/** An assignment for a mission that no longer has a group (it was deleted, or its last group moved) is dropped. */
+private fun PlanEdit.dropStaleAssignments() = copy(assignments = assignments.filterKeys { m -> groups.any { it.mission == m } })
+
 /** After undo/redo the selected group may be gone; the item selection is dropped (its index may mean another item). */
 private fun PlanEdit.clampSelection() =
     copy(selectedGroup = selectedGroup?.coerceAtMost(groups.lastIndex)?.takeIf { it >= 0 }, selectedItem = null, form = null)
-
-private fun hasItems(group: MissionGroup) = when (group) {
-    is WaypointGroup -> group.items.isNotEmpty()
-    is SurveyGroup -> group.survey.polygon.size >= 3
-}
 
 private fun SurveyGroup.withSurvey(change: (SurveySettings) -> SurveySettings) = copy(survey = change(survey))
 

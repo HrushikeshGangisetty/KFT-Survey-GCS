@@ -4,6 +4,7 @@ import com.kft.gcs.core.geo.Geodesy
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.geoio.CameraEntry
 import com.kft.gcs.core.geoio.toEntry
+import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.planning.CameraOrientation
 import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.mission.AltitudeFrame
@@ -20,15 +21,28 @@ import kotlinx.serialization.json.Json
  * change here changes the file format (then bump [PlanFile.version] and keep reading the old one).
  */
 @Serializable
-private data class PlanFile(val format: String = FORMAT, val version: Int = 1, val groups: List<GroupEntry>)
+private data class PlanFile(
+    val format: String = FORMAT,
+    val version: Int = 1,
+    val groups: List<GroupEntry>,
+    /** Version 2 (a job): which vehicle each mission is for, by mission number. */
+    val vehicles: Map<Int, VehicleEntry> = emptyMap(),
+)
+
+/** A vehicle as [com.kft.gcs.core.mavlink.VehicleId] names it: the link's number in the session that saved it, and the system id. */
+@Serializable
+private data class VehicleEntry(val link: Int, val systemId: Int)
 
 @Serializable
 private sealed interface GroupEntry {
     val name: String
+
+    /** Version 2: the mission this group belongs to. Absent in a version 1 file: mission 0. */
+    val mission: Int
 }
 
 @Serializable @SerialName("waypoints")
-private data class WaypointsEntry(override val name: String, val items: List<ItemEntry>) : GroupEntry
+private data class WaypointsEntry(override val name: String, val items: List<ItemEntry>, override val mission: Int = 0) : GroupEntry
 
 @Serializable @SerialName("survey")
 private data class SurveyEntry(
@@ -55,6 +69,7 @@ private data class SurveyEntry(
     val rightWidthM: Double = 25.0,
     val corridorLines: Int = 3,
     val includeCentreLine: Boolean = false,
+    override val mission: Int = 0,
 ) : GroupEntry
 
 /** An editor row. A passthrough row (read from the vehicle, not editable) keeps its raw mission item fields. */
@@ -75,36 +90,56 @@ private const val FORMAT = "kft-plan"
 // allowSpecialFloatingPointValues: a passthrough item can carry NaN params ("leave unchanged").
 private val json = Json { prettyPrint = true; encodeDefaults = true; ignoreUnknownKeys = true; allowSpecialFloatingPointValues = true }
 
-internal fun encodePlan(groups: List<MissionGroup>): String = json.encodeToString(PlanFile(groups = groups.map { it.toEntry() }))
+/** A plan file's content: the groups (each with its mission number) and which vehicle each mission is assigned to. */
+internal data class PlanJob(val groups: List<MissionGroup>, val assignments: Map<Int, VehicleId> = emptyMap())
+
+/**
+ * A plan with one mission and no assignment is written as version 1, which older builds of the app can open. A job
+ * (several missions, or a mission assigned to a vehicle) is version 2, which they refuse with a clear message instead
+ * of silently flying three missions as one.
+ */
+internal fun encodePlan(groups: List<MissionGroup>, assignments: Map<Int, VehicleId> = emptyMap()): String {
+    val job = assignments.isNotEmpty() || groups.any { it.mission != 0 }
+    return json.encodeToString(
+        PlanFile(
+            version = if (job) 2 else 1,
+            groups = groups.map { it.toEntry() },
+            vehicles = assignments.mapValues { (_, v) -> VehicleEntry(v.link, v.systemId.toInt()) },
+        ),
+    )
+}
 
 /** True when [text] looks like our own format, so Open can tell it from a QGC or MP file without trusting the name. */
 internal fun isOwnPlan(text: String) = text.contains("\"$FORMAT\"")
 
 /** @throws IllegalArgumentException with a message for the operator when [text] isn't a readable plan file. */
-internal fun decodePlan(text: String): List<MissionGroup> {
+internal fun decodePlan(text: String): List<MissionGroup> = decodeJob(text).groups
+
+/** As [decodePlan], with the job's vehicle assignments. */
+internal fun decodeJob(text: String): PlanJob {
     val file = try {
         json.decodeFromString<PlanFile>(text)
     } catch (e: IllegalArgumentException) {
         throw IllegalArgumentException("Not a valid KFT plan file: ${e.message}", e)
     }
     require(file.format == FORMAT) { "Not a KFT plan file" }
-    require(file.version <= 1) { "This plan was saved by a newer version of the app (format ${file.version})" }
-    return file.groups.map { it.toGroup() }
+    require(file.version <= 2) { "This plan was saved by a newer version of the app (format ${file.version})" }
+    return PlanJob(file.groups.map { it.toGroup() }, file.vehicles.mapValues { (_, v) -> VehicleId(v.link, v.systemId.toUByte()) })
 }
 
 private fun MissionGroup.toEntry(): GroupEntry = when (this) {
-    is WaypointGroup -> WaypointsEntry(name, items.map { it.toEntry() })
+    is WaypointGroup -> WaypointsEntry(name, items.map { it.toEntry() }, mission)
     is SurveyGroup -> with(survey) {
         SurveyEntry(
             name, polygon.map { listOf(it.latitude, it.longitude) }, camera.toEntry(), heightMode, altitudeM, gsdCm,
             orientation, sideOverlapPct, frontOverlapPct, gridAngleDeg, entry, speedMs, turnaroundM, returnHome,
-            pattern, crosshatch, crosshatchOffsetM, leftWidthM, rightWidthM, corridorLines, includeCentreLine,
+            pattern, crosshatch, crosshatchOffsetM, leftWidthM, rightWidthM, corridorLines, includeCentreLine, mission,
         )
     }
 }
 
 private fun GroupEntry.toGroup(): MissionGroup = when (this) {
-    is WaypointsEntry -> WaypointGroup(name, items.map { it.toItem() })
+    is WaypointsEntry -> WaypointGroup(name, items.map { it.toItem() }, mission)
     is SurveyEntry -> SurveyGroup(
         name,
         SurveySettings(
@@ -112,6 +147,7 @@ private fun GroupEntry.toGroup(): MissionGroup = when (this) {
             sideOverlapPct, frontOverlapPct, gridAngleDeg, entry, speedMs, turnaroundM, returnHome,
             pattern, crosshatch, crosshatchOffsetM, leftWidthM, rightWidthM, corridorLines, includeCentreLine,
         ),
+        mission,
     )
 }
 
