@@ -3857,3 +3857,118 @@ Three earlier attempts failed for reasons in the test rig, all now fixed in the 
   (formation) would need and why both collide with S4 and S9; neither is built.
 - Suggested next: run the batch on the hardware (two real drones on two radios), where radio loss and real cameras
   replace the simulated ones; and decide the release items still open from Pass 28.
+
+## Pass 33 — P7 (visionnav): companion (Pi) diagnostics panel on the Fly view (2026-10-20)
+
+Task: P7 from the visionnav repo's prework list, pasted by Hrushikesh. Branch `h/visionnav-companion-panel`.
+
+### What changed
+- **`core/companion`** (new module): `Contract.kt` (visionnav contract 0.2 records `local_odometry`, `health` and
+  `map_fix` as kotlinx.serialization classes, the `{"type","msg"}` envelope, `parseRecord` and the schema rules checked
+  by hand), `CompanionState.kt` (the store, its pure `reduce`, the ages), `CompanionRepository.kt` (the WebSocket link
+  with retry, its settings, the Ktor CIO connector), `di/CompanionModule.kt`.
+- **`gradle/libs.versions.toml`**: Ktor 3.6.0 (`ktor-client-core`, `-websockets`, `-cio`; released 2026-09-16, built on
+  our coroutines 1.11.0). The brief assumed Ktor was already in the project. It wasn't, so Hrushikesh chose these three
+  artifacts. A new dependency, not a version bump.
+- **`core/vehicle/VehicleState.kt`**: two read-only additions, `ekfFlags` (EKF_STATUS_REPORT) and `estimatorMessages`
+  (the last five EKF/AHRS/VisOdom/source STATUSTEXTs). Existing fields and reductions are unchanged.
+- **`feature/fly`**: `CompanionUi.kt` (the pure `companionUi` builder), `CompanionViewModel.kt` (a 10 Hz age ticker),
+  `CompanionPanel.kt` (the panel and the metre-grid track plot), a "Companion (Pi) diagnostics" map button in
+  `FlyScreen.kt`, the Koin binding in `di/FlyModule.kt`, and Compose UI test dependencies in `build.gradle.kts` (as in
+  feature:plan).
+- **`app/shared`**: `companionModule` in the graph; `FileTextStore` also serves `CompanionConfigStore`
+  (`companion.json` next to the other settings, desktop and Android).
+- **Tests**: `CompanionStateTest`, `ContractExamplesTest` (the visionnav examples are copied into
+  `core/companion/src/jvmTest/resources/contract-0.2`), `CompanionViewModelTest`, `CompanionPanelUiTest`,
+  `CompanionFeedRun` (real feed over a real WebSocket, env-gated), and a `VehicleStateTest` addition.
+- **`docs/design/33-companion-panel-dark.png`**: the panel as `CompanionPanelUiTest` draws it.
+
+### How it works
+```
+Pi / P4 feed ──ws text──▶ CompanionRepository ──parseRecord──▶ CompanionState.reduce(…, now)   (core:companion)
+                                                                      │   never touches VehicleState
+Fleet (FC MAVLink) ──VehicleState incl. ekfFlags, estimatorMessages ──┤
+                                                                      ▼
+            CompanionViewModel: combine(store, config, fleet, selected, 10 Hz tick) ─▶ companionUi(…, now)
+                                                                      ▼
+            CompanionPanel: the companion part (hidden unless the selected vehicle's system id is the configured one)
+                            and the FC part, labelled as FC data
+```
+**Age from measurement time.** The Pi and GCS clocks are never compared. The store keeps the largest
+`publish_time_pi_ns` seen and the GCS time it arrived (`PiClock`), and estimates Pi now as that publish time plus the GCS
+time since. Odometry age = Pi now − `measurement_time_pi_ns`; map-fix age = Pi now − `query_exposure_time_pi_ns`. When
+measurement time freezes but records keep coming (`stale`), publish time moves on, so the age grows. When nothing comes,
+the GCS term grows. Health has no timestamp in contract 0.2, so its age is "since received", and the panel says so.
+
+The panel's only buttons are Close, Connect/Disconnect (this GCS's own WebSocket) and the settings toggle;
+`CompanionPanelUiTest` lists every clickable node to prove it.
+
+### Engineering learnings
+- **A second, separate store instead of a branch in the FC reducer.** The brief's main safety point is that companion
+  data must never be mistaken for FC data. `core:companion` doesn't depend on `core:vehicle`, so it *can't* write FC
+  state; the two meet only in the panel's builder.
+- **Publish time as the Pi's clock.** A new publish time does not refresh an old measurement (visionnav AGENTS.md), but
+  it is the one honest reading of "now" on the Pi's clock. Records whose publish time doesn't advance are refused, so
+  duplicates, reordering and a Pi clock restart all end the same safe way: ages grow and the panel says STALE.
+- **One run at a time.** The first record fixes `run_id` and `source`; a different one starts the store over, because
+  the old clock, resets and track belong to the old run. The source is shown, in warning colour unless it is `live`.
+- **Ticker in the ViewModel, ages in pure functions.** Ages must grow with no message arriving, so the state is rebuilt
+  every 100 ms. The clock is the repository's `TimeSource`, so tests run on the test scheduler's virtual time.
+- **Canvas doesn't clip.** The first screenshot showed grid lines across the text above and below the plot (the grid
+  runs one line past each edge); `clipToBounds()` fixed it. The UI test's PNG is what caught it.
+- **Ponytail review (lite):** one cut, the duplicate `SerializationException` catch (it *is* an
+  `IllegalArgumentException`). Kept on purpose: the `CompanionConnector` function type (the test seam) and
+  `CompanionConfigStore` (the same pattern as `VideoStore`). Reused `StatusChip`, `MapCard`, `SectionHeader` and the
+  Stats icon; no new icon.
+
+### What to look at
+1. `core/companion/src/commonMain/kotlin/com/kft/gcs/core/companion/CompanionState.kt:73`: `reduce`, then
+   `odometryAge` at :136.
+2. `core/companion/src/commonMain/kotlin/com/kft/gcs/core/companion/Contract.kt:118`: `parseRecord` and `validate`.
+3. `feature/fly/src/commonMain/kotlin/com/kft/gcs/feature/fly/CompanionUi.kt:56`: what each state looks like.
+
+### Tests
+`gradlew.bat check`: BUILD SUCCESSFUL, 969 test results, 0 failures, 1 skipped (Windows 11, JDK 25 Temurin from
+`~/.gradle/jdks`). No new compiler or lint warnings. `CompanionFeedRun` counts as passed in `check` only because it
+skips itself without its environment variables.
+- `CompanionStateTest` (9): in `stale`, the age is 1.005 s at GCS 6.01 s (by hand: Pi 6.005 − 5.0) while records still
+  arrive. It is 5 ms before the freeze and keeps growing when nothing arrives. `lost_reset` counts one reset and splits
+  the track (the last point is at 9.95 m; the new segment starts at 0). LOST is fresh, not stale. The `wrong_map` fix is
+  kept at 17.400359° with age 0.505 s. A fix before any odometry has no age. Malformed and `schema_version` 0.1 records
+  change only the counter. Duplicate and out-of-order odometry are refused. A new run starts over. Health age counts
+  from arrival.
+- `ContractExamplesTest` (2): all 24 visionnav 0.2 examples (each valid one parses, each invalid one is rejected), and
+  the reason given for each conditional rule.
+- `CompanionViewModelTest` (6): the three scenarios played in virtual time through a fake WebSocket. `stale` shows
+  STALE (critical) while health says OK. `lost_reset` goes LOST → INITIALIZING → TRACKING, with "counter 1 · 1 this run"
+  and two segments. `wrong_map` shows "Accepted · 17.400359, 78.5 · σ 3.0 m · 0.6 s old". Malformed and wrong-version
+  records are counted, not shown. Data is hidden under another vehicle. **A server disconnect leaves FC telemetry
+  untouched**: the FC HUD is identical after the drop, a later FC update still shows, and the companion side goes
+  Failed and then STALE.
+- `CompanionPanelUiTest` (1): each part is on screen, the only clickable nodes are Close, Disconnect and the settings
+  chevron, and it writes the PNG.
+- `VehicleStateTest.ekfStatusAndEstimatorMessagesAreKept`: flags 0x9F (a hand sum of the ardupilotmega.xml bits); only
+  estimator texts are kept, the last five; the HUD's last message is unchanged.
+
+**Real feed, run this pass** (`CompanionFeedRun` with `KFT_COMPANION_SCENARIO` and `KFT_VISIONNAV_DIR`; the test starts
+visionnav `tools/synthetic_feed/feed.py --serve` on port 18765 and connects with Ktor CIO, in real time; visionnav at
+631f74c, Python 3.12.10, websockets 17.2, jsonschema 4.26.0). Each scenario took one Gradle run:
+- `stale`: TRACKING (age 0.0 to 0.1 s) until 5.1 s. At 6.1 s it showed "STALE · last said TRACKING" (critical) with
+  position age 1.1 s, and 2.1 s at 7.1 s, while the link stayed Connected and health said OK. Passed.
+- `lost_reset`: LOST (critical) from 10.2 s, INITIALIZING at 13.2 s, then TRACKING with "counter 1 · 1 this run" at
+  14.2 s and two track segments. Passed.
+- `wrong_map`: "Accepted · 17.400359, 78.5 · σ 3.0 m · 0.9 s old" at 9.4 s, as a map fix. Passed.
+- No records were rejected in any of the three runs.
+
+### Open questions / next
+- Health has no timestamp in contract 0.2, so its staleness is judged by arrival (an "Open" item in visionnav
+  contracts/README.md).
+- Ages ignore the one-way network delay, so they read low by that much. Fine on a LAN; worth measuring on the real radio
+  link.
+- The 0.5 s / 5 s / 1.5 s timeouts are `CompanionConfig` defaults, not yet editable in the panel.
+- A Pi reboot that keeps the same `run_id` leaves the panel STALE until a new run_id or a reconnect. That is safe;
+  Connect again clears it.
+- The quaternion unit-norm tolerance (1e-3) is assumed (`ponytail:` comment in `Contract.kt`).
+- Not run in the full desktop app next to SITL, and not on an Android tablet against a Pi. The panel was checked
+  through the headless UI test's PNG.
+- Suggested next: H06.02 (the bridge's own staleness gate) can reuse the same Pi-clock age rule.

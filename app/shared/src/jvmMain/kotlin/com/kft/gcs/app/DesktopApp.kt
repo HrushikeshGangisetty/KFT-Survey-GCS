@@ -1,5 +1,6 @@
 package com.kft.gcs.app
 
+import com.kft.gcs.core.companion.CompanionConfigStore
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.window.FrameWindowScope
@@ -46,6 +47,7 @@ private val desktopModule = module {
     single<SettingsStore> { FileTextStore(File(dir, "plan-settings.json")) }
     single<ThemeStore> { FileTextStore(File(dir, "theme.txt")) }
     single<VideoStore> { FileTextStore(File(dir, "video-profiles.json")) }
+    single<CompanionConfigStore> { FileTextStore(File(dir, "companion.json")) }
     single<MetadataSource> { HttpMetadataSource(File(dir, "param-metadata"), get(IoDispatcher)) }
     single { DesktopPlanFiles(get(IoDispatcher)) }
     single<PlanFiles> { get<DesktopPlanFiles>() }

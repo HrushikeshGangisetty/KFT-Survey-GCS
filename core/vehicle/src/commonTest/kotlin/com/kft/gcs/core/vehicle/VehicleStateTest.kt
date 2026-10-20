@@ -2,7 +2,10 @@ package com.kft.gcs.core.vehicle
 
 import com.kft.gcs.core.mission.Home
 import com.divpundir.mavlink.api.MavEnumValue
+import com.divpundir.mavlink.api.MavBitmaskValue
 import com.divpundir.mavlink.definitions.ardupilotmega.CameraFeedback
+import com.divpundir.mavlink.definitions.ardupilotmega.EkfStatusFlags
+import com.divpundir.mavlink.definitions.ardupilotmega.EkfStatusReport
 import com.divpundir.mavlink.definitions.common.Attitude
 import com.divpundir.mavlink.definitions.common.GpsFixType
 import com.divpundir.mavlink.definitions.common.GpsRawInt
@@ -97,6 +100,24 @@ class VehicleStateTest {
     fun statusTextSeverity() {
         val s = VehicleState().reduce(Statustext(severity = MavEnumValue.of(MavSeverity.CRITICAL), text = "PreArm: GPS not healthy"))
         assertEquals(StatusMessage("PreArm: GPS not healthy", Severity.ERROR), s.lastMessage)
+    }
+
+    /** EKF_STATUS_REPORT flags are kept as the FC's raw bitmask; estimator STATUSTEXTs go to their own list. */
+    @Test
+    fun ekfStatusAndEstimatorMessagesAreKept() {
+        // ardupilotmega.xml EKF_STATUS_FLAGS: attitude 1, horiz vel 2, vert vel 4, pos horiz rel 8, pos horiz abs 16,
+        // const pos mode 128. 1 + 2 + 4 + 8 + 16 + 128 = 159 = 0x9F.
+        val s = VehicleState()
+            .reduce(EkfStatusReport(flags = MavBitmaskValue.fromValue(0x9Fu)))
+            .reduce(Statustext(severity = MavEnumValue.of(MavSeverity.INFO), text = "EKF3 IMU0 is using external nav data"))
+            .reduce(Statustext(severity = MavEnumValue.of(MavSeverity.WARNING), text = "PreArm: Battery 1 low voltage"))
+            .reduce(Statustext(severity = MavEnumValue.of(MavSeverity.INFO), text = "Using EKF Source Set 2"))
+        assertEquals(0x9Fu, s.ekfFlags)
+        assertEquals(EkfStatusFlags.EKF_CONST_POS_MODE.value, 128u, "the bit the panel warns on")
+        assertEquals(listOf("EKF3 IMU0 is using external nav data", "Using EKF Source Set 2"), s.estimatorMessages.map { it.text })
+        assertEquals("Using EKF Source Set 2", s.lastMessage?.text, "the HUD's last message is unchanged")
+        val many = (1..7).fold(s) { st, i -> st.reduce(Statustext(severity = MavEnumValue.of(MavSeverity.CRITICAL), text = "EKF3 lane switch $i")) }
+        assertEquals((3..7).map { "EKF3 lane switch $it" }, many.estimatorMessages.map { it.text }, "only the last five")
     }
 
     @Test

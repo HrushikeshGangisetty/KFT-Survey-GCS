@@ -1,0 +1,11 @@
+{
+  "schema_version": "0.2",
+  "source": "synthetic",
+  "run_id": "example-run-001",
+  "component": "vio",
+  "status": "OK",
+  "reason": null,
+  "cpu_pct": 145.0,
+  "queue_len": 2,
+  "last_input_age_s": 12.5
+}

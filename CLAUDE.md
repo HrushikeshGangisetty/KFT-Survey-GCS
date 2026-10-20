@@ -32,6 +32,7 @@ If a task seems to need one of these changed, stop and say so in the pass summar
 | `core:mavlink` | Transports, framing, connection manager, `MavTxGateway` | mavlink-kotlin, coroutines |
 | `core:vehicle` | Vehicle state, telemetry Flows, command and mission protocols | `core:mavlink`, `core:geo`, `core:mission` |
 | `core:terrain` | DEM, elevation queries (P1) | `core:geo` |
+| `core:companion` | VisionNav companion (Pi) link: contract JSON, `CompanionState` store, Ktor WebSocket client. Never feeds `core:vehicle` | coroutines, kotlinx.serialization, Ktor |
 | `core:geo-io` | Import/export parsing (`.plan`, `.waypoints`, camera lists, KML, …) | `core:geo`, `core:planning`, `core:mission` |
 | `ui:design` | KFT theme (light, dark, high contrast), tokens, Material Symbols icons, logo, shared components | Compose |
 | `ui:map` | `MapView` abstraction + engine adapters | `core:geo`, Compose |

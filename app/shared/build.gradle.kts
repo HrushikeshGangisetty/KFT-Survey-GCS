@@ -25,6 +25,7 @@ kotlin {
             implementation(project(":feature:settings"))
             implementation(project(":core:mavlink")) // for mavlinkModule and the IoDispatcher qualifier
             implementation(project(":core:vehicle"))
+            implementation(project(":core:companion")) // companionModule and the CompanionConfigStore file
             implementation(project(":core:geo-io")) // ImportFile, which the platform file dialogs build
             implementation(libs.jb.navigation.compose)
             implementation(project(":ui:design"))

@@ -1,5 +1,6 @@
 package com.kft.gcs.app
 
+import com.kft.gcs.core.companion.CompanionConfigStore
 import android.Manifest
 import android.content.Context
 import android.os.Build
@@ -49,6 +50,7 @@ fun AndroidApp(context: Context) {
             single<SettingsStore> { FileTextStore(File(app.filesDir, "plan-settings.json")) }
             single<ThemeStore> { FileTextStore(File(app.filesDir, "theme.txt")) }
             single<VideoStore> { FileTextStore(File(app.filesDir, "video-profiles.json")) }
+            single<CompanionConfigStore> { FileTextStore(File(app.filesDir, "companion.json")) }
             single<MetadataSource> { HttpMetadataSource(File(app.filesDir, "param-metadata"), Dispatchers.IO) }
             single<PlanFiles> { planFiles }
             single<OfflineMaps> { MapLibreOfflineMaps(File(app.filesDir, "maps").path, TileSources.available()) }

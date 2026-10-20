@@ -4,6 +4,7 @@ import com.kft.gcs.core.mission.Home
 import com.divpundir.mavlink.api.MavMessage
 import com.divpundir.mavlink.definitions.ardupilotmega.CameraFeedback
 import com.divpundir.mavlink.definitions.ardupilotmega.CopterMode
+import com.divpundir.mavlink.definitions.ardupilotmega.EkfStatusReport
 import com.divpundir.mavlink.definitions.ardupilotmega.PlaneMode
 import com.divpundir.mavlink.definitions.common.Attitude
 import com.divpundir.mavlink.definitions.common.GpsRawInt
@@ -61,6 +62,10 @@ data class VehicleState(
     val photos: List<LatLon> = emptyList(),
     /** The few parameters the GCS itself reads ([WATCHED_PARAMS]), as last reported in a PARAM_VALUE. */
     val watchedParams: Map<String, Float> = emptyMap(),
+    /** EKF_STATUS_REPORT.flags (ardupilotmega.xml EKF_STATUS_FLAGS bitmask), as the FC reports it. Null until the first. */
+    val ekfFlags: UInt? = null,
+    /** The latest estimator STATUSTEXTs ([isEstimatorText]), oldest first, at most [MAX_ESTIMATOR_MESSAGES]. */
+    val estimatorMessages: List<StatusMessage> = emptyList(),
 ) {
     /**
      * The vehicle's simple geofence, or null when it is off or not known yet. ArduPilot's AC_Fence parameters (Copter
@@ -87,6 +92,17 @@ val VehicleState.batteryLowVolts: Double? get() = watchedParams["BATT_LOW_VOLT"]
 
 /** An enabled fence's limits; a null limit is one the fence doesn't have. Altitude is above home. */
 data class Fence(val altMaxM: Double?, val radiusM: Double?)
+
+/**
+ * STATUSTEXTs about the FC's position estimate, kept apart so a source change isn't lost behind later messages.
+ * The prefixes are ArduPilot's own (KFT fork 23c97b96): "EKF3 IMU0 is using external nav data", "EKF3 lane switch 1"
+ * (AP_NavEKF3), "AHRS: EKF3 active" (AP_AHRS), "VisOdom: reset" (AP_VisualOdom), "Using EKF Source Set 2"
+ * (RC_Channel.cpp) and the source-switching Lua applets ("Auto switched to Source 2").
+ */
+fun isEstimatorText(text: String) =
+    text.startsWith("EKF") || text.startsWith("AHRS:") || text.startsWith("VisOdom") || "Source" in text
+
+const val MAX_ESTIMATOR_MESSAGES = 5
 
 /** Parameters the GCS reads for its own checks; asked for at connect ([VehicleRepository]) and kept in [VehicleState.watchedParams]. */
 val WATCHED_PARAMS = listOf("FENCE_ENABLE", "FENCE_TYPE", "FENCE_ALT_MAX", "FENCE_RADIUS", "BATT_LOW_VOLT")
@@ -138,8 +154,16 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
     )
     // KFTCH1:/KFTCH2: are the KFT login challenge (KftLogin reads them); they're protocol, not a message for the pilot.
     is Statustext -> message.text.trimEnd('\u0000').let { text ->
-        if (text.startsWith("KFTCH")) this else copy(lastMessage = StatusMessage(text, severityOf(message.severity.value)))
+        if (text.startsWith("KFTCH")) this else StatusMessage(text, severityOf(message.severity.value)).let { m ->
+            copy(
+                lastMessage = m,
+                estimatorMessages = if (isEstimatorText(text)) (estimatorMessages + m).takeLast(MAX_ESTIMATOR_MESSAGES) else estimatorMessages,
+            )
+        }
     }
+    // EKF_STATUS_REPORT (ardupilotmega.xml #193). ArduPilot streams it in the EXTRA3 group (ArduCopter and ArduPlane
+    // GCS_Mavlink.cpp, KFT fork 23c97b96), which the REQUEST_DATA_STREAM(ALL) at connect turns on.
+    is EkfStatusReport -> copy(ekfFlags = message.flags.value)
     // HOME_POSITION (common.xml). ArduPilot sends it only once home is set, on request, and on every change (for
     // Copter, arming moves home to where it armed), plus at the interval VehicleRepository asks for.
     is HomePosition -> copy(home = Home(LatLon.fromE7(message.latitude, message.longitude), message.altitude / 1000.0)) // mm -> m

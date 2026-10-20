@@ -33,6 +33,7 @@ include(":core:mavlink")
 include(":core:vehicle")
 include(":core:terrain")
 include(":core:geo-io")
+include(":core:companion") // VisionNav companion computer diagnostics (P7), separate from FC state
 
 // ---- ui: shared UI building blocks ----
 include(":ui:design")  // KFT theme, tokens, icons, logo, shared components

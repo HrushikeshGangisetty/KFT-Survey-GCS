@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.2",
+  "source": "synthetic",
+  "run_id": "example-run-001",
+  "measurement_time_pi_ns": 912399000000,
+  "publish_time_pi_ns": 912399010000,
+  "frame_id": "odom",
+  "child_frame_id": "base_link_frd",
+  "position_m": [null, null, null],
+  "orientation_xyzw": [null, null, null, null],
+  "velocity_m_s": [null, null, null],
+  "pose_covariance_6x6": [
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    null, null, null, null, null, null,
+    null, null, null, null, null, null
+  ],
+  "pose_covariance_known": false,
+  "state": "LOST",
+  "reset_counter": 0,
+  "last_visual_update_pi_ns": 912398500000
+}

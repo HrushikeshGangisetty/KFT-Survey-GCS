@@ -1,0 +1,39 @@
+package com.kft.gcs.core.companion
+
+import java.io.File
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
+
+/**
+ * The visionnav contract's own examples (copied in resources/contract-0.2, see its README): each valid one must parse,
+ * each invalid one must be rejected. jvmTest because it reads files; the working directory is the module folder.
+ */
+class ContractExamplesTest {
+    private val root = File("src/jvmTest/resources/contract-0.2")
+
+    @Test
+    fun everyExampleIsReadAsTheContractSays() {
+        val files = listOf("local_odometry", "health", "map_fix").flatMap { type -> File(root, type).listFiles()!!.map { type to it } }
+        assertEquals(24, files.size, "12 odometry + 5 health + 7 map_fix examples")
+        for ((type, file) in files) {
+            val parsed = parseRecord("""{"type":"$type","msg":${file.readText()}}""")
+            if (file.name.startsWith("valid")) assertIs<Parsed.Ok>(parsed, "$type/${file.name}: $parsed")
+            else assertIs<Parsed.Rejected>(parsed, "$type/${file.name} must be rejected")
+        }
+    }
+
+    /** The rules that JSON decoding alone can't catch are rejected with their own reason, not a generic one. */
+    @Test
+    fun conditionalRulesGiveTheirReason() {
+        fun reason(type: String, name: String) =
+            (parseRecord("""{"type":"$type","msg":${File(root, "$type/$name").readText()}}""") as Parsed.Rejected).reason
+        assertEquals("TRACKING without a full pose", reason("local_odometry", "invalid_nan_position_tracking.json"))
+        assertEquals("negative variance", reason("local_odometry", "invalid_negative_variance.json"))
+        assertEquals("unknown covariance with values", reason("local_odometry", "invalid_unknown_covariance_as_zero.json"))
+        assertEquals("health FAILED without a reason", reason("health", "invalid_failed_without_reason.json"))
+        assertEquals("rejected fix without a reason", reason("map_fix", "invalid_rejected_without_reason.json"))
+        assertTrue(reason("local_odometry", "invalid_wrong_unit_name.json").startsWith("malformed"), "an unknown field is an error")
+    }
+}

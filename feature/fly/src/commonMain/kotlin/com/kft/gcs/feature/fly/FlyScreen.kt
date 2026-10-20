@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kft.gcs.core.vehicle.Severity
 import com.kft.gcs.ui.design.KftIcons
 import com.kft.gcs.ui.design.MapCard
+import com.kft.gcs.ui.design.MinTouchTarget
 import com.kft.gcs.ui.design.Spacing
 import com.kft.gcs.ui.design.StatTile
 import com.kft.gcs.ui.design.Status
@@ -33,11 +34,31 @@ import org.koin.compose.viewmodel.koinViewModel
  * the same state (overlays, basemap, camera) to the one shared map (ADR-001 F10).
  */
 @Composable
-fun FlyRoute(viewModel: FlyViewModel = koinViewModel(), video: VideoViewModel = koinViewModel()) {
+fun FlyRoute(
+    viewModel: FlyViewModel = koinViewModel(),
+    video: VideoViewModel = koinViewModel(),
+    companion: CompanionViewModel = koinViewModel(),
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val videoState by video.state.collectAsStateWithLifecycle()
     var videoDialog by remember { mutableStateOf(false) }
-    FlyScreen(state, viewModel::onBasemapSelected, viewModel::onCenterClicked, viewModel::onClearTrackClicked, onVideo = { videoDialog = true })
+    var companionOpen by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
+        FlyScreen(
+            state, viewModel::onBasemapSelected, viewModel::onCenterClicked, viewModel::onClearTrackClicked,
+            onVideo = { videoDialog = true }, onCompanion = { companionOpen = !companionOpen },
+        )
+        if (companionOpen) {
+            // Collected only while open, so the 10 Hz age ticker stops with the panel.
+            val companionState by companion.state.collectAsStateWithLifecycle()
+            CompanionPanel(
+                companionState, companion::onConnectClicked, companion::onDisconnectClicked, companion::onSettingsSaved,
+                onClose = { companionOpen = false },
+                // Left of the map buttons, clear of the attribution line.
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = Spacing.m, end = MinTouchTarget + Spacing.m * 2, bottom = Spacing.xl),
+            )
+        }
+    }
     if (videoDialog) {
         VideoDialog(videoState, video::onSourceSelected, video::onRtspAdded, video::onProfileDeleted, onDismiss = { videoDialog = false })
     }
@@ -57,6 +78,7 @@ fun FlyScreen(
     onCenter: () -> Unit,
     onClearTrack: () -> Unit,
     onVideo: () -> Unit = {},
+    onCompanion: () -> Unit = {},
 ) {
     Box(Modifier.fillMaxSize().padding(Spacing.m)) {
         Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
@@ -83,7 +105,7 @@ fun FlyScreen(
             }
         }
 
-        MapButtons(state, onBasemapSelected, onCenter, onClearTrack, onVideo, Modifier.align(Alignment.TopEnd))
+        MapButtons(state, onBasemapSelected, onCenter, onClearTrack, onVideo, onCompanion, Modifier.align(Alignment.TopEnd))
 
         state.message?.let { message ->
             val status = when (message.severity) {
@@ -97,7 +119,10 @@ fun FlyScreen(
     }
 }
 
-/** Basemap (only when there's a choice), centre on the vehicle, clear the flown track, video: icon buttons with tooltips. */
+/**
+ * Basemap (only when there's a choice), centre on the vehicle, clear the flown track, video, companion panel: icon
+ * buttons with tooltips.
+ */
 @Composable
 private fun MapButtons(
     state: FlyUiState,
@@ -105,6 +130,7 @@ private fun MapButtons(
     onCenter: () -> Unit,
     onClearTrack: () -> Unit,
     onVideo: () -> Unit,
+    onCompanion: () -> Unit,
     modifier: Modifier,
 ) {
     MapCard(modifier, padding = false) {
@@ -126,6 +152,7 @@ private fun MapButtons(
         TooltipIconButton(KftIcons.Center, "Centre on vehicle", onCenter, enabled = state.canCenter)
         TooltipIconButton(KftIcons.ClearTrack, "Clear track and photo count", onClearTrack)
         TooltipIconButton(KftIcons.Video, "Video", onVideo)
+        TooltipIconButton(KftIcons.Stats, "Companion (Pi) diagnostics", onCompanion)
     }
 }
 

@@ -4,6 +4,7 @@ import com.kft.gcs.core.mavlink.T12Link
 import com.kft.gcs.core.vehicle.Fleet
 import com.kft.gcs.core.vehicle.MissionRecords
 import com.kft.gcs.core.vehicle.di.WallClock
+import com.kft.gcs.feature.fly.CompanionViewModel
 import com.kft.gcs.feature.fly.FleetViewModel
 import com.kft.gcs.feature.fly.FlyViewModel
 import com.kft.gcs.feature.fly.VideoViewModel
@@ -22,6 +23,7 @@ val flyModule = module {
         val fleet = get<Fleet>()
         FleetViewModel(fleet.vehicles, fleet.selectedId, fleet::select, get<MissionRecords>().records, getOrNull<WallClock>()?.let { it::timeOfDay } ?: { "" })
     }
+    viewModel { get<Fleet>().let { fleet -> CompanionViewModel(get(), fleet.vehicles, fleet.selectedId) } }
     // The T12's video comes from the one T12Link, which also serves a MAVLink link over the same USB port.
     viewModel { VideoViewModel(get(), get<T12Link>().let { ElementaryStreamSource("t12", it.video, it.problem) }) }
 }

@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.2",
+  "source": "synthetic",
+  "run_id": "example-run-001",
+  "query_exposure_time_pi_ns": 912345600000,
+  "lat_deg": null,
+  "lon_deg": null,
+  "yaw_rad": null,
+  "horizontal_sigma_m": null,
+  "accepted": false,
+  "reject_reason": "too_few_inliers",
+  "map_id": "hyd-tile-2026-10-v1"
+}

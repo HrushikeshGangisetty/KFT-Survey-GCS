@@ -1,5 +1,6 @@
 package com.kft.gcs.app.di
 
+import com.kft.gcs.core.companion.di.companionModule
 import com.kft.gcs.core.mavlink.di.IoDispatcher
 import com.kft.gcs.core.mavlink.di.mavlinkModule
 import com.kft.gcs.core.vehicle.di.vehicleModule
@@ -38,4 +39,4 @@ val appModule = module {
 }
 
 /** Every Koin module in the app, in one list, so both shells start the same graph. */
-val allModules = listOf(appModule, mavlinkModule, vehicleModule, connectionsModule, flyModule, planModule, paramsModule, settingsModule)
+val allModules = listOf(appModule, mavlinkModule, vehicleModule, companionModule, connectionsModule, flyModule, planModule, paramsModule, settingsModule)
