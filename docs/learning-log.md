@@ -3972,3 +3972,79 @@ visionnav `tools/synthetic_feed/feed.py --serve` on port 18765 and connects with
 - Not run in the full desktop app next to SITL, and not on an Android tablet against a Pi. The panel was checked
   through the headless UI test's PNG.
 - Suggested next: H06.02 (the bridge's own staleness gate) can reuse the same Pi-clock age rule.
+
+## Pass 34 — S0a (signing): can mavlink-kotlin 1.2.15 do MAVLink 2 signing? (2026-10-23)
+
+Task: stage S0a of `docs/Signing/PRD-Signing.md`, pasted by Hrushikesh. Investigation only: no production code changed.
+Answer: **confirmed, it can't.** The PRD's plan to sign below the library stands.
+
+### What changed
+- `core/mavlink/src/jvmTest/.../SigningLibraryProbeTest.kt` (new): five tests that pin what the library does with
+  signed frames, against pymavlink 2.4.50 reference frames.
+- `docs/decisions/ADR-006-mavlink-signing.md` (new, status Proposed): the bytecode evidence, the findings, and the
+  decision "sign and verify below the library".
+- This entry.
+
+### How it works
+How the evidence was gathered, in steps:
+```
+Gradle cache jars ──javap -p -c──▶ bytecode of sendSignedV2, createSignedV2, fromV2Bytes,
+(connection-core, api,                 generateSignature, validateSignature, nextRawFrame, send
+ serialization 1.2.15)                     │ predicts
+                                           ▼
+pymavlink 2.4.50 ──signed HEARTBEAT hex──▶ SigningLibraryProbeTest ──▶ BufferedMavConnection.next() / sendSignedV2
+(key 32×0x42, link 7,                       asserts what really comes out
+ ts 0x2234_5678_9ABC and 0x5678_9ABC)
+```
+The four findings (details and bytecode in ADR-006):
+1. `sendSignedV2(…, timestamp: UInt, …)` writes `ts and 0xFFFFFFFF` into the 6-byte field, so the top two bytes are
+   always zero. Its latest expressible time is 11.9 hours after 2015-01-01; the FC would drop every frame as too old.
+2. Receiving: signed frames are decoded and passed on, the CRC is checked correctly with the incompat flag in place, but
+   the timestamp is cut to 32 bits, the signature is never checked (a forged one comes out like a genuine one), and the
+   raw bytes are hidden in a private field.
+3. `validateSignature` hashes the original wire bytes but the truncated timestamp, so it fails for every real frame
+   even with the right key. It works for a timestamp under 2³², which proves the rest of its hash is right.
+4. Each `BufferedMavConnection` has its own sequence counter, taken outside its own write lock. Two writers on one sink
+   repeat sequence numbers (the test sees `0, 1, 0`) and could mix bytes.
+
+### Engineering learnings
+- **Bytecode first, bytes second.** `javap` tells you what the code *should* do; a test with real bytes from an
+  independent encoder tells you what it *does*. The test caught my own misreading of the CRC's byte order on the first
+  run. That is the point of checking against outside bytes.
+- **`-Ndr1L8U` and `-pVg5ArA` in method names.** Kotlin mangles names of functions that take or return inline value
+  classes (`UInt`, `UByte`). On the JVM a `UInt` is a plain `int`, which is why the signature reads `byte, int, byte[]`.
+- **The probe test is a tripwire, not a test of our code.** It asserts the library's current (wrong for us) behaviour,
+  so a future mavlink-kotlin that widens the timestamp fails it and sends us back to ADR-006. That is why it isn't
+  `@Ignore`d.
+- **Why below the library rather than fixing after decoding.** A frame's raw bytes are gone once `next()` returns it, and
+  a forged frame would already be inside the app. Filtering bytes before the library sees them is both possible
+  (finding 2: it decodes signed frames fine) and the safer place.
+- **Ponytail review (lite):** one cut, an arithmetic assert that only checked the comment's own sum (now a comment).
+  The five tests map one-to-one to the four questions, so all stay.
+
+### What to look at
+1. `docs/decisions/ADR-006-mavlink-signing.md`: "Findings" 1 and 3, the two that rule the library out.
+2. `core/mavlink/src/jvmTest/kotlin/com/kft/gcs/core/mavlink/SigningLibraryProbeTest.kt:49`: the two pymavlink frames
+   and their byte layout.
+3. Same file, `validateSignatureFailsForARealTimestampEvenWithTheRightKey`: right key, rejected.
+
+### Tests
+`gradlew.bat check`: BUILD SUCCESSFUL, 982 test results, 0 failures, 1 skipped (the env-gated `CompanionFeedRun`),
+Windows 11, JDK 25. No new compiler warnings (the jSerialComm native-access warning is old).
+- `sendSignedV2CanOnlyWriteA32BitTimestamp`: sending with `0x2234_5678_9ABC.toUInt()` gives pymavlink's low-timestamp
+  frame byte for byte; timestamp bytes `bc9a78560000`.
+- `aSignedFrameIsDecodedButItsTimestampIsTruncated`: the real pymavlink frame decodes to the heartbeat, signed, link 7,
+  `signatureTimestamp` 0x5678_9ABC, signature `2b31429d76c5`, CRC 0x7abb.
+- `validateSignatureFailsForARealTimestampEvenWithTheRightKey`: real timestamp + right key → false; 32-bit timestamp +
+  right key → true; wrong key → false.
+- `forgedSignaturesPassAndBadCrcsAreDropped`: a bad-CRC frame is skipped, the forged-signature frame after it comes out.
+- `twoWritersOnOneSinkRepeatSequenceNumbers`: sequences `0, 1, 0`.
+- Reference vectors were made with pymavlink 2.4.50 (Python 3.12.10); pymavlink's own parser verified both with the key.
+
+### Open questions / next
+- ArduPilot's "too old" rule (new stream more than 60 s behind the FC clock is dropped) is quoted from the MAVLink C
+  headers, not yet seen in SITL. S0b checks it.
+- Not checked: whether a newer mavlink-kotlin widens the timestamp. Version bumps are their own pass; the probe test
+  would tell us. An upstream issue (`ULong` timestamp, `and 0x01` flag test) is worth filing.
+- Side finding for S2: the library treats only `incompat_flags == 1` as signed, so our scanner should test the bit.
+- Suggested next: S1, the pure signing core, once S1v's vectors exist.
