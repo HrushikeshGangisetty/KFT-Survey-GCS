@@ -1,6 +1,7 @@
 package com.kft.gcs.core.mavlink
 
 import com.fazecast.jSerialComm.SerialPort
+import com.fazecast.jSerialComm.SerialPortInvalidPortException
 import okio.IOException
 
 /**
@@ -21,7 +22,14 @@ actual class SerialPorts {
         }
 
     internal actual fun open(name: String, baud: Int, readTimeoutMs: Int, rts: Boolean): SerialLink {
-        val port = SerialPort.getCommPort(name)
+        // On Linux and macOS, getCommPort throws an unchecked SerialPortInvalidPortException for a name that doesn't
+        // exist (Windows doesn't; openPort just returns false there). Callers catch IOException, so turn it into one
+        // that names the port: one readable error type on every OS.
+        val port = try {
+            SerialPort.getCommPort(name)
+        } catch (e: SerialPortInvalidPortException) {
+            throw IOException("Can't open $name (no such port)", e)
+        }
         port.setComPortParameters(baud, 8, SerialPort.ONE_STOP_BIT, SerialPort.NO_PARITY)
         // Semi-blocking: a read returns as soon as any bytes arrive, or with 0 after the timeout.
         port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, readTimeoutMs, 0)
