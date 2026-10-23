@@ -4048,3 +4048,100 @@ Windows 11, JDK 25. No new compiler warnings (the jSerialComm native-access warn
   would tell us. An upstream issue (`ULong` timestamp, `and 0x01` flag test) is worth filing.
 - Side finding for S2: the library treats only `incompat_flags == 1` as signed, so our scanner should test the bit.
 - Suggested next: S1, the pure signing core, once S1v's vectors exist.
+
+## Pass 35 — S1 (signing): the pure signing core (2026-10-23)
+
+### What changed
+- New branch `h/signing-gcs` (it did not exist yet; cut from `main` at 9f01324, S0a).
+- `core/mavlink/src/commonTest/resources/signing/signing_v1.json`: the S1v vectors, copied unchanged from
+  `GNSS-Denied/tools/signing/vectors/signing_v1.json` (h/signing-pi, commit 76241ec). Own commit, as the PRD asks.
+- `core/mavlink/.../signing/Sha256.kt` + `jvmCommonMain/.../Sha256.jvmCommon.kt`: `expect`/`actual` SHA-256 over
+  `java.security.MessageDigest`, mirroring `core:vehicle`'s `hmacSha256`.
+- `core/mavlink/.../signing/Mav2Signing.kt`: `signV2`, `verifyV2`, `trailerOf`, `SignatureTrailer`.
+- `core/mavlink/.../signing/SigningClock.kt`: the outgoing 48-bit timestamp as pure state.
+- `core/mavlink/.../signing/ReplayGuard.kt`: last accepted timestamp per (link_id, sysid, compid).
+- Three test classes in `commonTest/.../signing/`; ADR-006 status Proposed → Accepted.
+- Nothing is wired in yet: no transport, gateway or connection code calls these functions (that is S2).
+
+### How it works
+Signing one frame (S2's `FrameSink` will do this for a bound vehicle):
+```
+unsigned v2 frame ──▶ set incompat bit 0x01 ──▶ CRC-16/X.25 over bytes 1..payload end + crc_extra
+                  ──▶ append link_id, timestamp (6 bytes LE) ──▶ append sha256(key ‖ all bytes so far)[0..6]
+```
+Receiving one frame (S2's `SigningSource`): `verifyV2(frame, key)` → if true, `trailerOf(frame)` gives link_id and
+timestamp → `ReplayGuard.accept(link, sys, comp, ts, clock.current)` → if fresh, `SigningClock.observeIncoming(ts)`.
+The order matters: the guard and the clock trust the timestamp only after the signature has proved who wrote it.
+
+`SigningClock`: `start(wallMs, persisted)` sets `max(wall ticks, persisted + 1)`; `next()` hands out a value and adds
+one tick; `observeIncoming(ts)` lifts the clock to `ts + 1`. Going past 2^48 - 1 throws instead of wrapping.
+
+### Engineering learnings
+- **Pure functions on `ByteArray`, no library types.** The library can't carry a 48-bit timestamp (ADR-006), so the
+  signer works on the raw bytes the library already produces. Pure means the 120 pymavlink vectors pin every byte
+  without a transport, a clock or coroutines.
+- **Reuse mavlink-kotlin's public `CrcX25`** instead of writing our own X.25. It is the same code the library uses to
+  check incoming CRCs, so our CRC and its check can't disagree. (Checked with `javap` that `accumulate(bytes, from, to)`
+  takes an exclusive end.)
+- **Plain SHA-256, not HMAC.** MAVLink's signature is `sha256(key ‖ frame)`, truncated to 6 bytes. That is why the raw
+  key must sit in RAM (PRD, "Key management").
+- **Constant-time compare** (OR together the XOR of every byte, then test once). An early-exit compare leaks, through
+  timing, how many leading bytes of a forged signature were right.
+- **`verifyV2` doesn't check the CRC.** It would need the message's crc_extra, the signature already covers the CRC
+  bytes, and the library checks the CRC when it decodes. One job per function.
+- **The clock is state passed in, not read.** `start(wallMs, …)` takes the time instead of calling a clock, so tests
+  set any instant (including a laptop clock reset backwards) with no fake clock class. Persisting `current` (the next
+  value to use) is always safe because restart uses `persisted + 1`.
+- **Overflow is an error.** Wrapping a 48-bit timestamp to 0 would make the FC treat every later frame as a replay, a
+  silent loss of control. Failing loudly is the safe behaviour; in practice 2^48 ticks is about 89 years after 2015.
+- **Replay rules from the spec and the MAVLink C library** (`mavlink_signature_check`, which ArduPilot builds with): a
+  known stream must strictly increase; a new stream may be at most 60 s (6 000 000 ticks) behind our clock. A rejected
+  frame doesn't update the stream, so junk can't move it.
+- **Test vectors read from a file in `commonTest`** with okio's `FileSystem.SYSTEM` (already a dependency; both test
+  runs are JVMs with the module directory as working directory), parsed with kotlinx.serialization.
+
+### What to look at
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/signing/Mav2Signing.kt:35` — `signV2`, the byte layout.
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/signing/SigningClock.kt:25` — `start` and the max rule.
+- `core/mavlink/src/commonTest/kotlin/com/kft/gcs/core/mavlink/signing/Mav2SigningTest.kt:62` — what the vector file
+  must contain, so the loops below it can't pass on nothing.
+
+### Safety
+- This pass adds no transmission path and doesn't touch `MavTxGateway`, `TxPolicy` or the allowlist. The functions are
+  not called from production code yet.
+- What it fixes for later stages: a frame is accepted only if `verifyV2` passes *and then* `ReplayGuard` accepts it;
+  the timestamp is never trusted before the signature. Signing refuses already-signed input, malformed frames, keys
+  that aren't 32 bytes and timestamps outside 48 bits, so S2 can't send a half-signed frame.
+- The GCS clock never goes backwards across restarts (as long as S2/S4 persist `current`) and never wraps.
+
+### Tests
+`./gradlew check` passes; the 25 signing tests run on both the desktop JVM and the Android host. No new warnings.
+- `Mav2SigningTest` (all against pymavlink 2.4.50 frames from S1v):
+  - `theVectorFileCoversWhatS1vPromised`: 72 positive, 48 negative; timestamps 0, 1, 37 264 320 000 000 and 2^48 - 1;
+    link_ids 0, 1, 254; all eight mutation regions present.
+  - `signingPymavlinksUnsignedFrameGivesPymavlinksSignedFrame`: our signed frame equals pymavlink's byte for byte
+    (HEARTBEAT, COMMAND_LONG with NaN-pattern floats, MISSION_ITEM_INT, PARAM_SET, ODOMETRY, RADIO_STATUS, including
+    payloads whose trailing zeros were truncated).
+  - `pymavlinksSignedFramesVerify`, `trailerOfReadsPymavlinksLinkIdAndTimestamp`.
+  - `pymavlinksOneBitMutationsAreRejected`: magic, header, signed flag, payload, CRC, link_id, timestamp, signature.
+  - `everySingleBitFlipOfEverySignedFrameIsRejected`: every bit of all 72 frames, about 35 000 flips.
+  - `setTheSignedFlagAndTheCrcIsRecomputed`: flag set, CRC equals pymavlink's and differs from the unsigned CRC.
+  - `aWrongKeyFailsVerification`, `unsignedFramesHaveNoTrailerAndNeverVerify`, `timestampsOutside48BitsAreRefused`
+    (-1 and 2^48), `badInputsAreRefused` (31/33-byte keys, already-signed or truncated input).
+- `SigningClockTest`: 2026-10-23 00:00 UTC → 37 264 320 000 000 ticks (hand-computed in the KDoc: 4313 days after
+  2015-01-01; matches S1v's "today"); epoch → 0; pre-2015 clock clamps to 0; persisted ahead of wall wins; incoming
+  lifts the clock; restart with the wall clock an hour back still continues above the last sent value; 2^48 - 1 is
+  the last value, then error; `next()` before `start()` is an error.
+- `ReplayGuardTest`: new stream accepted at exactly 60 s old, rejected one tick older; known stream rejects equal and
+  older; the 60 s window applies only to a stream's first frame; rejected frames don't move a stream; link_id, sysid
+  and compid each make separate streams.
+- No SITL steps: nothing transmits yet.
+
+### Open questions / next
+- `SigningClock` is one per stream. S2 decides whether that means one per (link, key) or one per key across links;
+  the PRD persists per drone_id and link_id, which suggests per (key, link).
+- `ReplayGuard` keeps streams forever (bounded by 2^24, a handful in practice). S2 should drop it on reconnect.
+- The S1v file also holds `derivation` vectors (K_drone = HMAC-SHA256(master, label ‖ uid)); they belong to S4/S6.
+- `/ponytail-review` on the diff: nothing to cut (CRC reused from the library, no new dependency, no API beyond what
+  S2 is specified to call).
+- Suggested next: S2, `FrameSink` + `SigningSource` wired under the library.
