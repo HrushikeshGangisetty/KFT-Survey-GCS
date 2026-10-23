@@ -4048,3 +4048,41 @@ Windows 11, JDK 25. No new compiler warnings (the jSerialComm native-access warn
   would tell us. An upstream issue (`ULong` timestamp, `and 0x01` flag test) is worth filing.
 - Side finding for S2: the library treats only `incompat_flags == 1` as signed, so our scanner should test the bit.
 - Suggested next: S1, the pure signing core, once S1v's vectors exist.
+
+## Pass 35 — CI fix: a missing serial port fails with an IOException on Linux too (2026-10-23)
+
+### What changed
+- `core/mavlink/src/jvmMain/kotlin/com/kft/gcs/core/mavlink/SerialPorts.jvm.kt`: `open()` catches jSerialComm's
+  `SerialPortInvalidPortException` from `SerialPort.getCommPort` and rethrows it as an `okio.IOException` that names the
+  port, keeping the original as the cause.
+
+### How it works
+```
+open("COM_X") ──▶ SerialPort.getCommPort("COM_X")
+                     ├─ Windows: returns a port object; openPort() is false ──▶ IOException("Can't open COM_X …")
+                     └─ Linux/macOS: throws SerialPortInvalidPortException ──▶ caught ──▶ IOException("Can't open COM_X (no such port)")
+```
+
+### Engineering learnings
+- **Normalise library errors at the adapter boundary.** `SerialPorts` is the one place that knows about jSerialComm, so
+  it is the one place that should translate its exceptions. Callers (the serial transport, the Connections screen)
+  already handle `IOException`; an unchecked `RuntimeException` on Linux would have skipped those handlers and could
+  crash the link job instead of showing "can't open".
+- **Why fix the adapter, not the test.** The test states the contract ("a missing port is a readable IOException"). On
+  Linux the adapter broke that contract; loosening the test would have hidden it.
+- **Why only Linux failed.** jSerialComm resolves the name to a canonical device path on Linux/macOS inside
+  `getCommPort`, and that lookup throws for a name that doesn't exist. On Windows the name is used as is, and the
+  failure shows up later as `openPort() == false`.
+- **Ponytail review (lite):** nothing to cut; one try/catch and one import.
+
+### What to look at
+1. `core/mavlink/src/jvmMain/kotlin/com/kft/gcs/core/mavlink/SerialPorts.jvm.kt:25`: the catch and its why-comment.
+2. `core/mavlink/src/jvmTest/kotlin/com/kft/gcs/core/mavlink/DesktopSerialPortsTest.kt:12`: the unchanged contract test.
+
+### Tests
+- `DesktopSerialPortsTest.aMissingPortFailsWithAReadableIOException` (unchanged) now passes on the Linux CI runner as
+  well as on Windows. CI had failed on `main` since at least P25 (runs 36393382808, 39398675252, 39995168641).
+- `gradlew.bat check` locally on Windows 11: BUILD SUCCESSFUL.
+
+### Open questions / next
+- None for this fix. The signing branch (PR #1) was blocked by the same red CI and can be rebased once this merges.
