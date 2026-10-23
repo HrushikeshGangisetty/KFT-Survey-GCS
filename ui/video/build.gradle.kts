@@ -23,6 +23,10 @@ kotlin {
         jvmTest.dependencies {
             // The T12 replay test reads a recorded capture through the real T12 framing.
             implementation(project(":core:mavlink"))
+            // CI runs on Linux, so the tests also need FFmpeg's Linux natives. Test classpath only: the shipped app
+            // stays Windows-only (above). Same LGPL artifact, so FfmpegBuildTest still checks the licence we ship.
+            runtimeOnly(project.dependencies.variantOf(libs.bytedeco.ffmpeg) { classifier("linux-x86_64") })
+            runtimeOnly(project.dependencies.variantOf(libs.bytedeco.javacpp) { classifier("linux-x86_64") })
         }
     }
 }

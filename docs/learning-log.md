@@ -4055,6 +4055,9 @@ Windows 11, JDK 25. No new compiler warnings (the jSerialComm native-access warn
 - `core/mavlink/src/jvmMain/kotlin/com/kft/gcs/core/mavlink/SerialPorts.jvm.kt`: `open()` catches jSerialComm's
   `SerialPortInvalidPortException` from `SerialPort.getCommPort` and rethrows it as an `okio.IOException` that names the
   port, keeping the original as the cause.
+- `ui/video/build.gradle.kts`: `jvmTest` also gets bytedeco FFmpeg/JavaCPP `linux-x86_64` natives. Once the serial test
+  passed, CI reached `ui:video`, whose four FFmpeg tests failed on Linux with `UnsatisfiedLinkError`: only Windows
+  natives were declared. Test classpath only; the shipped desktop app still bundles Windows natives alone.
 
 ### How it works
 ```
@@ -4073,7 +4076,10 @@ open("COM_X") ──▶ SerialPort.getCommPort("COM_X")
 - **Why only Linux failed.** jSerialComm resolves the name to a canonical device path on Linux/macOS inside
   `getCommPort`, and that lookup throws for a name that doesn't exist. On Windows the name is used as is, and the
   failure shows up later as `openPort() == false`.
-- **Ponytail review (lite):** nothing to cut; one try/catch and one import.
+- **Why test-only Linux natives, not a shipped Linux build.** The P0 desktop target is Windows (the `ponytail:` note
+  in `ui/video/build.gradle.kts`). The tests still need *a* real FFmpeg to decode with, and the Linux artifact is the
+  same LGPL build, so `FfmpegBuildTest` keeps guarding the licence.
+- **Ponytail review (lite):** nothing to cut; one try/catch, one import, two dependency lines.
 
 ### What to look at
 1. `core/mavlink/src/jvmMain/kotlin/com/kft/gcs/core/mavlink/SerialPorts.jvm.kt:25`: the catch and its why-comment.
@@ -4082,7 +4088,8 @@ open("COM_X") ──▶ SerialPort.getCommPort("COM_X")
 ### Tests
 - `DesktopSerialPortsTest.aMissingPortFailsWithAReadableIOException` (unchanged) now passes on the Linux CI runner as
   well as on Windows. CI had failed on `main` since at least P25 (runs 36393382808, 39398675252, 39995168641).
-- `gradlew.bat check` locally on Windows 11: BUILD SUCCESSFUL.
+- `ui:video` jvmTests (`FfmpegBuildTest`, `RtspPlaybackTest`, `T12VideoPipelineTest`) now load FFmpeg on Linux.
+- `gradlew.bat check` locally on Windows 11: BUILD SUCCESSFUL. `:app:desktop` runtime classpath has no `linux-x86_64`.
 
 ### Open questions / next
 - None for this fix. The signing branch (PR #1) was blocked by the same red CI and can be rebased once this merges.
