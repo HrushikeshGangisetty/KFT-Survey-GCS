@@ -1,6 +1,6 @@
 # ADR-006 — MAVLink 2 signing: sign and verify below mavlink-kotlin
 
-**Status:** Proposed (stage S0a). Becomes Accepted when S1 lands the pure signing core against the S1v vectors.
+**Status:** Accepted in S1 (pass 35): the pure signing core matches all 120 S1v pymavlink vectors. Proposed in S0a.
 **Date:** 2026-10-23 · **Pass:** 34 (S0a) · **PRD:** `docs/Signing/PRD-Signing.md` ("Scope", "Architecture")
 
 ## Context
