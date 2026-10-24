@@ -12,7 +12,10 @@ import com.kft.gcs.core.keys.VaultKeyring
 import com.kft.gcs.core.keys.WrappedByteStore
 import com.kft.gcs.core.mavlink.di.IoDispatcher
 import com.kft.gcs.core.mavlink.signing.SigningKeyring
+import com.kft.gcs.feature.settings.BundlePicker
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.koin.dsl.module
 
 /**
@@ -31,4 +34,19 @@ fun signingModule(vaultFile: File, timestampFile: File, deviceWrap: DeviceWrap? 
     single { TimestampFile(FileByteStore(timestampFile), nowMs = System::currentTimeMillis) }
     single<SigningKeyring> { VaultKeyring(get(), get()) }
     single { BundleImport(get(), get(), get(IoDispatcher)) }
+}
+
+/**
+ * A [BundlePicker] over a shell's existing "pick a file and copy it into this folder" dialog: the copy is read into
+ * memory and deleted at once, so the bundle (which is encrypted anyway) never lingers on disk.
+ */
+fun bundlePicker(pickAndCopy: suspend () -> String?): BundlePicker = BundlePicker {
+    pickAndCopy()?.let { path ->
+        val copy = File(path)
+        try {
+            withContext(Dispatchers.IO) { copy.readBytes() }
+        } finally {
+            copy.delete()
+        }
+    }
 }

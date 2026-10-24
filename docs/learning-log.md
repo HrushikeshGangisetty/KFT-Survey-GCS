@@ -4412,3 +4412,51 @@ Nothing transmits and `MavTxGateway` and its allowlist are untouched. Keys are e
 - `TimestampFile` is keyed by drone_id only (as briefed); the PRD also mentions link_id.
 - `ponytail:` marker in `TimestampFile.kt` (concurrent writers). Review also found `Envelope.newSalt` could be inlined (-2 lines).
 - Suggested next: S5 screens and badges.
+
+## Pass 39 — S5 (signing): keys screen, unlock prompt, badges, refusal toast (2026-10-24)
+
+### What changed
+- `feature/settings`: `SigningKeysRepository` (interface + `VaultSigningKeysRepository` over the `core:keys` vault), `SigningKeysUiState`, `SigningKeysViewModel` (+ `BundlePicker`), `SigningKeysScreen` (screen, route, start-up `SigningUnlockPrompt`), bindings in `SettingsModule`.
+- `app:shared`: new **Keys** rail tab; unlock prompt over any tab; refusal toast with an "Open signing keys" action; pointer activity feeds the idle timer; `lockKeysInBackground` (Android) on `App()`; `bundlePicker()` helper and per-shell bindings.
+- `core:mavlink`: `SigningStatus.label` / `.tone`; `LinkState.Connected.signingBlocked`; `Links.signingRefusals`; `TxResult.Rejected.isSigningRefusal`; `NO_KEY` / `LOCKED` reason constants made public.
+- `core:vehicle`: `VehicleState.signing` and `fcSignatureFailures` (NAMED_VALUE_INT "SIGFAIL", the S8 counter).
+- `core:keys`: `Vault.revision` (a StateFlow screens re-read on), `IdleAutoLock(busy = …)`.
+- Badges: Links (card and per-vehicle rows, plus vehicles we cannot read), Fly HUD chips, Fleet rows; each feature has its own `SigningChip.kt`. Icons `ic_lock`, `ic_lock_open` (Material Symbols, same tint edit as the others).
+- Screenshots: `docs/design/34-keys-*.png`, `34-links-signing-*.png` (light, dark, high contrast).
+
+### How it works
+```
+Vault ─revision─▶ VaultSigningKeysRepository ─snapshot─▶ SigningKeysViewModel ─UiState─▶ Keys tab / unlock prompt
+Links.signingRefusals ─(30 s cooldown)─▶ Effect.Refused ─▶ App snackbar ["Open signing keys"] ─▶ Keys tab
+SigningSource status ─▶ VehicleInfo.signing ─▶ VehicleState.signing ─▶ Fly / Fleet chips ;  LinkState.signingBlocked ─▶ Links rows
+pointer events ─▶ vm.onUserActive ─▶ IdleAutoLock.touch ; IdleAutoLock(busy = a Signed or BadSignature vehicle is connected)
+```
+1. Start-up: if the vault file exists and is locked, `promptUnlock` is true, so the dialog shows over whichever tab is open. **Skip** silences it until the next unlock-then-lock.
+2. PIN and passphrase are arguments, never state. A picked bundle waits in the ViewModel, encrypted, until its passphrase is entered.
+3. A signing vehicle with no key (or a locked vault) has its heartbeats dropped before decoding, so it was invisible. `signingBlocked` lists those system ids so Links can say so.
+
+### Engineering learnings
+- **A repository interface over a final class.** `Vault` runs real Argon2 (64 MiB), so ViewModel tests use a fake `SigningKeysRepository` and stay fast; the real wiring is covered by the `core:keys` tests.
+- **`revision` over polling.** The idle timer can lock the vault with no screen involved; a counter the screens collect is the smallest way to tell them.
+- **Idle lock never fires while a signed vehicle is connected** (`busy`). Locking then would zero the keys and the FC would drop every command. This closes the S4 open question.
+- **Refusals throttled with `conflate()` + `delay`**: the gateway refuses every second; one toast per 30 s keeps the latest text and works on virtual time.
+- **Duplicated `SigningChip`** in connections and fly: features must not import each other (CLAUDE.md §2), and `ui:design` cannot see `core:mavlink`. The text and tone live once, in `core:mavlink`.
+
+### What to look at
+- `feature/settings/src/commonMain/kotlin/com/kft/gcs/feature/settings/SigningKeysViewModel.kt` (`run`, `onAppBackgrounded`, refusal collector).
+- `feature/settings/src/commonMain/kotlin/com/kft/gcs/feature/settings/SigningKeysRepository.kt` (`busy`, snapshot).
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/ConnectionManager.kt` (`signingBlocked` in `publish()`).
+
+### Tests
+`./gradlew check` passes. New: `SigningKeysViewModelTest` (14: PIN rules, create, prompt and skip, wrong PIN, key rows with no key bytes, remove confirm, import flow and wrong passphrase, refusal cooldown, background lock vs file dialog, touch); `SigningKeysUiTest` (create, locked, remove, import, prompt, three themes); `ConnectionsViewModelTest` (signing on cards, blocked vehicles); `ConnectionsUiTest` (badges, three themes); `FleetViewModelTest`, `FlyViewModelTest` (signing carried to rows and HUD); `VehicleStateTest` (SIGFAIL incl. NUL padding), `VehicleRepositoryTest`; `ConnectionManagerTest` (blocked list); `GatewaySigningTest` (`isSigningRefusal`); `SigningStatusTest`; `core:keys` (`revision`, busy idle lock).
+Manual (not run): on an Android build, create a vault, import the S6 bundle, press Home, return: expect the keys locked and the prompt shown; open the file picker for a bundle: expect no lock. Desktop SITL: with a signing SITL and no key, expect "No key" on Links and the toast with its action after about 1 s.
+
+### Safety
+No change to what is transmitted: the allowlist and `MavTxGateway` rules are untouched, and no flight action was added (S9). Two public constants (`NO_KEY`, `LOCKED`) changed visibility only, and `isSigningRefusal` reads them. Keys are never shown: `KeyRow` has no key field. Locking: idle (not while a signed vehicle is connected), "Lock now", and on Android ON_STOP.
+
+### Open questions / next
+- **Android background lock vs flight.** PRD says zeroise on background; a phone call mid-flight therefore stops GCS commands until the PIN is re-entered. The pilot flies on RC and the GCS sends no flight actions (S9), so I followed the PRD; say if you want a signed vehicle to exempt it like the idle timer does.
+- A NoKey/Locked vehicle has no `VehicleState`, so Fly and Fleet show nothing for it; only Links and the toast do.
+- The PIN minimum (6 characters) and the 30 s toast cooldown are my choices.
+- `FileDialog`/document-picker import path was not exercised by hand.
+- Suggested next: S9 (SITL attack suite and end-to-end), once S7/S8 exist.

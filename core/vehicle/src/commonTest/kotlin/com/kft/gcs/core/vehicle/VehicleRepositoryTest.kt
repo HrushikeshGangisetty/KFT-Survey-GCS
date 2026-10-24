@@ -15,6 +15,7 @@ import com.kft.gcs.core.mavlink.LinkState
 import com.kft.gcs.core.mavlink.LinkStats
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -41,6 +42,23 @@ class VehicleRepositoryTest {
         VehicleRepository(backgroundScope, fc.frames, link, fc, loginKey = null, testScheduler.timeSource).also { runCurrent() }
 
     private fun frame(message: MavMessage<*>, componentId: UByte = 1u) = fc.emit(message, componentId = componentId)
+
+    /** PRD FR-8: how the link's signing layer sees the vehicle rides along into its state, for the Fly and Fleet badges. */
+    @Test
+    fun theVehicleStateCarriesHowItSigns() = runTest {
+        val repository = repository()
+        link.value = LinkState.Connected(udp, copter, LinkStats())
+        runCurrent()
+        assertEquals(SigningStatus.Unsigned, repository.state.value.signing)
+
+        link.value = LinkState.Connected(udp, copter.copy(signing = SigningStatus.Signed("a".repeat(24))), LinkStats())
+        runCurrent()
+        assertEquals(SigningStatus.Signed("a".repeat(24)), repository.state.value.signing)
+
+        link.value = LinkState.Connected(udp, copter.copy(signing = SigningStatus.BadSignature("a".repeat(24), 2)), LinkStats())
+        runCurrent()
+        assertEquals(SigningStatus.BadSignature("a".repeat(24), 2), repository.state.value.signing)
+    }
 
     @Test
     fun requestsStreamsOncePerSessionAndAfterALongGap() = runTest {

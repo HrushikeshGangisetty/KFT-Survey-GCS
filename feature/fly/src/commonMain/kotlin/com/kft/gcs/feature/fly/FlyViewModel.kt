@@ -127,6 +127,8 @@ class FlyViewModel(
             selectedBasemap = maps.find { it.id == l.basemapId } ?: maps.first(),
             cameraRequest = l.camera,
             canCenter = v.position != null && selected?.duplicateId != true,
+            signing = v.signing.takeIf { v.connected },
+            fcSignatureFailures = v.fcSignatureFailures,
         )
     }
 

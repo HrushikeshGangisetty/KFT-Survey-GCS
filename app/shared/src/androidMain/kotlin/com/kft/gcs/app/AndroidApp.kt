@@ -43,6 +43,7 @@ fun AndroidApp(context: Context) {
         module {
             // The vault file is wrapped by an Android Keystore key as well as the PIN (PRD "Where each key lives").
             includes(signingModule(File(app.filesDir, "signing.vnks"), File(app.filesDir, "signing_ts.json"), AndroidKeystoreWrap()))
+            single { bundlePicker { planFiles.pickAndCopy(File(app.cacheDir, "bundle-import")) } }
             single { serialPorts }
             // The app's own folder on shared storage (Android/data/<package>/files/tlogs): no permission needed, and
             // the logs can be copied off over USB. Falls back to private storage if shared storage isn't mounted.
@@ -62,7 +63,7 @@ fun AndroidApp(context: Context) {
     }
     RegisterPlanFiles(planFiles)
     RegisterBluetoothPermission(serialPorts)
-    App(platform)
+    App(platform, lockKeysInBackground = true)
 }
 
 /**

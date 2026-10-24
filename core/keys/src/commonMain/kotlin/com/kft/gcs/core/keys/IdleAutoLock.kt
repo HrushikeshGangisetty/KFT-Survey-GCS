@@ -13,11 +13,15 @@ import kotlinx.coroutines.isActive
  * key) and [nowMs], a monotonic clock, so tests run on virtual time.
  *
  * The idle window starts when the vault is first seen unlocked, so unlocking needs no hook into this class.
+ *
+ * [busy] says the keys are in use right now (a vehicle is connected and signing). While it is true the vault never
+ * locks: locking mid-flight would zero the keys, and the FC would then drop every command we send.
  */
 class IdleAutoLock(
     private val vault: Vault,
     private val nowMs: () -> Long,
     private val timeoutMs: Long = 5 * 60_000,
+    private val busy: () -> Boolean = { false },
 ) {
     private val lastActivityMs = AtomicLong(nowMs())
 
@@ -27,6 +31,10 @@ class IdleAutoLock(
     /** Locks if idle too long; returns true if it did. */
     fun lockIfIdle(): Boolean {
         if (!vault.isUnlocked()) {
+            touch()
+            return false
+        }
+        if (busy()) {
             touch()
             return false
         }

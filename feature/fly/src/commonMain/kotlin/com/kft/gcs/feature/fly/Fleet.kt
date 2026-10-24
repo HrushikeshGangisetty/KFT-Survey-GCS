@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kft.gcs.core.mavlink.VehicleId
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.MissionRecord
 import com.kft.gcs.core.vehicle.Severity
@@ -46,6 +47,9 @@ data class FleetRow(
     val mission: String,
     val photos: String,
     val conditions: List<Pair<String, Severity>>,
+    val signing: SigningStatus = SigningStatus.Unsigned,
+    /** Frames the FC itself rejected for their signature; null when it doesn't report a count. */
+    val fcSignatureFailures: Int? = null,
 )
 
 /** One alert in the list: when (the device's time of day), which vehicle, what. */
@@ -118,6 +122,8 @@ internal fun fleetRows(all: List<FleetVehicle>, selectedId: VehicleId?, records:
                 ("RTL" to Severity.WARNING).takeIf { s.armed && s.flightMode == "RTL" },
                 ("Mission done" to Severity.INFO).takeIf { s.mission?.complete == true },
             ),
+            signing = s.signing,
+            fcSignatureFailures = s.fcSignatureFailures,
         )
     }
 }

@@ -56,6 +56,10 @@ import com.kft.gcs.feature.plan.PlanRoute
 import com.kft.gcs.feature.plan.PlanViewModel
 import com.kft.gcs.feature.settings.OfflineMapsRoute
 import com.kft.gcs.feature.settings.OfflineMapsViewModel
+import com.kft.gcs.feature.settings.SigningKeysEffect
+import com.kft.gcs.feature.settings.SigningKeysRoute
+import com.kft.gcs.feature.settings.SigningKeysViewModel
+import com.kft.gcs.feature.settings.SigningUnlockPrompt
 import com.kft.gcs.ui.design.KftIcons
 import com.kft.gcs.ui.design.KftLogo
 import com.kft.gcs.ui.design.KftNavigationRail
@@ -77,6 +81,12 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.zIndex
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.compose.KoinApplication
@@ -87,10 +97,11 @@ import org.koin.dsl.koinConfiguration
 /**
  * Root composable shared by the Android and desktop shells: starts Koin, applies the theme, and hosts navigation.
  * [platformModule] carries what only a shell can build, today the platform's serial ports (Android's need a Context).
+ * [lockKeysInBackground] (Android) locks the signing keys when the app leaves the screen (PRD "Key management").
  * Routes live here, not in features, because features must never import each other (CLAUDE.md §2).
  */
 @Composable
-fun App(platformModule: Module, shortcuts: KeyShortcuts = KeyShortcuts()) {
+fun App(platformModule: Module, shortcuts: KeyShortcuts = KeyShortcuts(), lockKeysInBackground: Boolean = false) {
     KoinApplication(configuration = koinConfiguration { modules(allModules + platformModule) }) {
         val prefs: ThemeStore = koinInject()
         // Dark unless the operator picked another theme: a dark chrome keeps the map the brightest thing on screen.
@@ -99,6 +110,10 @@ fun App(platformModule: Module, shortcuts: KeyShortcuts = KeyShortcuts()) {
         KftTheme(theme) {
             Surface(Modifier.fillMaxSize()) {
                 val nav = rememberNavController()
+                if (lockKeysInBackground) {
+                    val keys: SigningKeysViewModel = koinViewModel()
+                    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { keys.onAppBackgrounded() }
+                }
                 // safeDrawing: Android 15 draws edge-to-edge, so without this the UI sits under the status bar (ADR-001 F3).
                 Row(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     AppRail(nav, theme, onThemeSelected = { theme = it; prefs.write(it.name) })
@@ -135,9 +150,22 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val maps: OfflineMapsViewModel = koinViewModel()
     val params: ParamsViewModel = koinViewModel() // window scope so it downloads on connect, before the Params tab is opened
     val fleet: FleetViewModel = koinViewModel() // window scope so alerts are raised whichever tab is showing
+    val keys: SigningKeysViewModel = koinViewModel() // window scope so the unlock prompt shows at start, whichever tab is open
     // A fleet alert (link lost, battery low, RTL, mission done) is a toast on every tab, and a line on the Fleet tab.
     val alerts = remember { SnackbarHostState() }
     LaunchedEffect(fleet) { fleet.effects.collect { alerts.showSnackbar("${it.vehicle}: ${it.text}") } }
+    // A send refused because a signing vehicle has no key here (or the keys are locked) says so, with a way to fix it.
+    LaunchedEffect(keys) {
+        keys.effects.collect { effect ->
+            when (effect) {
+                is SigningKeysEffect.ShowMessage -> alerts.showSnackbar(effect.text)
+                is SigningKeysEffect.Refused ->
+                    if (alerts.showSnackbar(effect.text, actionLabel = "Open signing keys", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) {
+                        nav.openTab(Destination.KEYS)
+                    }
+            }
+        }
+    }
     val mapsState by maps.state.collectAsStateWithLifecycle()
     val flyState by fly.state.collectAsStateWithLifecycle()
     val planState by plan.state.collectAsStateWithLifecycle()
@@ -145,6 +173,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val current by nav.currentBackStackEntryAsState()
     val planning = current?.destination?.route == Destination.PLAN.route
     val mapsTab = current?.destination?.route == Destination.MAPS.route
+    val keysTab = current?.destination?.route == Destination.KEYS.route
 
     // One camera for the map, moved by whichever screen asked last: Fly (follow the vehicle) or Plan (show an import).
     var camera by remember { mutableStateOf<CameraRequest?>(null) }
@@ -161,7 +190,17 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val videoBig = videoSource != null && videoState.swapped
     val pip = remember { PipState() }
     val density = LocalDensity.current
-    Box(modifier.onSizeChanged { pip.area = with(density) { DpSize(it.width.toDp(), it.height.toDp()) } }) {
+    // Any pointer event counts as operator activity for the signing keys' idle timer. It only watches (Initial pass,
+    // nothing consumed), so it cannot steal a click from anything below.
+    val watchActivity = Modifier.pointerInput(keys) {
+        awaitPointerEventScope {
+            while (true) {
+                awaitPointerEvent(PointerEventPass.Initial)
+                keys.onUserActive()
+            }
+        }
+    }
+    Box(modifier.then(watchActivity).onSizeChanged { pip.area = with(density) { DpSize(it.width.toDp(), it.height.toDp()) } }) {
         MapView(
             if (videoBig) Modifier.pip(pip).zIndex(2f) else Modifier.fillMaxSize(),
             basemap = flyState.selectedBasemap,
@@ -181,10 +220,13 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             composable(Destination.MAPS.route) { OfflineMapsRoute(maps) }
             // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
+            composable(Destination.KEYS.route) { Surface(Modifier.fillMaxSize()) { SigningKeysRoute(keys) } }
             composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute(params) } }
             composable(Destination.FLEET.route) { Surface(Modifier.fillMaxSize()) { FleetRoute(fleet) { slot -> VehicleColors[slot.mod(VehicleColors.size)] } } }
         }
         SnackbarHost(alerts, Modifier.align(Alignment.TopCenter).zIndex(4f))
+        // The Keys tab has the PIN field itself, so the prompt would only duplicate it there.
+        if (!keysTab) SigningUnlockPrompt(keys)
         if (videoSource != null) PipControls(pip, video::onSwapClicked, video::onStatsToggled, video::onHideClicked, Modifier.zIndex(3f))
     }
 }
@@ -221,6 +263,14 @@ internal enum class Destination(val route: String, val label: String) {
     PARAMS("params", "Params"),
     MAPS("maps", "Maps"),
     CONNECTIONS("connections", "Links"),
+    KEYS("keys", "Keys"),
+}
+
+/** Goes to a tab. Tabs, not a stack: re-selecting a tab returns to it instead of piling up copies. */
+private fun NavHostController.openTab(destination: Destination) = navigate(destination.route) {
+    launchSingleTop = true
+    popUpTo(START.route) { saveState = true }
+    restoreState = true
 }
 
 /** The Fly view first, like every GCS: the map is what you want to see when the app opens. */
@@ -246,16 +296,10 @@ private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (
                     Destination.PARAMS -> KftIcons.Params
                     Destination.MAPS -> KftIcons.Maps
                     Destination.CONNECTIONS -> KftIcons.Link
+                    Destination.KEYS -> KftIcons.Lock
                 },
                 selected = current?.destination?.route == destination.route,
-                onClick = {
-                    nav.navigate(destination.route) {
-                        // Tabs, not a stack: re-selecting a tab returns to it instead of piling up copies.
-                        launchSingleTop = true
-                        popUpTo(START.route) { saveState = true }
-                        restoreState = true
-                    }
-                },
+                onClick = { nav.openTab(destination) },
             )
         },
         extra = {

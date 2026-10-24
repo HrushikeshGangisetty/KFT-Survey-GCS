@@ -76,12 +76,14 @@ class GatewaySigningTest {
             val noKey = assertIs<TxResult.Rejected>(gateway.forVehicle(1u).send(ParamRequestList(targetSystem = 1u)))
             assertEquals("vehicle signs its traffic; no key for it on this device", noKey.reason)
             assertEquals(noKey, awaitItem())
+            assertTrue(noKey.isSigningRefusal, "the app turns this into a toast with an Open signing keys action")
             val locked = assertIs<TxResult.Rejected>(gateway.forVehicle(2u).send(ParamRequestList(targetSystem = 2u)))
             assertEquals("signing keys are locked; unlock in Settings", locked.reason)
             assertEquals(locked, awaitItem())
             // The allowlist still speaks first: a never-sent message says so, not "no key".
             val never = assertIs<TxResult.Rejected>(gateway.forVehicle(1u).send(SetPositionTargetLocalNed(targetSystem = 1u)))
             assertTrue(never.reason.startsWith("never"), never.reason)
+            assertFalse(never.isSigningRefusal, "an allowlist refusal is not fixed in the keys screen")
             awaitItem()
         }
         assertEquals(0L, link.wire.size, "nothing unsigned goes to a vehicle that signs")

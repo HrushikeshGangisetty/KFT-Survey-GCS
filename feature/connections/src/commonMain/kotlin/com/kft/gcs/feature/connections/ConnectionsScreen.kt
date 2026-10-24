@@ -157,11 +157,18 @@ private fun LinkStatusCard(link: LinkStatusUi, onDisconnect: (linkId: Int) -> Un
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 Text(link.headline, style = MaterialTheme.typography.titleMedium)
                 link.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                link.login?.let { StatusChip(it, if (link.loginWarning) Status.WARN else Status.OK, icon = KftIcons.Login) }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    link.login?.let { StatusChip(it, if (link.loginWarning) Status.WARN else Status.OK, icon = KftIcons.Login) }
+                    link.signing?.let { SigningChip(it) }
+                }
                 link.vehicles.forEach { v ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.s), verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                        itemVerticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(v.text, style = MaterialTheme.typography.bodyMedium)
                         v.login?.let { StatusChip(it, if (v.loginWarning) Status.WARN else Status.OK, icon = KftIcons.Login) }
+                        v.signing?.let { SigningChip(it) }
                     }
                 }
             }

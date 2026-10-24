@@ -12,6 +12,7 @@ import com.divpundir.mavlink.definitions.common.HomePosition
 import com.divpundir.mavlink.definitions.common.MissionCurrent
 import com.divpundir.mavlink.definitions.common.MissionItemReached
 import com.divpundir.mavlink.definitions.common.MissionState
+import com.divpundir.mavlink.definitions.common.NamedValueInt
 import com.divpundir.mavlink.definitions.common.ParamValue
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
@@ -20,6 +21,7 @@ import com.divpundir.mavlink.definitions.standard.AutopilotVersion
 import com.divpundir.mavlink.definitions.standard.GlobalPositionInt
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import kotlin.math.PI
 
 /**
@@ -66,6 +68,13 @@ data class VehicleState(
     val ekfFlags: UInt? = null,
     /** The latest estimator STATUSTEXTs ([isEstimatorText]), oldest first, at most [MAX_ESTIMATOR_MESSAGES]. */
     val estimatorMessages: List<StatusMessage> = emptyList(),
+    /** How this vehicle signs its traffic on its link (PRD FR-8), from the link's signing layer. */
+    val signing: SigningStatus = SigningStatus.Unsigned,
+    /**
+     * How many frames the FC itself has rejected for a bad or missing signature, from its NAMED_VALUE_INT "SIGFAIL"
+     * (the S8 firmware change). Null until the FC reports one, which a stock ArduPilot never does.
+     */
+    val fcSignatureFailures: Int? = null,
 ) {
     /**
      * The vehicle's simple geofence, or null when it is off or not known yet. ArduPilot's AC_Fence parameters (Copter
@@ -112,6 +121,9 @@ val WATCHED_PARAMS = listOf("FENCE_ENABLE", "FENCE_TYPE", "FENCE_ALT_MAX", "FENC
  * ponytail: the count shown in Fly is then capped too; count img_idx instead if a single flight ever takes more.
  */
 const val MAX_PHOTOS = 10_000
+
+/** The NAMED_VALUE_INT name under which the KFT firmware reports how many frames it rejected for their signature (S8). */
+const val SIGFAIL_NAME = "SIGFAIL"
 
 /**
  * Mission progress. Seq numbers are the vehicle's, so item 1 is the first item after home (spec S11).
@@ -164,6 +176,8 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
     // EKF_STATUS_REPORT (ardupilotmega.xml #193). ArduPilot streams it in the EXTRA3 group (ArduCopter and ArduPlane
     // GCS_Mavlink.cpp, KFT fork 23c97b96), which the REQUEST_DATA_STREAM(ALL) at connect turns on.
     is EkfStatusReport -> copy(ekfFlags = message.flags.value)
+    // The KFT firmware reports its signature-failure counter as a named value (S8); any other name is not ours to read.
+    is NamedValueInt -> if (message.name.trimEnd(' ') == SIGFAIL_NAME) copy(fcSignatureFailures = message.value) else this
     // HOME_POSITION (common.xml). ArduPilot sends it only once home is set, on request, and on every change (for
     // Copter, arming moves home to where it armed), plus at the interval VehicleRepository asks for.
     is HomePosition -> copy(home = Home(LatLon.fromE7(message.latitude, message.longitude), message.altitude / 1000.0)) // mm -> m

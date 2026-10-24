@@ -14,6 +14,7 @@ import com.kft.gcs.core.mavlink.TxResult
 import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.GpsFix
 import com.kft.gcs.core.mission.MissionCommand
@@ -84,6 +85,22 @@ class FlyViewModelTest {
     private fun TestScope.fleetViewModel() = FlyViewModel(fleet, selectedId, { selectedId.value = it }, basemaps, sync).also { vm ->
         backgroundScope.launch { vm.state.collect {} }
         runCurrent()
+    }
+
+    @Test
+    fun theSelectedVehiclesSigningStatusIsShownOnlyWhileItIsConnected() = runTest(dispatcher) {
+        val vm = fleetViewModel()
+        assertEquals(SigningStatus.Unsigned, vm.state.value.signing)
+        assertEquals(null, vm.state.value.fcSignatureFailures)
+
+        fleet.value = fleet.value.map { if (it.id == drone) it.copy(state = it.state.copy(signing = SigningStatus.Signed("a".repeat(24)), fcSignatureFailures = 2)) else it }
+        runCurrent()
+        assertEquals(SigningStatus.Signed("a".repeat(24)), vm.state.value.signing)
+        assertEquals(2, vm.state.value.fcSignatureFailures)
+
+        fleet.value = fleet.value.map { if (it.id == drone) it.copy(state = it.state.copy(connected = false)) else it }
+        runCurrent()
+        assertEquals(null, vm.state.value.signing, "no badge for a vehicle that is not here")
     }
 
     @Test

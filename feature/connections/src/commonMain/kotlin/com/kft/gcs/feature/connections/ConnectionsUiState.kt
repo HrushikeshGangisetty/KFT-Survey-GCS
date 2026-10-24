@@ -8,6 +8,7 @@ import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import com.kft.gcs.core.vehicle.KftLoginStatus
 import kotlin.math.roundToInt
 
@@ -27,6 +28,7 @@ data class ConnectionsUiState(
  * With one vehicle on the link, the card is about that vehicle: [headline] describes it and [login] is its KFT login
  * line (spec S12; [loginWarning] = the operator must act). With several, [headline] counts them and [vehicles] lists
  * each with its own login.
+ * @property signing how the single vehicle signs its traffic (PRD FR-8); null on a card that isn't about one vehicle.
  * @property linkId the link to disconnect, or null on the "Not connected" card.
  */
 data class LinkStatusUi(
@@ -37,10 +39,15 @@ data class LinkStatusUi(
     val loginWarning: Boolean = false,
     val linkId: Int? = null,
     val vehicles: List<VehicleLineUi> = emptyList(),
+    val signing: SigningStatus? = null,
 )
 
-/** One vehicle on a link that carries several: "ArduCopter · system 2 · disarmed" and its login line. */
-data class VehicleLineUi(val text: String, val login: String?, val loginWarning: Boolean)
+/**
+ * One vehicle on a link that carries several: "ArduCopter · system 2 · disarmed", its login line and how it signs.
+ * Also used for a vehicle that signs but can't be talked to (no key, keys locked): it has no heartbeat we can read, so
+ * [text] says only its system id.
+ */
+data class VehicleLineUi(val text: String, val login: String?, val loginWarning: Boolean, val signing: SigningStatus? = null)
 
 enum class Tone { IDLE, BUSY, OK, WARNING }
 
@@ -109,6 +116,8 @@ fun LinkState.toStatusUi(linkId: Int? = null, logins: Map<VehicleId, KftLoginSta
         fun login(v: VehicleInfo) = linkId?.let { logins[VehicleId(it, v.systemId)] }
         val duplicate = vehicles.firstOrNull { it.duplicateId }
         val only = vehicles.singleOrNull()
+        // Vehicles that sign but can't be read (PRD FR-8): they have no heartbeat of ours, so the link would otherwise say nothing.
+        val blocked = signingBlocked.map { (id, status) -> VehicleLineUi("System $id · signs its MAVLink", null, false, status) }
         when {
             // ADR-005 §4: said in words and as a warning, because nothing can be sent to that id until it's fixed.
             duplicate != null -> LinkStatusUi(
@@ -116,11 +125,15 @@ fun LinkState.toStatusUi(linkId: Int? = null, logins: Map<VehicleId, KftLoginSta
                 "Give each its own MAV_SYSID (SYSID_THISMAV on older firmware), then reconnect. Nothing is sent to that id until then.",
                 Tone.WARNING, linkId = linkId,
             )
+            vehicles.isEmpty() && blocked.isNotEmpty() -> LinkStatusUi(
+                "Link open on ${config.summary}", "A vehicle here signs its MAVLink and can't be reached: add its key, or unlock the keys · $traffic",
+                Tone.WARNING, linkId = linkId, vehicles = blocked,
+            )
             vehicles.isEmpty() -> LinkStatusUi("Link open on ${config.summary}", "Waiting for a vehicle heartbeat · $traffic", Tone.BUSY, linkId = linkId)
-            only != null -> login(only).let { l -> LinkStatusUi(only.describe(), traffic, Tone.OK, l?.label, l?.warning == true, linkId) }
+            only != null -> login(only).let { l -> LinkStatusUi(only.describe(), traffic, Tone.OK, l?.label, l?.warning == true, linkId, blocked, only.signing) }
             else -> LinkStatusUi(
                 "${vehicles.size} vehicles on ${config.summary}", traffic, Tone.OK, linkId = linkId,
-                vehicles = vehicles.map { v -> login(v).let { l -> VehicleLineUi(v.describe(), l?.label, l?.warning == true) } },
+                vehicles = vehicles.map { v -> login(v).let { l -> VehicleLineUi(v.describe(), l?.label, l?.warning == true, v.signing) } } + blocked,
             )
         }
     }

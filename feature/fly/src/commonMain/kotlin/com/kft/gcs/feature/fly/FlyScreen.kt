@@ -89,6 +89,8 @@ fun FlyScreen(
                     StatusChip("No vehicle", Status.WARN, icon = KftIcons.LinkOff)
                 }
                 state.login?.let { StatusChip(it.text, if (it.warning) Status.WARN else Status.OK, icon = KftIcons.Login) }
+                state.signing?.let { SigningChip(it) }
+                state.fcSignatureFailures?.takeIf { it > 0 }?.let { StatusChip("FC rejected $it bad frames", Status.WARN) }
                 if (state.connected) StatusChip(state.gps.value, state.gps.status(), icon = KftIcons.Gps)
                 state.missionWarning?.let { StatusChip(it, Status.WARN) }
                 state.vehicleProblem?.let { StatusChip(it, Status.CRITICAL) }

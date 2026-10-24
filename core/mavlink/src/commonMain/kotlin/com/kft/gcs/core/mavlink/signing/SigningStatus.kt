@@ -35,3 +35,26 @@ data class SigningCounters(
     /** MAVLink 2 frames with an incompat flag this GCS doesn't know, so their layout is unknown. */
     val malformed: Int = 0,
 )
+
+/** How serious a [SigningStatus] is, for the badge colour. The UI picks the actual colour. */
+enum class SigningTone { GOOD, NEUTRAL, WARNING }
+
+/**
+ * The badge text for a vehicle (PRD FR-8). `Unsigned` reads "Unsigned link" because that is the fact: the link is
+ * not signed. It is neutral, not a warning, since most of today's fleet is unsigned (NFR-5).
+ */
+val SigningStatus.label: String
+    get() = when (this) {
+        SigningStatus.Unsigned -> "Unsigned link"
+        is SigningStatus.Signed -> "Signed"
+        SigningStatus.NoKey -> "No key"
+        SigningStatus.Locked -> "Keys locked"
+        is SigningStatus.BadSignature -> "Bad signature ($count)"
+    }
+
+val SigningStatus.tone: SigningTone
+    get() = when (this) {
+        is SigningStatus.Signed -> SigningTone.GOOD
+        SigningStatus.Unsigned -> SigningTone.NEUTRAL
+        SigningStatus.NoKey, SigningStatus.Locked, is SigningStatus.BadSignature -> SigningTone.WARNING
+    }

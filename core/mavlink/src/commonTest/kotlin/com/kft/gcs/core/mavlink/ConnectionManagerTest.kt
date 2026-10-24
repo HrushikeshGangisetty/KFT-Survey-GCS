@@ -275,6 +275,30 @@ class ConnectionManagerTest {
     }
 
     /**
+     * A vehicle that signs but has no key here (or the keys are locked) never gets a heartbeat through, so it is not in
+     * `vehicles`. The link state still lists it, so the Links screen can say so; once it is readable it moves to `vehicles`.
+     */
+    @Test
+    fun signingVehiclesWeCannotReadAreListedAsBlocked() = runTest {
+        val link = FakeMavConnection()
+        val manager = manager(link)
+        manager.connect(udp)
+        runCurrent()
+        link.signing.value = mapOf(5u.toUByte() to SigningStatus.Locked, 6u.toUByte() to SigningStatus.NoKey)
+        advanceTimeBy(1.seconds + 1.milliseconds)
+
+        val blocked = assertIs<LinkState.Connected>(manager.state.value).signingBlocked
+        assertEquals(mapOf(5u.toUByte() to SigningStatus.Locked, 6u.toUByte() to SigningStatus.NoKey), blocked)
+        assertTrue(manager.vehicles().isEmpty())
+
+        // The operator unlocks: the vehicle's next signed heartbeat verifies and binds.
+        link.signing.value = mapOf(5u.toUByte() to SigningStatus.Signed("drone-a"))
+        link.receive(copterHeartbeat(), seq = 0)
+        advanceTimeBy(1.seconds + 1.milliseconds)
+        assertTrue(assertIs<LinkState.Connected>(manager.state.value).signingBlocked.isEmpty())
+    }
+
+    /**
      * Bindings belong to one link session: after a reconnect the new session's signing state is used, whatever it is
      * (the same system id may now be another drone). The old session's clock is saved first, so the new one starts above it.
      */

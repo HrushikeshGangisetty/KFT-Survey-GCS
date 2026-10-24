@@ -3,6 +3,7 @@ package com.kft.gcs.feature.fly
 import app.cash.turbine.test
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleId
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.KftLoginStatus
 import com.kft.gcs.core.vehicle.MissionProgress
@@ -82,6 +83,18 @@ class FleetViewModelTest {
     }
 
     // ---- the dashboard rows ----
+
+    /** PRD FR-8: each row says how its vehicle signs, and what the FC itself counted as rejected (S8's SIGFAIL). */
+    @Test
+    fun aRowCarriesHowItsVehicleSigns() {
+        val signed = flying.copy(signing = SigningStatus.Signed("a".repeat(24)), fcSignatureFailures = 3)
+        val (first, second) = fleetRows(fleet(signed, flying), drone1, emptyList())
+
+        assertEquals(SigningStatus.Signed("a".repeat(24)), first.signing)
+        assertEquals(3, first.fcSignatureFailures)
+        assertEquals(SigningStatus.Unsigned, second.signing, "the default, and most of the fleet today")
+        assertEquals(null, second.fcSignatureFailures, "a stock FC reports no count")
+    }
 
     @Test
     fun aRowSaysEverythingAboutItsVehicle() {

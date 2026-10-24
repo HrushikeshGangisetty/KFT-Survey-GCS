@@ -8,6 +8,7 @@ import com.kft.gcs.core.mavlink.SerialPortInfo
 import com.kft.gcs.core.mavlink.VehicleId
 import com.kft.gcs.core.mavlink.VehicleInfo
 import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import com.kft.gcs.core.vehicle.KftLoginStatus
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -106,8 +107,8 @@ class ConnectionsViewModelTest {
             assertEquals("2 vehicles on UDP listen :14550", first.headline)
             assertEquals(
                 listOf(
-                    VehicleLineUi("ArduCopter · system 1 · disarmed", "KFT login: OK", loginWarning = false),
-                    VehicleLineUi("ArduCopter · system 2 · ARMED", null, loginWarning = false), // no login known for system 2 yet
+                    VehicleLineUi("ArduCopter · system 1 · disarmed", "KFT login: OK", loginWarning = false, signing = SigningStatus.Unsigned),
+                    VehicleLineUi("ArduCopter · system 2 · ARMED", null, loginWarning = false, signing = SigningStatus.Unsigned), // no login known for system 2 yet
                 ),
                 first.vehicles,
             )
@@ -116,6 +117,31 @@ class ConnectionsViewModelTest {
         }
         vm.onDisconnectClicked(2)
         assertEquals(listOf(2), repository.disconnected)
+    }
+
+    /** PRD FR-8: a single vehicle's card carries how it signs, so the badge sits beside its login. */
+    @Test
+    fun aSingleVehicleCardShowsHowItSigns() {
+        val signed = copter.copy(signing = SigningStatus.Signed("a".repeat(24)))
+        assertEquals(SigningStatus.Signed("a".repeat(24)), LinkState.Connected(udp, signed, LinkStats()).toStatusUi(linkId = 1).signing)
+        assertEquals(SigningStatus.Unsigned, LinkState.Connected(udp, copter, LinkStats()).toStatusUi(linkId = 1).signing)
+    }
+
+    /**
+     * A vehicle that signs, with no key here or keys locked, never gets a heartbeat through, so it is not in `vehicles`.
+     * The card must still say it is out there and why it cannot be reached, as a warning.
+     */
+    @Test
+    fun aSigningVehicleWeCannotReadStillShowsOnItsLink() {
+        val blocked = mapOf(5.toUByte() to SigningStatus.Locked)
+
+        val alone = LinkState.Connected(udp, null, LinkStats(), emptyList(), blocked).toStatusUi(linkId = 1)
+        assertEquals(Tone.WARNING, alone.tone)
+        assertEquals(listOf(VehicleLineUi("System 5 · signs its MAVLink", null, false, SigningStatus.Locked)), alone.vehicles)
+
+        val beside = LinkState.Connected(udp, copter, LinkStats(), listOf(copter), mapOf(5.toUByte() to SigningStatus.NoKey)).toStatusUi(linkId = 1)
+        assertEquals(Tone.OK, beside.tone, "the readable vehicle keeps the card healthy")
+        assertEquals(SigningStatus.NoKey, beside.vehicles.single().signing)
     }
 
     /** ADR-005 §4: a duplicated system id is a warning that says what to do, not a vehicle. */

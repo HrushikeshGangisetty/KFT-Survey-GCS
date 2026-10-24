@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import com.kft.gcs.core.geo.Geodesy
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleId
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import com.kft.gcs.core.vehicle.GpsFix
 import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.Severity
@@ -41,6 +42,10 @@ data class FlyUiState(
     val cameraRequest: CameraRequest?,
     /** True once there is a position to centre on. */
     val canCenter: Boolean,
+    /** How the selected vehicle signs its traffic (PRD FR-8); null while it isn't connected. */
+    val signing: SigningStatus? = null,
+    /** Frames the FC itself rejected for their signature (its "SIGFAIL" counter); null when it doesn't report one. */
+    val fcSignatureFailures: Int? = null,
 )
 
 data class HudItem(val label: String, val value: String, val warning: Boolean = false)

@@ -26,6 +26,9 @@ sealed interface TxResult {
     data class Failed(val cause: IOException) : TxResult
 }
 
+/** True for the two refusals that the operator fixes in the signing-keys screen: no key for this vehicle, or keys locked. */
+val TxResult.Rejected.isSigningRefusal: Boolean get() = reason == MavTxGateway.NO_KEY || reason == MavTxGateway.LOCKED
+
 /**
  * Something that can send MAVLink to one vehicle. The real ones come from [MavTxGateway.forVehicle]. Protocols in
  * `core:vehicle` take this interface so their tests can use a scripted fake flight controller instead of a link.
@@ -163,7 +166,7 @@ class MavTxGateway internal constructor(
         /** MAV_COMP_ID_MISSIONPLANNER (190): the component id ground stations use. */
         const val GCS_COMPONENT_ID: UByte = 190u
 
-        internal const val NO_KEY = "vehicle signs its traffic; no key for it on this device"
-        internal const val LOCKED = "signing keys are locked; unlock in Settings"
+        const val NO_KEY = "vehicle signs its traffic; no key for it on this device"
+        const val LOCKED = "signing keys are locked; unlock in Settings"
     }
 }

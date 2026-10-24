@@ -85,6 +85,8 @@ private fun VehicleCard(row: FleetRow, color: Color, onClick: () -> Unit) {
                 Text("Vehicle ${row.label}" + if (row.selected) " (selected)" else "", style = MaterialTheme.typography.titleMedium)
                 StatusChip(row.link, if (row.connected) Status.OK else Status.CRITICAL, icon = if (row.connected) KftIcons.Link else KftIcons.LinkOff)
                 row.login?.let { StatusChip(it, if (row.loginWarning) Status.WARN else Status.OK, icon = KftIcons.Login) }
+                if (row.connected) SigningChip(row.signing)
+                row.fcSignatureFailures?.takeIf { it > 0 }?.let { StatusChip("FC rejected $it bad frames", Status.WARN) }
                 row.conditions.forEach { (text, severity) -> StatusChip(text, severity.status()) }
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.l), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {

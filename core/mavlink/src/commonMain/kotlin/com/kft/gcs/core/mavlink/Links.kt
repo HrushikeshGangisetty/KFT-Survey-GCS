@@ -4,6 +4,11 @@ import com.kft.gcs.core.mavlink.signing.NoSigning
 import com.kft.gcs.core.mavlink.signing.SigningKeyring
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +35,12 @@ class Links internal constructor(private val newLink: (id: Int) -> ConnectionMan
 
     /** The links that are open or trying to open, oldest first. */
     val open: StateFlow<List<ConnectionManager>> = _open.asStateFlow()
+
+    /** Messages refused because a signing vehicle has no key here, or the keys are locked (every link's gateway merged). */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val signingRefusals: Flow<TxResult.Rejected> = _open
+        .flatMapLatest { links -> merge(*links.map { it.gateway.rejections }.toTypedArray()) }
+        .filter { it.isSigningRefusal }
 
     private var nextId = 1
 

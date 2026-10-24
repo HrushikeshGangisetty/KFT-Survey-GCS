@@ -90,6 +90,12 @@ sealed interface LinkState {
         val vehicle: VehicleInfo?,
         val stats: LinkStats,
         val vehicles: List<VehicleInfo> = listOfNotNull(vehicle),
+        /**
+         * System ids that sign but whose heartbeats can't be checked here: [SigningStatus.NoKey] (none of our keys fits)
+         * or [SigningStatus.Locked]. Their frames are dropped before decoding, so they are never in [vehicles]; this is
+         * how the Links screen can still say "a signing vehicle is out there and we can't talk to it".
+         */
+        val signingBlocked: Map<UByte, SigningStatus> = emptyMap(),
     ) : LinkState
 }
 
@@ -242,7 +248,8 @@ class ConnectionManager internal constructor(
         val heard = HashMap<UByte, Heard>() // by system id
         fun publish() {
             val vehicles = heard.values.map { it.info }.sortedBy { it.systemId }
-            _state.value = LinkState.Connected(config, vehicles.firstOrNull(), stats.snapshot(), vehicles)
+            val blocked = signing.value.filter { (id, s) -> (s == SigningStatus.NoKey || s == SigningStatus.Locked) && id !in heard }
+            _state.value = LinkState.Connected(config, vehicles.firstOrNull(), stats.snapshot(), vehicles, blocked)
         }
         publish()
 

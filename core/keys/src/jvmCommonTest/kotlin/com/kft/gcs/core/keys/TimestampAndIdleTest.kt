@@ -82,6 +82,25 @@ class IdleAutoLockTest {
         assertFalse(vault.isUnlocked())
     }
 
+    /** Locking mid-flight would zero the keys and the FC would drop every command, so a signed vehicle keeps the vault open. */
+    @Test
+    fun aBusyVaultIsNeverLockedHoweverLongTheOperatorIsIdle() = runTest {
+        val vault = createdVault()
+        var signedVehicleConnected = true
+        val idle = IdleAutoLock(vault, nowMs = { testScheduler.currentTime }, timeoutMs = 60_000, busy = { signedVehicleConnected })
+        backgroundScope.launch { idle.run(pollMs = 1_000) }
+
+        advanceTimeBy(600_000)
+        assertTrue(vault.isUnlocked(), "ten minutes with a signed vehicle connected")
+
+        signedVehicleConnected = false
+        advanceTimeBy(59_000)
+        assertTrue(vault.isUnlocked(), "the idle window restarts when the vehicle goes away")
+        advanceTimeBy(3_000)
+        runCurrent()
+        assertFalse(vault.isUnlocked())
+    }
+
     @Test
     fun theWindowStartsWhenTheVaultIsUnlockedNotWhenTheTimerWasBuilt() = runTest {
         val vault = createdVault().also { it.lock() }

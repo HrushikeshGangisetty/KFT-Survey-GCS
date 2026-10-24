@@ -43,6 +43,8 @@ object KftIcons {
     val LinkOff: ImageVector @Composable get() = vectorResource(Res.drawable.ic_link_off)
     val Gps: ImageVector @Composable get() = vectorResource(Res.drawable.ic_satellite_alt)
     val Login: ImageVector @Composable get() = vectorResource(Res.drawable.ic_key)
+    val Lock: ImageVector @Composable get() = vectorResource(Res.drawable.ic_lock)
+    val LockOpen: ImageVector @Composable get() = vectorResource(Res.drawable.ic_lock_open)
     val Sync: ImageVector @Composable get() = vectorResource(Res.drawable.ic_sync)
     val SyncProblem: ImageVector @Composable get() = vectorResource(Res.drawable.ic_sync_problem)
 

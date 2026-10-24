@@ -14,6 +14,7 @@ import com.divpundir.mavlink.definitions.common.MissionCurrent
 import com.divpundir.mavlink.definitions.common.MissionItemReached
 import com.divpundir.mavlink.definitions.common.MissionState
 import com.divpundir.mavlink.definitions.common.MavSeverity
+import com.divpundir.mavlink.definitions.common.NamedValueInt
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
 import com.divpundir.mavlink.definitions.standard.GlobalPositionInt
@@ -166,5 +167,20 @@ class VehicleStateTest {
         // 65535 = no mission, 0 = total not supported: both unknown.
         assertNull(VehicleState().reduce(MissionCurrent(seq = 0u, total = 65535u)).mission!!.total)
         assertNull(VehicleState().reduce(MissionCurrent(seq = 0u, total = 0u)).mission!!.total)
+    }
+
+    /** S8 firmware reports its rejected-frame count as NAMED_VALUE_INT "SIGFAIL"; any other named value is not ours. */
+    @Test
+    fun theFcSignatureFailureCountIsReadFromItsNamedValue() {
+        assertNull(VehicleState().fcSignatureFailures, "a stock ArduPilot never reports one")
+
+        val three = VehicleState().reduce(NamedValueInt(timeBootMs = 0u, name = "SIGFAIL", value = 3))
+        assertEquals(3, three.fcSignatureFailures)
+        assertEquals(4, three.reduce(NamedValueInt(timeBootMs = 0u, name = "SIGFAIL", value = 4)).fcSignatureFailures)
+
+        // MAVLink pads the 10-character name with NULs; the trim must not hide a match.
+        assertEquals(7, VehicleState().reduce(NamedValueInt(timeBootMs = 0u, name = "SIGFAIL\u0000\u0000\u0000", value = 7)).fcSignatureFailures)
+
+        assertEquals(three, three.reduce(NamedValueInt(timeBootMs = 0u, name = "OTHER", value = 99)), "other names change nothing")
     }
 }

@@ -1,5 +1,6 @@
 package com.kft.gcs.feature.connections
 
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -8,15 +9,25 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.graphics.toAwtImage
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runDesktopComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
 import com.kft.gcs.core.mavlink.LinkConfig
+import com.kft.gcs.core.mavlink.LinkState
+import com.kft.gcs.core.mavlink.LinkStats
+import com.kft.gcs.core.mavlink.VehicleInfo
+import com.kft.gcs.core.mavlink.VehicleKind
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import com.kft.gcs.ui.design.KftTheme
 import com.kft.gcs.ui.design.ThemeMode
+import java.io.File
+import javax.imageio.ImageIO
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -73,6 +84,47 @@ class ConnectionsUiTest {
         onNodeWithText("Bench radio").assertExists()
         onNodeWithText("TCP 192.168.4.1:5762").assertExists()
         onNodeWithText("Name (optional)").assert(editableText(""))
+    }
+
+    /**
+     * PRD FR-8 on the Links tab: three vehicles on one link, one signed, one unsigned, one bad signature, plus a fourth
+     * that signs but cannot be read (no key). Also writes `build/reports/34-links-signing-<theme>.png`.
+     */
+    @Test
+    fun everyVehicleOnALinkShowsHowItSigns() {
+        for (mode in ThemeMode.entries) runDesktopComposeUiTest(width = 1280, height = 700) {
+            val repository = FakeConnectionsRepository()
+            val vm = ConnectionsViewModel(repository)
+            val copter = VehicleInfo(1u, 1u, VehicleKind.COPTER, armed = false, customMode = 0u)
+            repository.linkState.value = LinkState.Connected(
+                LinkConfig.UdpListen(14550), copter, LinkStats(),
+                vehicles = listOf(
+                    copter.copy(signing = SigningStatus.Signed("a".repeat(24))),
+                    copter.copy(systemId = 2u),
+                    copter.copy(systemId = 3u, signing = SigningStatus.BadSignature("c".repeat(24), 4)),
+                ),
+                signingBlocked = mapOf(9.toUByte() to SigningStatus.NoKey),
+            )
+            setContent {
+                val live by vm.state.collectAsState()
+                KftTheme(mode) {
+                    Surface {
+                        ConnectionsScreen(
+                            live, vm::onConnectClicked, vm::onDisconnectClicked, vm::onDeleteClicked, vm::onFormKindChanged,
+                            vm::onFormNameChanged, vm::onFormHostChanged, vm::onFormPortChanged, vm::onSaveProfileClicked,
+                            vm::onFormSerialPortChanged, vm::onFormBaudChanged, vm::onRefreshSerialPortsClicked, vm::onConnectSerialClicked,
+                        )
+                    }
+                }
+            }
+            onNodeWithText("Signed").assertExists()
+            onNodeWithText("Unsigned link").assertExists()
+            onNodeWithText("Bad signature (4)").assertExists()
+            onNodeWithText("No key").assertExists()
+            onNodeWithText("System 9 · signs its MAVLink").assertExists()
+            val out = File("build/reports/34-links-signing-${mode.name.lowercase()}.png").apply { parentFile.mkdirs() }
+            ImageIO.write(onRoot().captureToImage().toAwtImage(), "png", out)
+        }
     }
 
     private fun editableText(text: String) = SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(text))

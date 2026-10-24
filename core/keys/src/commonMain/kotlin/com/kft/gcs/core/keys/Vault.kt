@@ -8,6 +8,10 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -91,6 +95,13 @@ class Vault(
 ) {
     private val state = AtomicReference<Unlocked?>(null)
     private val mutex = Mutex()
+    private val _revision = MutableStateFlow(0)
+
+    /**
+     * Goes up every time what [isUnlocked] or [list] would answer may have changed (create, unlock, lock, add, remove,
+     * including a lock by the idle timer). Screens collect it and re-read, so they never poll the vault.
+     */
+    val revision: StateFlow<Int> = _revision.asStateFlow()
 
     fun exists(): Boolean = store.read() != null
 
@@ -125,6 +136,7 @@ class Vault(
                 val fresh = Unlocked(key, salt, linkId.toUByte(), emptyList())
                 store.write(encode(fresh, fresh.entries))
                 state.exchange(fresh)?.zeroise()
+                changed()
             }
         }
     }
@@ -150,13 +162,17 @@ class Vault(
                 val linkId = body.linkId.takeIf { it in 1..254 } ?: throw VaultException.Corrupt("link_id out of range")
                 val entries = body.entries.map { it.toEntry() }
                 state.exchange(Unlocked(opened.key, opened.salt, linkId.toUByte(), entries))?.zeroise()
+                changed()
             }
         }
     }
 
     /** Overwrites every key in memory with zeros and forgets the AES key. Safe to call at any time, from any thread. */
     fun lock() {
-        state.exchange(null)?.zeroise()
+        state.exchange(null)?.let {
+            it.zeroise()
+            changed()
+        }
     }
 
     /**
@@ -206,11 +222,14 @@ class Vault(
         }
         if (state.compareAndSet(current, next)) {
             current.entries.filter { it !in merged }.forEach { it.key.fill(0) } // replaced or removed keys are retired
+            changed()
         } else {
             created.forEach { it.key.fill(0) }
             throw VaultException.Locked()
         }
     }
+
+    private fun changed() = _revision.update { it + 1 }
 
     private fun encode(unlocked: Unlocked, entries: List<VaultEntry>): ByteArray {
         val json = vaultJson.encodeToString(VaultBody(unlocked.linkId.toInt(), entries.map { it.toJson() })).encodeToByteArray()

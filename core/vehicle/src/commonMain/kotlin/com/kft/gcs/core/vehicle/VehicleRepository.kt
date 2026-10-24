@@ -97,6 +97,7 @@ class VehicleRepository(
                                 vehicleKind = seen.kind,
                                 armed = seen.armed,
                                 flightMode = flightModeName(seen.kind, seen.customMode),
+                                signing = seen.signing,
                             )
                         }
                     }

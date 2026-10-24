@@ -36,6 +36,29 @@ class VaultTest {
         assertEquals(linkId, reopened.linkId, "the link_id is chosen once and stored")
     }
 
+    /** Screens re-read the vault whenever [Vault.revision] moves, so every change of what they would show must move it. */
+    @Test
+    fun revisionMovesOnEveryChangeIncludingALockByTheTimer() = runTest {
+        val vault = createdVault()
+        var seen = vault.revision.value
+
+        fun assertMoved(what: String) {
+            assertTrue(vault.revision.value > seen, what)
+            seen = vault.revision.value
+        }
+        vault.add(entry('a')); assertMoved("add")
+        vault.remove(droneId('a')); assertMoved("remove")
+        vault.lock(); assertMoved("lock")
+        vault.unlock("1234"); assertMoved("unlock")
+
+        vault.lock()
+        seen = vault.revision.value
+        vault.lock() // already locked: nothing changed
+        assertEquals(seen, vault.revision.value)
+        assertFailsWith<VaultException.WrongSecret> { vault.unlock("nope") }
+        assertEquals(seen, vault.revision.value, "a failed unlock changes nothing")
+    }
+
     @Test
     fun aWrongPinIsRefusedAndLeavesTheVaultLocked() = runTest {
         val store = MemoryStore()
