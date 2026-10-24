@@ -119,6 +119,9 @@ class SigningLibraryProbeTest {
      * Finding 2, continued: `next()` never checks a signature (it only resolves the message id and checks the CRC), so
      * a frame with a forged signature comes out exactly like a genuine one. A bad CRC, by contrast, is dropped
      * silently and the reader moves on to the next frame.
+     *
+     * This is the "before" picture. `SigningSourceTest.aForgedSignatureNeverReachesTheLibrary` is the "after": with the
+     * S2 filter in front of the library, the same forged frame never gets this far.
      */
     @Test
     fun forgedSignaturesPassAndBadCrcsAreDropped() {

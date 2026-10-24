@@ -11,7 +11,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
-import okio.Buffer
 
 /**
  * The KFT login packs HMAC bytes into COMMAND_LONG floats as raw bit patterns (spec S12). These tests prove the
@@ -60,21 +59,19 @@ class BitExactCommandLongTest {
     }
 
     /**
-     * The test the pass asked for: a COMMAND_LONG with NaN bit patterns in its params goes through the gateway and a
-     * real mavlink-kotlin frame encoder, and the frame bytes hold exactly those patterns. Decoding the frame (as the
-     * vehicle would) gives the same bits back.
+     * The test the pass asked for: a COMMAND_LONG with NaN bit patterns in its params goes through the gateway and its
+     * [FrameSink] onto the wire, and the frame bytes hold exactly those patterns. Decoding the frame (as the vehicle
+     * would) gives the same bits back.
      */
     @Test
     fun nanBitPatternsSurviveTheGatewayToTheWire() = runTest {
         val link = FakeMavConnection()
         val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod))
-        gateway.attach(link)
+        gateway.attach(link.frameSink)
         assertEquals(TxResult.Sent, gateway.forVehicle(1u).send(command(patterns)))
-        val onTheLink = assertIs<BitExactCommandLong>(link.sent.single(), "the gateway swaps in the bit-exact encoder")
 
-        // Encode it as a real MAVLink 2 frame, the way the connection does, and look at the bytes.
-        val wire = Buffer()
-        BufferedMavConnection(wire, wire, wire, ArdupilotmegaDialect).sendUnsignedV2(255u, 190u, onTheLink)
+        // The bytes FrameSink wrote, as the link would carry them.
+        val wire = link.wire
         val frame = wire.copy().readByteArray()
         val payloadStart = 10 // MAVLink 2 header: magic, len, incompat, compat, seq, sysid, compid, msgid×3
         assertEquals(0xFD, frame[0].toInt() and 0xFF, "MAVLink 2 magic")

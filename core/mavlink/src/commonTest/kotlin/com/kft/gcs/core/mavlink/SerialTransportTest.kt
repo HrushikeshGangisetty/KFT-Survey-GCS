@@ -84,7 +84,7 @@ class SerialTransportTest {
         vehicleSide.sendUnsignedV2(1u, 1u, Heartbeat(type = MavEnumValue.of(MavType.QUADROTOR), mavlinkVersion = 3u))
         val port = FakePort(ByteArray(0), wire.readByteArray())
 
-        val gcs = TransportMavConnection(SerialTransport { port }).apply { connect() }
+        val gcs = transportConnection(SerialTransport { port }).apply { connect() }
         val frame = gcs.next()
         assertIs<Heartbeat>(frame.message)
         assertEquals(1.toUByte(), frame.systemId)

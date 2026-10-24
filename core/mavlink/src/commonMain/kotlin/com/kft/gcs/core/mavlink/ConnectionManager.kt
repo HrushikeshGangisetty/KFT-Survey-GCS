@@ -132,7 +132,7 @@ fun <L : MavLink> Flow<List<L>>.withStates(): Flow<List<Pair<L, LinkState>>> = f
  */
 class ConnectionManager internal constructor(
     private val scope: CoroutineScope,
-    private val openConnection: (LinkConfig) -> CoroutinesMavConnection,
+    private val openConnection: (LinkConfig) -> OpenedLink,
     private val timeSource: TimeSource.WithComparableMarks,
     podStatus: StateFlow<PodStatus>,
     override val id: Int = 1,
@@ -180,11 +180,13 @@ class ConnectionManager internal constructor(
         var lastError: String? = null
         while (true) {
             _state.value = LinkState.Connecting(config, attempt = failures + 1, lastError)
-            val connection = openConnection(config)
+            val link = openConnection(config)
+            val connection = link.connection
             try {
                 coroutineScope {
                     connection.connect(readerScope = this)
                     failures = 0
+                    gateway.attach(link.frameSink())
                     try {
                         runSession(config, connection)
                     } finally {
@@ -212,7 +214,6 @@ class ConnectionManager internal constructor(
             val vehicles = heard.values.map { it.info }.sortedBy { it.systemId }
             _state.value = LinkState.Connected(config, vehicles.firstOrNull(), stats.snapshot(), vehicles)
         }
-        gateway.attach(connection)
         publish()
 
         // Frames and the 1 s tick go through ONE collector, so `stats` and `heard` are only ever touched by one

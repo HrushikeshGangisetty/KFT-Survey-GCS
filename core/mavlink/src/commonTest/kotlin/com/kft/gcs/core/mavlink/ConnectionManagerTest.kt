@@ -26,7 +26,7 @@ class ConnectionManagerTest {
     /** A manager on virtual time whose links come from [links], in order. */
     private fun TestScope.manager(vararg links: FakeMavConnection): ConnectionManager {
         val queue = ArrayDeque(links.toList())
-        return ConnectionManager(backgroundScope, { queue.removeFirst() }, testScheduler.timeSource, MutableStateFlow(PodStatus.NoPod))
+        return ConnectionManager(backgroundScope, { queue.removeFirst().opened() }, testScheduler.timeSource, MutableStateFlow(PodStatus.NoPod))
     }
 
     @Test
@@ -158,7 +158,7 @@ class ConnectionManagerTest {
         val made = mutableListOf<Int>()
         val links = Links { id ->
             made += id
-            ConnectionManager(backgroundScope, { FakeMavConnection() }, testScheduler.timeSource, MutableStateFlow(PodStatus.NoPod), id)
+            ConnectionManager(backgroundScope, { FakeMavConnection().opened() }, testScheduler.timeSource, MutableStateFlow(PodStatus.NoPod), id)
         }
         val tcp = LinkConfig.TcpClient("127.0.0.1", 5762)
         links.connect(udp)

@@ -1,8 +1,6 @@
 package com.kft.gcs.core.mavlink
 
-import com.divpundir.mavlink.adapters.coroutines.CoroutinesMavConnection
 import com.divpundir.mavlink.api.MavMessage
-import com.divpundir.mavlink.definitions.common.CommandLong
 import com.divpundir.mavlink.definitions.minimal.Heartbeat
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.channels.BufferOverflow
@@ -43,7 +41,7 @@ interface MavSender {
  * armed flag and the current [podStatus]. The one exception is the GCS's own heartbeat ([sendHeartbeat]), which has
  * no target and only this module can send.
  *
- * Nothing outside `core:mavlink` can get the underlying connection: the gateway holds it privately, and only
+ * Nothing outside `core:mavlink` can get the link's [FrameSink]: the gateway holds it privately, and only
  * [ConnectionManager] (same module) can attach or detach it.
  */
 class MavTxGateway internal constructor(
@@ -54,15 +52,15 @@ class MavTxGateway internal constructor(
     // Volatile: callers send from any thread (UI, protocol coroutines) while ConnectionManager swaps the link.
     // A send that races a detach just gets NotConnected or an IOException, which callers already handle.
     @Volatile
-    private var link: CoroutinesMavConnection? = null
+    private var link: FrameSink? = null
 
     private val _rejections = MutableSharedFlow<TxResult.Rejected>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /** Every refused message, for the message log and tests. The allowlist rule says rejections must be logged. */
     val rejections: SharedFlow<TxResult.Rejected> = _rejections.asSharedFlow()
 
-    internal fun attach(connection: CoroutinesMavConnection) {
-        link = connection
+    internal fun attach(frames: FrameSink) {
+        link = frames
     }
 
     internal fun detach() {
@@ -94,12 +92,10 @@ class MavTxGateway internal constructor(
 
     /** Sends [message] as an unsigned MAVLink v2 frame from the GCS ids. Private: every caller above has checked it. */
     private suspend fun <T : MavMessage<T>> write(message: T): TxResult {
-        val connection = link ?: return TxResult.NotConnected
+        val frames = link ?: return TxResult.NotConnected
         return try {
-            // COMMAND_LONG goes out bit-exact: the library's own encoder would rewrite NaN bit patterns.
-            // ponytail: only COMMAND_LONG; other float messages still use the library encoder. Extend if one ever carries bit patterns.
-            if (message is CommandLong) connection.sendUnsignedV2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, BitExactCommandLong(message))
-            else connection.sendUnsignedV2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, message)
+            // ponytail: always unsigned until S3 picks the key from the target vehicle's SigningStatus.
+            frames.write(message, GCS_SYSTEM_ID, GCS_COMPONENT_ID, signFor = null)
             TxResult.Sent
         } catch (e: IOException) {
             TxResult.Failed(e)

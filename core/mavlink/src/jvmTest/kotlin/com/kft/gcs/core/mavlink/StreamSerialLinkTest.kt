@@ -41,7 +41,7 @@ class StreamSerialLinkTest {
             .sendUnsignedV2(1u, 1u, Heartbeat(type = MavEnumValue.of(MavType.QUADROTOR), mavlinkVersion = 3u))
         val link = StreamSerialLink(ByteArrayInputStream(wire.readByteArray()), ByteArrayOutputStream(), FakeSocket())
 
-        val gcs = TransportMavConnection(SerialTransport { link }).apply { connect() }
+        val gcs = transportConnection(SerialTransport { link }).apply { connect() }
         val frame = gcs.next()
         assertIs<Heartbeat>(frame.message)
         assertEquals(1.toUByte(), frame.systemId)

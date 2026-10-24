@@ -4145,3 +4145,113 @@ one tick; `observeIncoming(ts)` lifts the clock to `ts + 1`. Going past 2^48 - 1
 - `/ponytail-review` on the diff: nothing to cut (CRC reused from the library, no new dependency, no API beyond what
   S2 is specified to call).
 - Suggested next: S2, `FrameSink` + `SigningSource` wired under the library.
+
+## Pass 36 — S2 (signing): byte layer, FrameSink and SigningSource (2026-10-24)
+
+### What changed
+- `core:mavlink` `signing/SigningKeyring.kt` (new): the interface the byte layer asks about keys (link id, unlocked,
+  candidates, key per drone, saved timestamps). `NoSigning` (no keys, never locked) is the default until the vault (S4).
+- `signing/SigningStatus.kt` (new): `SigningStatus` (Unsigned, Signed(droneId), NoKey, Locked, BadSignature(count)) and
+  `SigningCounters` (dropped frames by reason).
+- `FrameSink.kt` (new): the only writer of a link. Own sequence counter, one `SigningClock` per drone, the
+  `BitExactCommandLong` swap (moved here from the gateway), sign when asked, write and flush, all under one `Mutex`.
+- `signing/SigningSource.kt` (new): okio `Source` filter between the transport and `BufferedMavConnection`, applying
+  the PRD inbound rules and publishing `status` and `counters` as `StateFlow`s.
+- `signing/SigningClock.kt`: the wall-clock-to-ticks conversion is now `signingTicks(wallMs)`, shared with
+  `SigningSource`'s replay window. Behaviour unchanged (SigningClockTest untouched and passing).
+- `MavTransport.kt`: `TransportMavConnection.open()` wraps the source in `SigningSource`, makes the `FrameSink`, and
+  gives the library a black-hole sink. New `OpenedLink(connection, frameSink)`, returned by `openTransportConnection`.
+- `MavTxGateway.kt`: `attach` takes a `FrameSink`; `write` calls `FrameSink.write(…, signFor = null)` instead of
+  `connection.sendUnsignedV2`.
+- `ConnectionManager.kt`: opens an `OpenedLink` and attaches its sink right after `connect`.
+- Tests: new `FrameSinkTest`, `SigningSourceTest`, `TransportMavConnectionTest`, `FakeKeyring`. `FakeMavConnection`
+  now writes through a real `FrameSink` into a `Buffer` and decodes `sent` from those bytes; its `sendUnsignedV2`
+  throws. Transport tests send through the sink. `SigningLibraryProbeTest`'s forged-frame KDoc points at the "after" test.
+
+### How it works
+```
+ out:  MavTxGateway ──write(msg, 255, 190, signFor)──▶ FrameSink ──(mutex: seq, build, [sign], write, flush)──▶ transport sink
+ in:   transport source ──▶ SigningSource ──(only frames that pass)──▶ BufferedMavConnection ──▶ frames to core:vehicle
+                                   │ verified HEARTBEAT ts
+                                   └──────────────▶ FrameSink.observeIncoming (keeps our clock above the vehicle's)
+ library's own sink: blackholeSink(), so its send* can't reach the wire
+```
+1. `FrameSink.write` builds the frame with the library's `MavRawFrame.createUnsignedV2` (the same call
+   `sendUnsignedV2` makes), so unsigned bytes are identical. With a drone id it gets the key first (none → throws,
+   nothing written, no sequence used), then signs with `signV2` and that drone's clock.
+2. `SigningSource.read` keeps two okio buffers: `input` (not judged) and `output` (judged). It moves bytes before the
+   next 0xFD/0xFE straight to `output`, waits until a whole frame is in `input`, then:
+   - v2 with an incompat flag other than 0x01 → drop 3 bytes and resync (like `mavlink_frame_char`);
+   - unsigned / v1 from a bound id → dropped as spoofed, except RADIO_STATUS; from an unbound id → passed;
+   - signed from a bound id → verify with its key, then `ReplayGuard`; signed HEARTBEAT from an unbound id → try every
+     key, bind on the first that verifies and is fresh; any other signed frame from an unbound id → dropped.
+3. Frames that pass are moved to `output` unchanged; the library frames them exactly as we did (same length rule,
+   flags are 0 or 1 by then).
+4. At end of stream a partial frame is dropped, not passed, so the library can't rescan it for a hidden frame.
+
+### Engineering learnings
+- **Filter below the library, not after it.** Verification needs the raw bytes and the full 48-bit timestamp; after
+  decoding, the library has thrown both away (ADR-006). As a `Source`, the filter also means a forged frame never
+  exists inside the library at all.
+- **One writer, one mutex.** Sequence number, signing timestamp and write must be atomic together, or two senders
+  could reuse a sequence number or put timestamps on the wire out of order (ADR-006 finding 4). `kotlinx.coroutines`
+  `Mutex` because senders are coroutines; the blocking write runs on the injected IO dispatcher as before.
+- **Fail closed.** No key → `IOException` and nothing written; the library's sink is a black hole; unknown incompat
+  flags are dropped; a signed frame we can't check is dropped. Each case gives a visible failure or a counter, never
+  an unsigned fallback.
+- **Status from heartbeats only.** Pass/drop follows the PRD for every frame, but `status` changes only on HEARTBEATs
+  (1 Hz), so floods show in `counters` without flicker. NoKey/Locked stays until reconnect even if unsigned heartbeats
+  with that id arrive, because that is what a spoofer sends.
+- **No per-byte work.** okio moves whole segments (`write(input, n)`, `indexOfElement`); only signed frames are copied
+  into a `ByteArray`, because hashing needs one. Binding state is `arrayOfNulls<String>(256)` by system id, no boxing.
+- **`OpenedLink` with a lambda for the sink.** The transport opens inside `connect()` on the IO dispatcher, so the
+  `FrameSink` can only exist after that; the lambda is read once, right after `connect` returns.
+- **Why `FakeMavConnection` writes real bytes now.** It proves every existing gateway/manager test goes through the
+  same frame builder as production, and `sent` is what a vehicle would decode.
+
+### What to look at
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/signing/SigningSource.kt:134` — `judgeSigned`, rules 2–3.
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/FrameSink.kt:54` — the single write path.
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/MavTransport.kt:55` — how both are wired under the library.
+
+### Safety
+- **Transmission path changed:** every byte the GCS sends now goes `MavTxGateway` → `FrameSink`. `TxPolicy` and every
+  gateway check run first, unchanged. `signFor` is always null in this pass, so the wire carries exactly what it did
+  before (`unsignedFramesAreByteIdenticalToTheOldSendUnsignedV2`, 300 frames across a sequence wrap). No allowlist
+  change, so no new `MavTxGatewayTest` row; the existing rows all pass through the new path.
+- **The library can't write to a link any more:** its sink is `blackholeSink()`.
+- **Behaviour change for vehicles that already sign:** with `NoSigning`, their signed frames are dropped (status NoKey),
+  so such a drone goes silent in the GCS until keys arrive (S4). No KFT drone signs yet (FC change is S8). Unsigned
+  vehicles are unaffected.
+- Not yet: the gateway doesn't choose a key, refuse NoKey/Locked vehicles, or fan out heartbeats (S3); `status` is not
+  merged into `VehicleInfo` (S3); SETUP_SIGNING is not yet NEVER in `TxPolicy` (S3).
+
+### Tests
+`./gradlew check` passes (desktop JVM, Android host, Android unit tests, lint). No new compiler warnings.
+- `FrameSinkTest`: byte-identical unsigned output vs the old library call; a signed HEARTBEAT equal to pymavlink 2.4.50's
+  frame (independent reference, ADR-006 hex); per-drone clocks (start at max(wall, saved + 1), +1 per frame, jump above
+  verified incoming, ignore lower); one sequence counter; missing key or locked vault writes nothing.
+- `SigningSourceTest`: mixed garbage / v1 / unsigned v2 / signed v2 fed one byte per read comes out byte for byte and
+  decodes; binding by trial (and a signed non-heartbeat before binding dropped, wrong key counted); NoKey and Locked;
+  repeated frame and a >60 s-old new stream dropped; spoofed unsigned v2 and v1 dropped, RADIO_STATUS kept; pymavlink
+  frame with a forged signature never reaches `BufferedMavConnection` (bound or not); unknown incompat flag dropped and
+  the next frame still decoded; a frame cut off by end of stream dropped.
+- `TransportMavConnectionTest`: through a real `TransportMavConnection`, a keyless signed frame is filtered out, the
+  unsigned one decodes, and only `FrameSink`'s frame reaches the transport (the library's `sendUnsignedV2` goes nowhere).
+- Existing `MavTxGatewayTest`, `ConnectionManagerTest`, `BitExactCommandLongTest`, socket/serial transport tests pass
+  on the new path.
+- SITL (manual, not run in this pass): `./gradlew :app:desktop:run`, connect UDP 14550 to ArduCopter SITL without
+  signing. Expected: vehicle appears; telemetry, params and mission upload/download work as before; MAVProxy shows GCS
+  heartbeats from 255/190.
+
+### Open questions / next
+- `ponytail:` comments: the gateway's `signFor = null` (S3 replaces it); the COMMAND_LONG-only bit-exact encoder (moved,
+  unchanged).
+- One `SigningClock` per drone per link (it lives in the link's `FrameSink`), which settles the S1 question that way.
+  `ReplayGuard` and bindings live in each `SigningSource`, so a reconnect resets them.
+- `SigningStatus.Signed` has no label yet; the vault (S4/S5) supplies it.
+- On a shared link, frames signed for drone B also reach drone A and will count as bad signatures on A's FC (FR-4).
+  Worth deciding in S3/S8 whether that counter should ignore frames for other targets.
+- Timestamps aren't persisted yet (S3 item 6).
+- `/ponytail-review` (lite) on the diff: lean already, nothing to cut.
+- Suggested next: S3, gateway key choice, heartbeat fan-out and status in `VehicleInfo`.

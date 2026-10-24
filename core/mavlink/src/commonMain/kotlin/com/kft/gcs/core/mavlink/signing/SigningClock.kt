@@ -23,9 +23,7 @@ class SigningClock {
      * [wallMs] is Unix time in milliseconds; [persisted] is the [current] value saved last session, or null on first use.
      */
     fun start(wallMs: Long, persisted: Long?) {
-        // A wall clock before 2015 is broken, not negative time: clamp it and rely on the persisted value.
-        val wallTicks = ((wallMs - EPOCH_UNIX_MS) * TICKS_PER_MS).coerceAtLeast(0)
-        current = maxOf(current, wallTicks, if (persisted == null) 0 else persisted + 1)
+        current = maxOf(current, signingTicks(wallMs), if (persisted == null) 0 else persisted + 1)
         checkFits()
     }
 
@@ -51,12 +49,16 @@ class SigningClock {
 
     private fun checkFits() =
         check(current <= MAX_SIGNING_TIMESTAMP) { "signing timestamp $current exceeds 48 bits; the key must be rotated" }
-
-    private companion object {
-        /** 2015-01-01 00:00:00 UTC, the MAVLink signing epoch. */
-        const val EPOCH_UNIX_MS = 1_420_070_400_000L
-
-        /** 1 ms = 100 ticks of 10 µs. */
-        const val TICKS_PER_MS = 100L
-    }
 }
+
+/** 2015-01-01 00:00:00 UTC, the MAVLink signing epoch. */
+private const val EPOCH_UNIX_MS = 1_420_070_400_000L
+
+/** 1 ms = 100 ticks of 10 µs. */
+private const val TICKS_PER_MS = 100L
+
+/**
+ * Unix time [wallMs] (milliseconds) as a signing timestamp: 10 µs ticks since 2015-01-01 00:00:00 UTC.
+ * A wall clock before 2015 is broken, not negative time, so it clamps to 0 and the persisted value takes over.
+ */
+internal fun signingTicks(wallMs: Long): Long = ((wallMs - EPOCH_UNIX_MS) * TICKS_PER_MS).coerceAtLeast(0)
