@@ -1,0 +1,39 @@
+{
+  "format_version": 1,
+  "source": "synthetic",
+  "run_id": "synthetic-s6-bundle-v1",
+  "passphrase": "acorn bamboo cactus delta ember forest",
+  "master_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "salt_hex": "000102030405060708090a0b0c0d0e0f",
+  "nonce_hex": "101112131415161718191a1b",
+  "header_hex": "564e4b4201000001000300000001000000000102030405060708090a0b0c0d0e0f",
+  "argon2": {
+    "type": "id",
+    "version": 19,
+    "memory_kib": 65536,
+    "iterations": 3,
+    "parallelism": 1,
+    "output_bytes": 32
+  },
+  "plaintext_utf8": "[{\"added_at\":\"2026-10-23T00:00:00+00:00\",\"drone_id\":\"000102030405060708090a0b\",\"key_b64\":\"S+WprHX9MY5NA79wN2o0sRpcUxHK4VeMR3HSQkAtEQc=\",\"key_version\":1,\"label\":\"Test aircraft α\",\"sysid_hint\":null},{\"added_at\":\"2026-10-23T00:00:00+00:00\",\"drone_id\":\"ff80017f00a55a1032547698\",\"key_b64\":\"6++KwUKcrlg+qQmAo7NLezuwL+JG8PkwiJ/u8qNIEiU=\",\"key_version\":2,\"label\":\"VNAV-SIGN-v1/kv2\",\"sysid_hint\":null}]",
+  "bundle_hex": "564e4b4201000001000300000001000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b7925c3114f4eaf892261d70fea093c6607cddfec05f81132699742338802ac510534f5cbe9d6d3c7e6e70d5257d5092da07c9f72a5726612fda19db87f8643203caef5ae444393ce90d0eeb5e2bcabca346782f542627ca9340b2cbb0c46a6cce897cb29a132adb6cbc04a73dadcbc3fa126448525f3302a51d43218ffde389c9a6e9fe053d51c0496b401171daea17b63f82f1c9d3e2c9546f4113dc47162116caacfc54179ca6ac7859ba4735088528f301297106949cf0fdfdd16233cd0acfb451cdc29abf74a967873488253cc5cf4e16825c591e8a09dda3244539611b91b613ce5d32f9a859e993e88a39be5d87450e24f4a8279bc8cad8f0b55282b4d52a3c7a85205d9131f938004145d26528a9e2af2be9cdd66583e5e081fa5f5d264b89657582a2580341bc1935360f2029bdc79104b31f32bf3f4c3e6dc4eb0b0a34d4b215078697a3c6ba7c3e8d994223c4bb896bbaa9d575284caf3d5aaae6a3a4746c0cb291948e1f39d4e0bdcc1980e53ea74fdebe033ebb5a87eefebac6825438a4bc4e0921b28e8035b9676cc69f4498d5fd316456f4f6aa9",
+  "expected_entries": [
+    {
+      "drone_id": "000102030405060708090a0b",
+      "key_b64": "S+WprHX9MY5NA79wN2o0sRpcUxHK4VeMR3HSQkAtEQc=",
+      "key_version": 1,
+      "label": "Test aircraft α",
+      "sysid_hint": null,
+      "added_at": "2026-10-23T00:00:00+00:00"
+    },
+    {
+      "drone_id": "ff80017f00a55a1032547698",
+      "key_b64": "6++KwUKcrlg+qQmAo7NLezuwL+JG8PkwiJ/u8qNIEiU=",
+      "key_version": 2,
+      "label": "VNAV-SIGN-v1/kv2",
+      "sysid_hint": null,
+      "added_at": "2026-10-23T00:00:00+00:00"
+    }
+  ],
+  "bundle_sha256": "b94d1f4f327eacb6e8be4ca10d31c1d7ce7ee62faf284494fe800c59898ff3e3"
+}

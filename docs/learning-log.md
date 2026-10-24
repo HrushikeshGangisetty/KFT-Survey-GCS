@@ -4365,3 +4365,50 @@ send(msg) -> TxPolicy -> target / duplicate -> SigningStatus -+- Signed/BadSigna
 - The comment on the SETUP_SIGNING row doesn't say whether stock ArduPilot restricts it to USB. S0b should confirm.
 - No `ponytail:` markers left from S3 (S2's `signFor = null` marker is removed).
 - Suggested next: S4, the `core:keys` vault, bound as `SigningKeyring`.
+
+## Pass 38 — S4 (signing): `core:keys` vault, keyring, bundle import (2026-10-24)
+
+### What changed
+- `gradle/libs.versions.toml`: `bcprov-jdk18on` 1.86 (own commit `9e8f25e`, a version pass per §6). Used for `Argon2BytesGenerator` only.
+- New module `core:keys` (registered in `settings.gradle.kts`): `Storage.kt` (`ByteStore`, `DeviceWrap`, `WrappedByteStore`), `VaultCrypto.kt`, `Envelope.kt` (file layout), `Vault.kt`, `VaultKeyring.kt`, `TimestampFile.kt`, `BundleImport.kt`, `IdleAutoLock.kt`.
+- `jvmCommonMain`: `JvmVaultCrypto` (Argon2id via BouncyCastle, AES-GCM via `javax.crypto`) and `FileByteStore` (temp file, fsync, rename). `androidMain`: `AndroidKeystoreWrap`.
+- `app:shared`: `SigningModule.kt` binds the vault, timestamp file and `SigningKeyring`; desktop uses `%APPDATA%\KFT-GCS\signing.vnks`, Android uses `filesDir` plus the Keystore wrap.
+- Tests: 30 per target in `core/keys/src/jvmCommonTest`, plus the Python vector `bundle_v1.json` copied from GNSS-Denied `8ff868c`.
+
+### How it works
+```
+PIN ──Argon2id(64MiB,t3,p1,salt)──▶ AES key ──AES-256-GCM(aad = 33-byte header)──▶ file bytes
+file bytes ──[Android only: Keystore AES-GCM outer layer]──▶ temp file ─fsync─▶ rename over signing.vnks
+FrameSink/SigningSource ─▶ VaultKeyring ─▶ Vault (atomic snapshot) ; timestamps ─▶ TimestampFile ─▶ signing_ts.json
+```
+1. File: `magic[4] | version | mem,t,p (u32 LE) | salt[16] | nonce[12] | ciphertext+tag`. `Envelope` is shared by the vault (`VNKS`) and bundles (`VNKB`).
+2. `Vault` keeps the Argon2 *output* (never the PIN) while unlocked so edits need no PIN. `lock()` swaps the state to null and overwrites it and all drone keys with zeros.
+3. Body JSON for the vault is `{link_id, entries[]}`. link_id (1..254) is chosen once at `create`. A bundle body is a bare entry list, as the Python tool writes it.
+
+### Engineering learnings
+- **Immutable snapshot in an `AtomicReference`** for reads (`keyFor` runs on the reader thread) with a `Mutex` for writes. Common Kotlin has no `synchronized`, and the signing path must not block on the vault's mutex.
+- **`keyFor` returns the live array, not a copy**, so `lock()` zeroes references the signing layer already holds. A copy would leave unzeroed keys around. Cost: callers must not modify it.
+- **Write file, then publish in memory (`compareAndSet`)**: a failed disk write never leaves memory ahead of the disk, and a `lock()` racing a save wipes the new keys instead of resurrecting them.
+- **Header validated before Argon2**: only the exact V1 cost parameters are accepted, so a doctored file cannot make us allocate memory.
+- **Android second layer wraps the whole file**, outside the PIN layer, rather than wrapping the AES key. The file format inside stays identical on both platforms (PRD "same file format") and the PIN is still required. `DeviceWrap` is the seam for a Windows DPAPI version.
+- **BouncyCastle lightweight API**: no provider registration, so no clash with Android's own provider.
+
+### What to look at
+- `core/keys/src/commonMain/kotlin/com/kft/gcs/core/keys/Vault.kt` (`commit`, `lock`, `keyFor`).
+- `core/keys/src/commonMain/kotlin/com/kft/gcs/core/keys/Envelope.kt` (layout and pre-Argon2 header check).
+- `core/keys/src/jvmCommonTest/kotlin/com/kft/gcs/core/keys/BundleInteropTest.kt` (RFC 9106 and Python byte-for-byte).
+
+### Tests
+`./gradlew check` passes (BUILD SUCCESSFUL). `core:keys` runs 30 tests on desktop JVM and Android host: round trip and link_id stability; wrong PIN; no vault; tampered salt/nonce/ciphertext/tag fail authentication; doctored header fields refused; lock zeroises a held reference; vault copies added keys; lower key_version skipped; remove; keyring and timestamps while locked; crash between write and rename (old vault intact, stale `.tmp` recovered); Argon2id against the RFC 9106 vector; our sealing equals the Python `bundle_hex` byte for byte; bundle import, idempotent re-import, wrong passphrase, damaged bundle, vault passed off as bundle, locked vault; timestamp 10 s limit, flush, no downgrade, damaged file; idle lock on virtual time.
+**Not run:** `AndroidKeystoreWrap` (needs a device). Manual: on an Android build, create a vault, force-stop, reopen, unlock; expect the same keys. Then `adb run-as` copy `signing.vnks` and confirm it does not start with `VNKS`.
+
+### Safety
+Nothing transmits and `MavTxGateway` and its allowlist are untouched. Keys are encrypted at rest and zeroised on lock. Binding `SigningKeyring` means a vault, once one can be created (S5), makes the gateway sign for bound drones. Until then the keyring is locked and empty and all vehicles stay unsigned as before.
+
+### Open questions / next
+- **Auto-lock vs flight (important):** `IdleAutoLock` locks after 5 min without `touch()`. A lock mid-flight stops signing and the FC drops our commands. S5 must `touch()` while any vehicle is bound or connected, and never auto-lock then.
+- Locking on Android background and the unlock prompt are S5.
+- `Vault.linkId` is 0 while locked; the signing layer only reads it after a key was found, so this is safe today.
+- `TimestampFile` is keyed by drone_id only (as briefed); the PRD also mentions link_id.
+- `ponytail:` marker in `TimestampFile.kt` (concurrent writers). Review also found `Envelope.newSalt` could be inlined (-2 lines).
+- Suggested next: S5 screens and badges.

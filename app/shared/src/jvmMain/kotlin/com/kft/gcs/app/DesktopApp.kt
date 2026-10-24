@@ -39,6 +39,7 @@ fun FrameWindowScope.DesktopApp(shortcuts: KeyShortcuts) = ProvideDesktopMapHost
  */
 private val desktopModule = module {
     val dir = System.getenv("APPDATA")?.let { File(it, "KFT-GCS") } ?: File(System.getProperty("user.home"), ".kft-gcs")
+    includes(signingModule(File(dir, "signing.vnks"), File(dir, "signing_ts.json")))
     single { SerialPorts() }
     single<VehicleRecorder> { TlogFiles(File(dir, "tlogs"), get(IoDispatcher)) }
     single<RecordStore> { FileRecordStore(File(dir, "missions")) }

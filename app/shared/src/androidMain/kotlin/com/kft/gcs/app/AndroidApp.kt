@@ -1,6 +1,7 @@
 package com.kft.gcs.app
 
 import com.kft.gcs.core.companion.CompanionConfigStore
+import com.kft.gcs.core.keys.AndroidKeystoreWrap
 import android.Manifest
 import android.content.Context
 import android.os.Build
@@ -40,6 +41,8 @@ fun AndroidApp(context: Context) {
     val serialPorts = remember { SerialPorts(app) }
     val platform = remember {
         module {
+            // The vault file is wrapped by an Android Keystore key as well as the PIN (PRD "Where each key lives").
+            includes(signingModule(File(app.filesDir, "signing.vnks"), File(app.filesDir, "signing_ts.json"), AndroidKeystoreWrap()))
             single { serialPorts }
             // The app's own folder on shared storage (Android/data/<package>/files/tlogs): no permission needed, and
             // the logs can be copied off over USB. Falls back to private storage if shared storage isn't mounted.

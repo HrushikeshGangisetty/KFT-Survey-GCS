@@ -34,6 +34,7 @@ include(":core:vehicle")
 include(":core:terrain")
 include(":core:geo-io")
 include(":core:companion") // VisionNav companion computer diagnostics (P7), separate from FC state
+include(":core:keys")      // signing-key vault + SigningKeyring (MAVLink signing, S4)
 
 // ---- ui: shared UI building blocks ----
 include(":ui:design")  // KFT theme, tokens, icons, logo, shared components
