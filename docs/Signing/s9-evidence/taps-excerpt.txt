@@ -1,0 +1,60 @@
+# Excerpts of build/s9-sitl/taps.log (26 MB, not committed): frames that reached each SITL SERIAL1 through the router.
+# Format: t=unix tap=SITL instance sys comp msg=msgid sig=A|B|wrong|unsigned (checked against keys.json) link=link_id ts=10us ticks
+
+## GCS heartbeats (msg 0), first 9 after GCS 1 bound (fan-out: A + B signed, 1 unsigned, to every SITL)
+t=1792819967.895 tap=2 sys=255 comp=190 msg=0 sig=A link=12 ts=37274956183910
+t=1792819967.895 tap=1 sys=255 comp=190 msg=0 sig=A link=12 ts=37274956183910
+t=1792819967.896 tap=0 sys=255 comp=190 msg=0 sig=A link=12 ts=37274956183910
+t=1792819967.896 tap=2 sys=255 comp=190 msg=0 sig=B link=12 ts=37274956184414
+t=1792819967.896 tap=1 sys=255 comp=190 msg=0 sig=B link=12 ts=37274956184414
+t=1792819967.897 tap=0 sys=255 comp=190 msg=0 sig=B link=12 ts=37274956184414
+t=1792819967.897 tap=2 sys=255 comp=190 msg=0 sig=unsigned link= ts=
+t=1792819967.898 tap=1 sys=255 comp=190 msg=0 sig=unsigned link= ts=
+t=1792819967.898 tap=0 sys=255 comp=190 msg=0 sig=unsigned link= ts=
+
+## PARAM_REQUEST_READ (msg 20) into SITL 0 by link_id: two installations (T10, T11)
+A/12: 7 frames
+A/135: 8 frames
+A/60: 14 frames
+A/8: 7 frames
+
+## All GCS frames (sys 255) by SITL and signature: nothing signed for one drone reached the other with a valid key
+tap=0 sig=A link=12: 44
+tap=0 sig=A link=135: 27
+tap=0 sig=A link=60: 63
+tap=0 sig=A link=8: 75
+tap=0 sig=B link=12: 17
+tap=0 sig=B link=60: 23
+tap=0 sig=unsigned link=: 185
+tap=1 sig=A link=12: 17
+tap=1 sig=A link=135: 13
+tap=1 sig=A link=60: 23
+tap=1 sig=A link=8: 62
+tap=1 sig=B link=12: 44
+tap=1 sig=B link=60: 61
+tap=1 sig=unsigned link=: 185
+tap=2 sig=A link=12: 17
+tap=2 sig=A link=135: 13
+tap=2 sig=A link=60: 23
+tap=2 sig=A link=8: 62
+tap=2 sig=B link=12: 17
+tap=2 sig=B link=60: 23
+tap=2 sig=unsigned link=: 288
+
+## Non-GCS frames each SITL received over the whole run (router cross-feed of the other FCs, source of SIGFAIL growth)
+tap=0 from sys=2 sig=B: 62139
+tap=0 from sys=3 sig=unsigned: 61877
+tap=1 from sys=1 sig=A: 62153
+tap=1 from sys=1 sig=unsigned: 120
+tap=1 from sys=1 sig=wrong: 120
+tap=1 from sys=3 sig=unsigned: 61877
+tap=2 from sys=1 sig=A: 62153
+tap=2 from sys=1 sig=unsigned: 120
+tap=2 from sys=1 sig=wrong: 120
+tap=2 from sys=2 sig=B: 62139
+
+## Spoof frames injected for T5 claiming sys 1 (reached SITLs too; the GCS dropped them)
+tap=1 sig=unsigned: 120
+tap=1 sig=wrong: 120
+tap=2 sig=unsigned: 120
+tap=2 sig=wrong: 120

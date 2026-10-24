@@ -1,0 +1,11 @@
+| T9 binding | PASS | sysid 1: Signed (Signed(droneId=5e9a00000000000000000001)), sysid 2: Signed (Signed(droneId=5e9a00000000000000000002)), sysid 3: Unsigned link (Unsigned) |
+| T1/T8 sysid 1 | PASS | badge 'Signed', KFT login: OK, 1434 params, mission 4 items up and down, SIGFAIL 31827 |
+| T1/T8 sysid 2 | PASS | badge 'Signed', KFT login: OK, 1434 params, mission 5 items up and down, SIGFAIL 33464 |
+| T1/T8 sysid 3 | PASS | badge 'Unsigned link', KFT login: OK, 1434 params, mission 6 items up and down, SIGFAIL null |
+| T9 heartbeat fan-out | PASS | GCS heartbeats reaching each SITL in 3 s: SITL 0 [A/60, B/60, unsigned/], SITL 1 [A/60, B/60, unsigned/], SITL 2 [A/60, B/60, unsigned/] |
+| T5 spoofed telemetry | PASS | 11:05:03 spoof: sent 120 frames claiming sysid 1 (half unsigned, half wrong key); position stayed at LatLon(latitude=-35.363261, longitude=149.1652298) (was LatLon(latitude=-35.363261, longitude=149.1652298)), still 'Signed' |
+| T7 no key | PASS | GCS 2 (keys: A only): sysid 2 shown as 'No key' on Links, not a vehicle; send refused "vehicle signs its traffic; no key for it on this device" |
+| T10 two installations | PASS | GCS 1 link_id 60 and GCS 2 link_id 135 both answered by sysid 1 (SYSID_THISMAV = 1.0); SITL 0 received [A/135, A/60] |
+| T6 vault locked | PASS | locked: first send in the same second Failed(cause=java.io.IOException: no signing key for drone 5e9a00000000000000000001 (vault locked or key removed)); once the heartbeat showed Locked, refused "signing keys are locked; unlock in Settings", sysid 1 shown 'Keys locked', unsigned sysid 3 still answered, GCS 2 unaffected; unlocked: sysid 1 Signed again and answered |
+| T11 clock behind saved timestamp | PASS | restarted with the saved timestamp 1 h ahead of the wall clock: answered; outgoing timestamps 37275331341907.. > saved 37275331341900 |
+| S8 SIGFAIL seen by GCS | PASS | NAMED_VALUE_INT SIGFAIL per sysid at the end: {1=41092, 2=41420, 3=null} (sysid 3 has no key, so no counter) |

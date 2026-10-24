@@ -1,0 +1,7 @@
+mavlink-router version v4-19-g5e38c7a
+Opened UDP Server [4]inject: 127.0.0.1:14560
+Opened UDP Server [5]gcs2: 0.0.0.0:14551
+Opened UDP Server [6]gcs1: 0.0.0.0:14550
+Opened TCP Client [7]sitl2: 127.0.0.1:6782
+Opened TCP Client [8]sitl1: 127.0.0.1:6772
+Opened TCP Client [9]sitl0: 127.0.0.1:6762

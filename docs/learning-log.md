@@ -4460,3 +4460,51 @@ No change to what is transmitted: the allowlist and `MavTxGateway` rules are unt
 - The PIN minimum (6 characters) and the 30 s toast cooldown are my choices.
 - `FileDialog`/document-picker import path was not exercised by hand.
 - Suggested next: S9 (SITL attack suite and end-to-end), once S7/S8 exist.
+
+## Pass 40 — S9 (signing): SITL end-to-end run, GCS side (2026-10-24)
+
+### What changed
+- `core/vehicle/src/jvmTest/.../SigningSitlRun.kt`: moved here from `core:mavlink` (it now needs the vault and `Fleet`) and rewritten as the S9 run: one PASS/FAIL row per PRD test, evidence per row, table written to `<work>/results.txt`.
+- `core/vehicle/build.gradle.kts`: `jvmTest` depends on `core:keys` and kotlinx-serialization-json (reads the harness's JSON). Test-only; no version change.
+- `tools/sitl/s9_make_keys.py` (Windows): synthetic keys via S6 `provision.derive_key`, bundles via S6 `provision.seal`.
+- `tools/sitl/s9_signing_sitl.py` (WSL): three KFT-fork SITLs (A, B, unsigned) behind mavlink-router, logging taps in front of each FC, and a `spoof` subcommand for T5.
+- `docs/Signing/S9-results.md` and `docs/Signing/s9-evidence/`: results table, findings, router config, tap excerpts, raw run output.
+
+### How it works
+```
+s9_make_keys.py ──bundles──▶ Vault (create, BundleImport, lock, unlock) ──▶ VaultKeyring ──▶ Links ─UDP─▶ router ─▶ tap ─▶ SITL n
+                                                                                 ▲                          │
+                                                                Fleet: login, params, missions       taps.log: every frame into each FC,
+                                                                                                     signature checked against each key
+```
+1. The harness starts the SITLs with `--wipe`, installs key A on sysid 1 and key B on sysid 2 over disarmed SERIAL0, leaves sysid 3 unsigned, and writes `ready.json` (WSL address).
+2. The run builds GCS 1 (vault with A and B) and GCS 2 (vault with A only, a different link_id), using production classes end to end.
+3. Each row checks what the GCS sees (badge text, refusal reason, answers) and, where the wire matters (fan-out, link_ids, timestamps), what the taps saw arrive at the FC. That way the GCS isn't trusted to report on itself.
+
+### Engineering learnings
+- **One row = one `runCatching`.** A real-time SITL run is slow to repeat. Recording every row and failing at the end showed all five first-run problems in one go, instead of one per rerun.
+- **Check the wire independently.** A tap that re-verifies signatures with the known keys is what proves "2 signed + 1 unsigned" and "two link_ids accepted". The GCS's own `SigningStatus` can't prove what it actually sent.
+- **The status is per heartbeat, but the keyring is live.** Locking the vault changes the keyring at once, and the vehicle status only at the next heartbeat. In between, `FrameSink`'s own key check is what keeps the guarantee "a frame meant to be signed never goes out unsigned". That is why that check exists, and the gap shows as `Failed` instead of `Rejected` (finding 3).
+- **Simulate, don't touch the machine.** T11 stores a timestamp 1 h ahead instead of moving the Windows clock. To the GCS the situation is identical, and no system setting changes.
+
+### What to look at
+- `core/vehicle/src/jvmTest/kotlin/com/kft/gcs/core/vehicle/SigningSitlRun.kt` (`installation`, the T6 and T11 rows).
+- `tools/sitl/s9_signing_sitl.py` (`Keys.classify`, `Tap.pump`, router config in `up`).
+- `docs/Signing/S9-results.md` (table and findings 1, 3, 4).
+
+### Tests
+- `./gradlew check`: BUILD SUCCESSFUL (the S9 run is skipped without `KFT_S9_RUN`).
+- SITL run (steps in S9-results.md "Reproduce"): final run BUILD SUCCESSFUL. PASS: T1 (sysid 1, 2), T5 (partly), T6, T7, T8, T9 binding, T9 fan-out, T10, T11 (simulated), SIGFAIL reaching the GCS. BLOCKED: T2, T3, T4, T14 and far_future (attack scripts not written; Hrushikesh's call). Not in this run: T12, T13, T15 (Track B evidence in S7/S8).
+- The first run had 5 failing rows, all test mistakes, fixed as described in S9-results.md.
+- Not run: the visual badge check in the desktop app and a second app process (screen access declined). Badge text was checked through `SigningStatus.label`.
+
+### Safety
+No production code changed: `MavTxGateway`, its allowlist, `FrameSink` and the vault are untouched. No flight action was used (S9): the SITLs were never armed. The harness only talks to processes it started, and refuses to run unless each reports `SIM_` parameters. All keys, PINs and passphrases are public synthetic test values kept in git-ignored `build/s9-sitl/keys.json`. The run found one refusal-path gap (finding 3: the first send after a lock reports `Failed`, not `Rejected(LOCKED)`). Nothing is transmitted in that case.
+
+### Open questions / next
+- **SIGFAIL semantics (needs a PRD/Track B decision):** on any shared link, neighbours' signed frames and unsigned frames count as bad signatures (about 250/s here, 2/s from GCS fan-out alone), and the PRD's T2 "SIGFAIL unchanged" contradicts S8.
+- Finding 3 fix (`MavTxGateway` rejects with `LOCKED` when the keyring is locked) and finding 4 (expose `SigningCounters` on `LinkState.Connected` and show them on Links). Both are small Track A passes.
+- Attack scripts (T2–T4, T14, far_future) remain for Codex in GNSS-Denied. Rerun this pass's harness with them once they exist.
+- The SITL binary was built from an uncommitted fork working tree (hash differs from S8); commit or pin it before S10.
+- How long `NoKey` takes to appear on a second GCS was not measured (the first run checked too early).
+- Ponytail review: removed an unused handle list in the harness (-4 lines). The rest is lean.

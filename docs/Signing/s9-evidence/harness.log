@@ -1,0 +1,7 @@
+[Errno 111] Connection refused sleeping
+10:59:16 SITL 0 (sysid 1): key installed
+[Errno 111] Connection refused sleeping
+10:59:19 SITL 1 (sysid 2): key installed
+[Errno 111] Connection refused sleeping
+10:59:21 SITL 2 (sysid 3): no key, unsigned
+10:59:21 ready: GCS 1 udp 172.23.225.63:14550, GCS 2 udp 172.23.225.63:14551

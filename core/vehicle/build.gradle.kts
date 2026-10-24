@@ -68,5 +68,10 @@ kotlin {
                 implementation(libs.koin.core)
             }
         }
+        // SigningSitlRun (S9) drives the real vault end to end; core:keys depends only on core:mavlink, so no cycle.
+        jvmTest.dependencies {
+            implementation(project(":core:keys"))
+            implementation(libs.kotlinx.serialization.json)
+        }
     }
 }
