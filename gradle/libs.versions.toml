@@ -22,6 +22,7 @@ maplibre-compose = "0.17.0"            # desktop needs Java 25 at runtime; see d
 media3 = "1.11.1"                      # Android RTSP playback (ExoPlayer); added in Pass 27, checked 2026-09-28
 bytedeco-ffmpeg = "8.1.2-1.5.14"       # desktop video decode: FFmpeg's LGPLv3 build (NOT ffmpeg-gpl); ADR-004
 bytedeco-javacpp = "1.5.14"            # the JNI runtime the FFmpeg bindings above load their natives with
+bouncycastle = "1.86"                  # core:keys: Argon2BytesGenerator ONLY (lightweight API, no JCA provider); released 2026-09-11, checked 2026-10-24
 ktor = "3.6.0"                         # companion (VisionNav Pi) WebSocket client; added in the P7 pass, released 2026-09-16, built on coroutines 1.11.0
 
 android-compileSdk = "37"         # Compose 1.12 (androidx) requires compileSdk 37
@@ -67,6 +68,7 @@ ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" } # pure-Kotlin engine: the same one on Android and desktop
 
+bouncycastle-bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 jserialcomm = { module = "com.fazecast:jSerialComm", version.ref = "jserialcomm" }
 usb-serial-android = { module = "com.github.mik3y:usb-serial-for-android", version.ref = "usb-serial-android" }
 
