@@ -79,6 +79,7 @@ The raw final output is [gradle-run.txt](s9-evidence/gradle-run.txt).
    status is still `Signed`, so `FrameSink` is what refuses (`IOException`, nothing written). `Links.signingRefusals`
    only carries `Rejected`, so no "Open signing keys" toast appears for that send. This is safe. The fix is small: in
    `MavTxGateway.forVehicle`, reject with `LOCKED` when `keyring.isUnlocked()` is false before calling `write`.
+   **Fixed in Pass 41** (unit-tested; the SITL run was not repeated).
 4. **No visible spoof counter.** `SigningSource.counters` (spoofed, bad signature, replayed, unverified, malformed)
    isn't exposed past the byte layer, so PRD T5's "spoof counter rises" can't be checked or shown. Suggest publishing
    it in `LinkState.Connected` and showing it on the Links card.

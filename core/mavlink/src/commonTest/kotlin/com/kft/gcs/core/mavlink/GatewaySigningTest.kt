@@ -98,12 +98,32 @@ class GatewaySigningTest {
         assertTrue(verifyV2(link.rawFrames.single(), keyA))
     }
 
-    /** The vault locks between the status read and the write: FrameSink refuses, and nothing goes out unsigned. */
+    /**
+     * S9 finding 3: the vault was locked a moment ago and the vehicle's status still says Signed (it changes at the next
+     * heartbeat). The send is the same LOCKED refusal as later, so the app shows its toast, and nothing is written.
+     */
+    @Test
+    fun aJustLockedVaultIsRefusedAsLockedBeforeTheStatusCatchesUp() = runTest {
+        val link = FakeMavConnection(keyring = keyring)
+        val gateway = gateway(link)
+        link.statuses(1 to SigningStatus.Signed("drone-a"), 2 to SigningStatus.Unsigned)
+        keyring.unlocked = false
+        gateway.rejections.test {
+            val locked = assertIs<TxResult.Rejected>(gateway.forVehicle(1u).send(ParamRequestList(targetSystem = 1u)))
+            assertEquals(MavTxGateway.LOCKED, locked.reason)
+            assertTrue(locked.isSigningRefusal, "reaches Links.signingRefusals, so the toast shows")
+            assertEquals(locked, awaitItem())
+        }
+        assertEquals(0L, link.wire.size, "nothing written for the signed vehicle")
+        assertEquals(TxResult.Sent, gateway.forVehicle(2u).send(ParamRequestList(targetSystem = 2u)), "an unsigned vehicle needs no key")
+        assertFalse(link.rawFrames.single().isSigned())
+    }
+
+    /** A key that is gone while the vault is unlocked (removed between status read and write): FrameSink refuses, nothing goes out unsigned. */
     @Test
     fun aKeyThatVanishesMidSendFailsInsteadOfGoingOutUnsigned() = runTest {
         val link = FakeMavConnection(keyring = keyring)
-        link.statuses(1 to SigningStatus.Signed("drone-a"))
-        keyring.unlocked = false
+        link.statuses(1 to SigningStatus.Signed("drone-removed"))
         assertIs<TxResult.Failed>(gateway(link).forVehicle(1u).send(ParamRequestList(targetSystem = 1u)))
         assertEquals(0L, link.wire.size)
     }

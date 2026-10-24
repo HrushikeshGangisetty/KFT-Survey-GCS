@@ -4508,3 +4508,45 @@ No production code changed: `MavTxGateway`, its allowlist, `FrameSink` and the v
 - The SITL binary was built from an uncommitted fork working tree (hash differs from S8); commit or pin it before S10.
 - How long `NoKey` takes to appear on a second GCS was not measured (the first run checked too early).
 - Ponytail review: removed an unused handle list in the harness (-4 lines). The rest is lean.
+
+## Pass 41 — S9 finding 3: a just-locked vault is refused as LOCKED (2026-10-24)
+
+### What changed
+- `core/mavlink/.../FrameSink.kt`: `keysUnlocked()`, which asks the keyring it already holds.
+- `core/mavlink/.../MavTxGateway.kt`: `forVehicle` refuses a send that would be signed with `LOCKED` when the keys are locked, before calling `write`.
+- `core/mavlink/.../GatewaySigningTest.kt`: new `aJustLockedVaultIsRefusedAsLockedBeforeTheStatusCatchesUp`. `aKeyThatVanishesMidSendFailsInsteadOfGoingOutUnsigned` now uses a removed key, because a locked vault no longer reaches FrameSink.
+- `docs/Signing/S9-results.md`: finding 3 marked fixed.
+
+### How it works
+```
+send ─▶ allowlist ─▶ status (per heartbeat) picks the drone key ─▶ keyring locked? ─yes─▶ Rejected(LOCKED) ─▶ rejections ─▶ toast
+                                                                           │ no
+                                                                           ▼
+                                                                FrameSink.write (still refuses if the key vanished since)
+```
+1. Locking the vault zeroes the keys at once, but a vehicle's `SigningStatus` only becomes `Locked` at its next heartbeat (up to 1 s).
+2. In that window the status still names a drone. Before this pass, FrameSink found no key and threw, so the send came back as `TxResult.Failed`, which `Links.signingRefusals` ignores.
+3. The gateway now asks the keyring directly, so that window gives the same `Rejected(LOCKED)` as afterwards.
+
+### Engineering learnings
+- **Check the source of truth, not a cached view of it.** The status map is a per-heartbeat snapshot. The keyring is live. A refusal decision that depends on "locked" should read the live value.
+- **FrameSink's own key check stays.** It still covers a key that disappears between this check and the write (a lock racing the send, or a key removed). Two checks, each for a different reason: the gateway's gives the right *message*, FrameSink's keeps the *guarantee* that a frame meant to be signed is never sent unsigned.
+- **Why a method on FrameSink and not the keyring in the gateway's constructor:** the gateway already reaches the link's FrameSink, which owns the keyring. Passing the keyring in a second time would add a second path to the same object.
+
+### What to look at
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/MavTxGateway.kt` (`forVehicle`, the new `keysUnlocked()` line).
+- `core/mavlink/src/commonTest/kotlin/com/kft/gcs/core/mavlink/GatewaySigningTest.kt` (the two tests above).
+
+### Tests
+`./gradlew check`: BUILD SUCCESSFUL. GatewaySigningTest runs 8 tests on the desktop JVM and the Android host:
+- **Just-locked vault:** status still `Signed` → `Rejected(LOCKED)`. It is logged on `rejections`, `isSigningRefusal` is true, and no byte is written. An unsigned vehicle on the same link still gets its frame, unsigned.
+- **Removed key while unlocked:** FrameSink still refuses with `Failed`, and nothing is written.
+
+Not rerun in SITL. Manual check: run S9 again; T6's first-second result should read `Rejected(… LOCKED)`.
+
+### Safety
+This changes what the gateway returns, not what it transmits: the case already sent nothing, and it still sends nothing. The allowlist is unchanged and still checked first. No flight action was added (S9 rule). Heartbeat fan-out while locked is unchanged: bound drones' copies still fail in FrameSink, as before.
+
+### Open questions / next
+- S9 finding 4 (expose `SigningCounters` on `LinkState.Connected`, show them on Links) is the other small Track A item.
+- The SIGFAIL semantics decision (S9 finding 1) is still open for the PRD / Track B.

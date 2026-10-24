@@ -112,6 +112,9 @@ class MavTxGateway internal constructor(
                 SigningStatus.NoKey -> return reject(classification.label, NO_KEY)
                 SigningStatus.Locked -> return reject(classification.label, LOCKED)
             }
+            // The status only turns Locked at the vehicle's next heartbeat, but the keyring locks at once. Asking it here
+            // makes that first second a LOCKED refusal (toast and all) instead of FrameSink's IOException (S9 finding 3).
+            if (signFor != null && link?.keysUnlocked() == false) return reject(classification.label, LOCKED)
             return write(message, signFor)
         }
     }

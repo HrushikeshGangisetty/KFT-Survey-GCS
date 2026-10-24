@@ -35,6 +35,9 @@ internal class FrameSink(
 ) {
     private val mutex = Mutex()
 
+    /** False while the vault is locked, so [MavTxGateway] can refuse a signed send before it gets here. */
+    fun keysUnlocked(): Boolean = keyring.isUnlocked()
+
     // Both guarded by mutex.
     private var sequence = 0
     private val clocks = HashMap<String, SigningClock>()
