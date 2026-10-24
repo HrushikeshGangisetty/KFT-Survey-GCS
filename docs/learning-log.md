@@ -4452,10 +4452,10 @@ pointer events ─▶ vm.onUserActive ─▶ IdleAutoLock.touch ; IdleAutoLock(b
 Manual (not run): on an Android build, create a vault, import the S6 bundle, press Home, return: expect the keys locked and the prompt shown; open the file picker for a bundle: expect no lock. Desktop SITL: with a signing SITL and no key, expect "No key" on Links and the toast with its action after about 1 s.
 
 ### Safety
-No change to what is transmitted: the allowlist and `MavTxGateway` rules are untouched, and no flight action was added (S9). Two public constants (`NO_KEY`, `LOCKED`) changed visibility only, and `isSigningRefusal` reads them. Keys are never shown: `KeyRow` has no key field. Locking: idle (not while a signed vehicle is connected), "Lock now", and on Android ON_STOP.
+No change to what is transmitted: the allowlist and `MavTxGateway` rules are untouched, and no flight action was added (S9). Two public constants (`NO_KEY`, `LOCKED`) changed visibility only, and `isSigningRefusal` reads them. Keys are never shown: `KeyRow` has no key field. Locking: idle and Android ON_STOP (both skipped while a signed vehicle is connected), and "Lock now" (always).
 
 ### Open questions / next
-- **Android background lock vs flight.** PRD says zeroise on background; a phone call mid-flight therefore stops GCS commands until the PIN is re-entered. The pilot flies on RC and the GCS sends no flight actions (S9), so I followed the PRD; say if you want a signed vehicle to exempt it like the idle timer does.
+- **Android background lock vs flight (resolved after review):** the PRD says zeroise on background, but the lock now skips while a signed vehicle is connected, the same rule as the idle timer. With no signed vehicle connected it locks as the PRD says. This deviates from the PRD wording on purpose; the PRD should be updated to say so.
 - A NoKey/Locked vehicle has no `VehicleState`, so Fly and Fleet show nothing for it; only Links and the toast do.
 - The PIN minimum (6 characters) and the 30 s toast cooldown are my choices.
 - `FileDialog`/document-picker import path was not exercised by hand.

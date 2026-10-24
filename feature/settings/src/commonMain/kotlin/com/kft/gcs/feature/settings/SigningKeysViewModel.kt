@@ -89,11 +89,12 @@ class SigningKeysViewModel(
     fun onLockClicked() = repository.lock()
 
     /**
-     * The app left the screen (Android). Locks the keys, except while the file dialog is up: on Android that dialog is
-     * another screen, and locking then would make the import fail the moment the operator picks the file.
+     * The app left the screen (Android). Locks the keys, except (1) while the file dialog is up: on Android that dialog
+     * is another screen, and locking then would make the import fail the moment the operator picks the file; and (2)
+     * while a signed vehicle is connected, like the idle timer: a phone call must not cut the GCS off from a drone in the air.
      */
     fun onAppBackgrounded() {
-        if (!picking) repository.lock()
+        if (!picking && !repository.signedVehicleConnected) repository.lock()
     }
 
     private var picking = false

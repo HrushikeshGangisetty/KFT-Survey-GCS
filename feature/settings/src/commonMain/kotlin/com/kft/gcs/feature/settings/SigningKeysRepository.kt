@@ -41,6 +41,9 @@ interface SigningKeysRepository {
 
     /** The operator did something: restart the idle-lock timer. */
     fun touch()
+
+    /** True while a vehicle is connected and signed: locking now would zero its key and the FC would drop our commands. */
+    val signedVehicleConnected: Boolean
 }
 
 /**
@@ -52,7 +55,7 @@ class VaultSigningKeysRepository(
     private val vault: Vault,
     private val importer: BundleImport,
     private val keyring: SigningKeyring,
-    links: Links,
+    private val links: Links,
     scope: CoroutineScope,
     nowMs: () -> Long,
 ) : SigningKeysRepository {
@@ -67,7 +70,9 @@ class VaultSigningKeysRepository(
 
     override val refusals: Flow<String> = links.signingRefusals.map { "Not sent (${it.message}): ${it.reason}" }
 
-    private val idle = IdleAutoLock(vault, nowMs, busy = { links.hasSignedVehicle() })
+    override val signedVehicleConnected: Boolean get() = links.hasSignedVehicle()
+
+    private val idle = IdleAutoLock(vault, nowMs, busy = { signedVehicleConnected })
 
     init {
         scope.launch { idle.run() }

@@ -35,6 +35,7 @@ private class FakeKeysRepository : SigningKeysRepository {
     var failWith: Exception? = null
     var importResult = ImportResult(added = 2, skippedOlder = emptyList())
     var touches = 0
+    override var signedVehicleConnected = false
 
     private fun maybeFail() = failWith?.let { throw it }
 
@@ -311,6 +312,18 @@ class SigningKeysViewModelTest {
         runCurrent()
         assertTrue(repository.snapshot.value.unlocked, "locking now would break the import")
 
+        vm.onAppBackgrounded()
+        assertFalse(repository.snapshot.value.unlocked)
+    }
+
+    @Test
+    fun backgroundingNeverLocksWhileASignedVehicleIsConnected() = runTest(dispatcher) {
+        repository.snapshot.value = VaultSnapshot(exists = true, unlocked = true, keys = emptyList())
+        repository.signedVehicleConnected = true
+        vm.onAppBackgrounded()
+        assertTrue(repository.snapshot.value.unlocked)
+
+        repository.signedVehicleConnected = false
         vm.onAppBackgrounded()
         assertFalse(repository.snapshot.value.unlocked)
     }
