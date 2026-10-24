@@ -14,8 +14,12 @@ sealed interface SigningStatus {
     /** It signs, but the vault is locked, so nothing can be checked. Its signed frames are dropped. */
     data object Locked : SigningStatus
 
-    /** Bound, but its latest heartbeat failed verification. [count] is every bad-signature frame from it on this link. */
-    data class BadSignature(val count: Int) : SigningStatus
+    /**
+     * Bound to [droneId], but its latest heartbeat failed verification. [count] is every bad-signature frame from it on
+     * this link. The binding stands: the gateway still signs for [droneId], so a forger who injects one bad heartbeat
+     * can't cut the GCS off from the real drone.
+     */
+    data class BadSignature(val droneId: String, val count: Int) : SigningStatus
 }
 
 /** Frames [SigningSource] dropped on one link, by reason. Kept for diagnostics; nothing here is ever passed on. */

@@ -4255,3 +4255,113 @@ one tick; `observeIncoming(ts)` lifts the clock to `ts + 1`. Going past 2^48 - 1
 - Timestamps aren't persisted yet (S3 item 6).
 - `/ponytail-review` (lite) on the diff: lean already, nothing to cut.
 - Suggested next: S3, gateway key choice, heartbeat fan-out and status in `VehicleInfo`.
+
+## Pass 37 — S3 (signing): gateway key choice, heartbeat fan-out, status in VehicleInfo (2026-10-24)
+
+### What changed
+- `core/mavlink/.../MavTxGateway.kt`: `attach` also takes the link's signing status. `forVehicle` signs for the vehicle's
+  drone (Signed, BadSignature), sends unsigned (Unsigned / not heard), or refuses (NoKey, Locked). `sendHeartbeat` fans
+  out: one signed copy per bound drone, plus one unsigned copy if any vehicle is unsigned or none is heard.
+- `.../TxPolicy.kt`: SETUP_SIGNING (common.xml #256) is NEVER.
+- `.../ConnectionManager.kt`: `VehicleInfo.signing` (default Unsigned), merged in the existing collector; signing
+  clocks saved every 10th heartbeat (10 s) and when a session ends; `keyring` constructor parameter.
+- `.../FrameSink.kt`: `saveTimestamps()`.
+- `.../MavTransport.kt`: `TransportMavConnection` exposes its `SigningSource.status`; `OpenedLink` carries it;
+  `openTransportConnection` takes the keyring explicitly.
+- `.../Links.kt`, `di/MavlinkModule.kt`: one `SigningKeyring` for every link (`getOrNull<SigningKeyring>() ?: NoSigning`,
+  so S4 only adds a binding).
+- `.../signing/SigningStatus.kt`, `SigningSource.kt`: `BadSignature` now names the bound drone.
+- Tests: new `GatewaySigningTest`; new rows in `MavTxGatewayTest` and `ConnectionManagerTest`; `FakeMavConnection` takes
+  a keyring and has a scriptable `signing` map and `rawFrames`. New manual `jvmTest` `SigningSitlRun`.
+
+### How it works
+```
+SigningSource (reader thread) -- status: StateFlow<Map<sysid, SigningStatus>> --+--> MavTxGateway (read at send time)
+        | passes verified/unsigned frames                                       |
+        v                                                                       +--> ConnectionManager collector
+BufferedMavConnection -- frames --> ConnectionManager collector -- VehicleInfo.signing --> LinkState --> UI (S5)
+
+send(msg) -> TxPolicy -> target / duplicate -> SigningStatus -+- Signed/BadSignature(d) -> FrameSink.write(signFor = d)
+                                                              +- Unsigned / not heard   -> FrameSink.write(signFor = null)
+                                                              +- NoKey / Locked         -> Rejected -> rejections
+```
+1. Each link open builds a new `SigningSource` and `FrameSink`. `ConnectionManager` gives both to the gateway, so
+   bindings never outlive their session (rebinding after a reconnect happens on its own).
+2. The gateway reads status from the byte layer, not from `VehicleInfo`. A vehicle whose heartbeats don't verify
+   (NoKey, Locked) never gets a `VehicleInfo`, and it still has to be refused rather than sent unsigned.
+3. The collector reads `status.value` when a heartbeat arrives and on each 1 s tick. `SigningSource` sets the status
+   before it passes the heartbeat on, so the value is never older than the heartbeat. A status change on a heartbeat
+   that was dropped (bad signature) shows up at the next tick. There's no new collector, so no race.
+4. Each heartbeat round signs once per distinct drone id, so one drone on two system ids still gets one copy.
+5. Every 10th heartbeat calls `FrameSink.saveTimestamps()`, and the session's `finally` does too (NonCancellable),
+   before the next open makes new clocks from the saved values.
+
+### Engineering learnings
+- **One source of truth, read at use time.** The gateway already read armed and duplicate state through a lambda at send
+  time. Signing does the same, but against the byte layer's `StateFlow`. The other option, reading only
+  `VehicleInfo.signing`, would have failed open for keyless vehicles, because they never get a `VehicleInfo`.
+- **Exhaustive `when` over a sealed status.** If someone adds a `SigningStatus` later, `forVehicle` stops compiling
+  until they decide what that status means for sending. That's the default-deny idea in the type system.
+- **BadSignature keeps the binding.** If one bad heartbeat stopped the GCS signing, a forger could cut the GCS off from a
+  real drone by injecting one bad frame a second. Bad frames are already dropped and counted, which is enough.
+- **Fail closed, twice.** The gateway refuses NoKey/Locked. If the key goes away between that check and the write,
+  `FrameSink` throws, and the result is `TxResult.Failed`, never an unsigned frame.
+- **A failed timestamp save doesn't drop the link** (`runCatching`). PRD: losing the timestamp file is recoverable, but
+  losing the link is not.
+- `/ponytail-review` on the diff: lean already. It suggested sharing the drone-id `when` between `forVehicle` and
+  `sendHeartbeat` (−4 lines). I declined, to keep the exhaustive `when` in `forVehicle`.
+
+### What to look at
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/MavTxGateway.kt`: `forVehicle` (the signing `when`) and
+  `sendHeartbeat`.
+- `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/ConnectionManager.kt`: `runLink` (attach / save on close)
+  and the collector in `runSession`.
+- `core/mavlink/src/commonTest/kotlin/com/kft/gcs/core/mavlink/GatewaySigningTest.kt`.
+
+### Tests
+`./gradlew check` passes. No compiler warnings in `core:mavlink` (main and test recompiled with `--rerun-tasks`).
+- `GatewaySigningTest`: signed frames verify with the vehicle's key and no other, carry the installation's link id, and
+  still decode. Unsigned and not-heard vehicles get unsigned frames with no trailer. NoKey and Locked are refused with
+  the exact reasons, published on `rejections`, and nothing is written; the allowlist reason still wins. BadSignature
+  keeps signing for the bound drone. A key that vanishes mid-send gives `Failed`, with nothing written. Heartbeat
+  fan-out: none heard -> 1 unsigned; 0 bound + 1 unsigned -> 1; 1 bound -> 1 signed; 1 + 1 -> 2; T9's 2 bound + 1
+  unsigned -> 2 signed (each with its own key) + 1 unsigned; one drone on two ids -> 1; NoKey only -> 0. The KFT login
+  COMMAND_LONG with NaN bit patterns is bit-exact on the wire when signed, and verifies.
+- `MavTxGatewayTest.setupSigningIsNeverSent`: id 256; NEVER for every pod lock x AI-enable x armed (true, false,
+  unknown); refused through the gateway even to a Signed vehicle, with no bytes written.
+- `ConnectionManagerTest`: `vehicleInfoCarriesTheSigningStatus` (on the heartbeat, then a dropped-heartbeat change at
+  the tick); `aReconnectRebindsAndCarriesTheSigningClockOver` (saved on link loss; the new session starts unbound,
+  binds system 1 to drone B, and drone A's next frame is stamped above its last one even with the wall clock fixed at
+  0); `signingClocksAreSavedEvery10SecondsAndOnDisconnect` (10 at 9 s, 20 at 19 s, 21 on disconnect).
+- **SITL, manual** (`SigningSitlRun`, not run in this pass):
+  1. `powershell -ExecutionPolicy Bypass -File tools\sitl\start-sitl.ps1` (ArduCopter, MAVLink 2).
+  2. In MAVProxy (SERIAL0): `signing setup kft-sitl`.
+  3. Set `KFT_SITL_SIGNING_RUN=1`, then `./gradlew.bat :core:mavlink:jvmTest --tests "*SigningSitlRun*" --info`.
+  4. Expected: `bound: system 1 -> Signed(droneId=sitl)`; `answered: SYSID_THISMAV = 1.0` (the FC accepted our
+     signature and our 48-bit timestamp on SERIAL1, TCP 5762); the keyless link on 5763 lists no vehicles and refuses
+     with the NO_KEY message; `saved timestamp: <about 3.8e13>`.
+  5. Negative check by hand: `signing remove` in MAVProxy, rerun. Expected: the run times out at step 1 (the vehicle
+     stays Unsigned, never Signed).
+
+### Safety
+- **Allowlist change:** SETUP_SIGNING is now an explicit NEVER row (it was already refused as UNLISTED). It has its own
+  `MavTxGatewayTest` row. PRD FR-14: no key leaves this device over a link.
+- **New refusals:** NoKey and Locked vehicles are sent nothing, heartbeat included. TxPolicy still runs first and is
+  unchanged.
+- With `NoSigning` (today's binding) every status is Unsigned, so every frame is byte-for-byte what it was before (NFR-5).
+- No change to S9: no flight actions were added.
+
+### Open questions / next
+- NoKey and Locked vehicles get no `VehicleInfo`, so S5 can't badge them from `vehicles`. A bound vehicle that turns
+  NoKey (key removed) also drops out after the 3 s heartbeat timeout. S5 needs the per-link status map, for example a
+  `LinkState.Connected.signing` field.
+- Once a system id has shown it signs, it stays NoKey for the session (S2 rule). A forged signed heartbeat with an
+  unsigned vehicle's system id therefore blocks sends to that vehicle until a reconnect. That's denial of service, not
+  control. Decide in S9 whether it's acceptable.
+- Locking the vault between heartbeats shows up as `Failed` ("no signing key"), not the LOCKED message, until the next
+  heartbeat updates the status (≤1 s).
+- The S2 note still stands: frames signed for drone B also reach drone A on a shared link and raise A's bad-signature
+  count (FR-4).
+- The comment on the SETUP_SIGNING row doesn't say whether stock ArduPilot restricts it to USB. S0b should confirm.
+- No `ponytail:` markers left from S3 (S2's `signFor = null` marker is removed).
+- Suggested next: S4, the `core:keys` vault, bound as `SigningKeyring`.

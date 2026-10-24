@@ -13,6 +13,8 @@ import com.divpundir.mavlink.definitions.minimal.MavModeFlag
 import com.divpundir.mavlink.api.MavBitmaskValue
 import com.divpundir.mavlink.definitions.minimal.MavType
 import com.kft.gcs.core.mavlink.signing.NoSigning
+import com.kft.gcs.core.mavlink.signing.SigningKeyring
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -23,14 +25,21 @@ import okio.IOException
 /**
  * A scripted stand-in for a real link: the test decides what the "vehicle" sends ([receive]), when the link
  * breaks ([fail]) and whether opening works ([failOnConnect]), and reads back everything the GCS sent ([sent]).
- * Sends go through a real [FrameSink] into [wire], as they do on a real link (ADR-006).
+ * Sends go through a real [FrameSink] into [wire], as they do on a real link (ADR-006), signing with [keyring]. The
+ * test plays the signing layer by setting [signing], which a real link's SigningSource would fill from heartbeats.
  */
-internal class FakeMavConnection(private val failOnConnect: IOException? = null) : CoroutinesMavConnection {
+internal class FakeMavConnection(
+    private val failOnConnect: IOException? = null,
+    keyring: SigningKeyring = NoSigning,
+) : CoroutinesMavConnection {
     override val streamState = MutableStateFlow<StreamState>(StreamState.Inactive.Stopped)
     override val mavFrame = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = 64)
     /** The bytes the GCS wrote, exactly as they would go out on the link. */
     val wire = Buffer()
-    val frameSink = FrameSink(wire, NoSigning, { 0L }, Dispatchers.Unconfined)
+    val frameSink = FrameSink(wire, keyring, { 0L }, Dispatchers.Unconfined)
+
+    /** How each vehicle on this link signs, as the signing layer would report it. Starts empty: nothing heard. */
+    val signing = MutableStateFlow<Map<UByte, SigningStatus>>(emptyMap())
     var closed = false
 
     /** Every message the GCS sent, decoded from [wire] the way a vehicle would (COMMAND_LONG comes back as a plain `CommandLong`). */
@@ -41,8 +50,23 @@ internal class FakeMavConnection(private val failOnConnect: IOException? = null)
             return buildList { while (bytes.size > 0) add(reader.next().message) }
         }
 
+    /** Each frame the GCS wrote, as raw bytes (signature trailer included), in order. */
+    val rawFrames: List<ByteArray>
+        get() {
+            val bytes = wire.copy().readByteArray()
+            return buildList {
+                var i = 0
+                while (i < bytes.size) {
+                    // MAVLink 2: 10-byte header + payload + 2-byte CRC, + 13-byte trailer when incompat bit 0x01 is set.
+                    val size = 12 + (bytes[i + 1].toInt() and 0xFF) + if (bytes[i + 2].toInt() and 1 != 0) 13 else 0
+                    add(bytes.copyOfRange(i, i + size))
+                    i += size
+                }
+            }
+        }
+
     /** This link as [ConnectionManager] opens it. */
-    fun opened() = OpenedLink(this) { frameSink }
+    fun opened() = OpenedLink(this, { frameSink }, { signing })
 
     override suspend fun connect(readerScope: CoroutineScope) {
         failOnConnect?.let { throw it }
@@ -62,7 +86,7 @@ internal class FakeMavConnection(private val failOnConnect: IOException? = null)
 
     override suspend fun <T : MavMessage<T>> sendSignedV2(
         systemId: UByte, componentId: UByte, payload: T, linkId: UByte, timestamp: UInt, secretKey: ByteArray,
-    ) = error("signing is not used yet")
+    ) = error("the GCS signs in FrameSink, never with the library's 32-bit signing (ADR-006)")
 
     fun receive(message: MavMessage<*>, seq: Int, systemId: UByte = 1u, componentId: UByte = 1u) {
         check(mavFrame.tryEmit(Frame(seq.toUByte(), systemId, componentId, message)))

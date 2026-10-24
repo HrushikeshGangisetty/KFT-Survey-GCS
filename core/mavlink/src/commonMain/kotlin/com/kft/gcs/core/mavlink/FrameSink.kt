@@ -77,6 +77,15 @@ internal class FrameSink(
         if (ts > (incoming[droneId] ?: -1)) incoming = incoming + (droneId to ts)
     }
 
+    /**
+     * Saves every drone's outgoing clock through the keyring, so the next link session starts above it even if the wall
+     * clock has gone back (PRD "Timestamps"). Only drones this link has signed for have a clock; the rest have nothing
+     * to save. Under the mutex so a value is never saved while a frame is taking the next one.
+     */
+    suspend fun saveTimestamps() = withContext(io) {
+        mutex.withLock { clocks.forEach { (droneId, clock) -> keyring.saveTimestamp(droneId, clock.current) } }
+    }
+
     /** Call under [mutex]. Each drone has its own clock, started from the wall clock and its saved timestamp. */
     private fun clockFor(droneId: String): SigningClock {
         val clock = clocks.getOrPut(droneId) { SigningClock().apply { start(nowMs(), keyring.loadTimestamp(droneId)) } }

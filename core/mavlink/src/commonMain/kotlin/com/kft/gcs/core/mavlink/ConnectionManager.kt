@@ -10,6 +10,9 @@ import com.divpundir.mavlink.definitions.minimal.MavAutopilot
 import com.divpundir.mavlink.definitions.minimal.MavModeFlag
 import com.divpundir.mavlink.definitions.minimal.MavState
 import com.divpundir.mavlink.definitions.minimal.MavType
+import com.kft.gcs.core.mavlink.signing.NoSigning
+import com.kft.gcs.core.mavlink.signing.SigningKeyring
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -59,6 +62,11 @@ data class VehicleInfo(
      * sent to this id (the gateway refuses) and its telemetry isn't trusted until one of them is given another id.
      */
     val duplicateId: Boolean = false,
+    /**
+     * How it signs its traffic on this link (PRD FR-8), from the link's signing layer. A vehicle whose heartbeats don't
+     * verify (no key, keys locked) never gets here, because its heartbeats are dropped before they are decoded.
+     */
+    val signing: SigningStatus = SigningStatus.Unsigned,
 )
 
 /** Where the link is. The UI draws straight from this. */
@@ -137,9 +145,19 @@ class ConnectionManager internal constructor(
     podStatus: StateFlow<PodStatus>,
     override val id: Int = 1,
 ) : MavLink {
-    /** Production constructor: real UDP/TCP/serial/T12 transports doing their blocking I/O on [ioDispatcher]. */
-    constructor(scope: CoroutineScope, ioDispatcher: CoroutineDispatcher, podStatus: StateFlow<PodStatus>, serialPorts: SerialPorts, t12: T12Link, id: Int = 1) :
-        this(scope, { config -> openTransportConnection(config, ioDispatcher, serialPorts, t12) }, TimeSource.Monotonic, podStatus, id)
+    /**
+     * Production constructor: real UDP/TCP/serial/T12 transports doing their blocking I/O on [ioDispatcher], signing
+     * with [keyring] ([NoSigning] until the vault exists, S4).
+     */
+    constructor(
+        scope: CoroutineScope,
+        ioDispatcher: CoroutineDispatcher,
+        podStatus: StateFlow<PodStatus>,
+        serialPorts: SerialPorts,
+        t12: T12Link,
+        id: Int = 1,
+        keyring: SigningKeyring = NoSigning,
+    ) : this(scope, { config -> openTransportConnection(config, ioDispatcher, serialPorts, t12, keyring) }, TimeSource.Monotonic, podStatus, id)
 
     private val _state = MutableStateFlow<LinkState>(LinkState.Disconnected)
     override val state: StateFlow<LinkState> = _state.asStateFlow()
@@ -186,14 +204,21 @@ class ConnectionManager internal constructor(
                 coroutineScope {
                     connection.connect(readerScope = this)
                     failures = 0
-                    gateway.attach(link.frameSink())
+                    // Each open has its own sink and signing state, so bindings start afresh after a reconnect.
+                    val frames = link.frameSink()
+                    val signing = link.signingStatus()
+                    gateway.attach(frames, signing)
                     try {
-                        runSession(config, connection)
+                        runSession(config, connection, frames, signing)
                     } finally {
                         // Close before leaving: the reader is blocked in a socket read that only closing interrupts,
                         // and coroutineScope waits for it. NonCancellable because we may be here due to cancellation.
                         gateway.detach()
-                        withContext(NonCancellable) { runCatching { connection.close() } }
+                        withContext(NonCancellable) {
+                            // Save the signing clocks before the next open makes new ones from them (PRD "Timestamps").
+                            runCatching { frames.saveTimestamps() }
+                            runCatching { connection.close() }
+                        }
                     }
                 }
             } catch (e: IOException) {
@@ -207,7 +232,12 @@ class ConnectionManager internal constructor(
     }
 
     /** Runs one open connection until it fails, then throws [IOException]. Never returns normally. */
-    private suspend fun runSession(config: LinkConfig, connection: CoroutinesMavConnection): Nothing = coroutineScope {
+    private suspend fun runSession(
+        config: LinkConfig,
+        connection: CoroutinesMavConnection,
+        frames: FrameSink,
+        signing: StateFlow<Map<UByte, SigningStatus>>,
+    ): Nothing = coroutineScope {
         val stats = LinkStatsCounter()
         val heard = HashMap<UByte, Heard>() // by system id
         fun publish() {
@@ -218,13 +248,20 @@ class ConnectionManager internal constructor(
 
         // Frames and the 1 s tick go through ONE collector, so `stats` and `heard` are only ever touched by one
         // coroutine at a time. Two separate coroutines would race on a multi-threaded dispatcher.
+        //
+        // Signing status is merged here too, by reading the signing layer's StateFlow rather than collecting it. Its
+        // reader thread sets a vehicle's status before passing that heartbeat on, so the value read for a heartbeat is
+        // never older than the heartbeat. A status change on a dropped heartbeat (a bad signature) shows at the next tick.
         val ticks = flow { while (true) { delay(1.seconds); emit(null) } }
         launch {
             merge(connection.mavFrame, ticks).collect { frame ->
                 if (frame == null) {
                     stats.tick()
                     heard.values.removeAll { it.lastHeartbeat.elapsedNow() > HEARTBEAT_TIMEOUT }
-                    heard.values.forEach { it.info = it.info.copy(duplicateId = it.isDuplicate()) }
+                    val statuses = signing.value
+                    heard.forEach { (systemId, h) ->
+                        h.info = h.info.copy(duplicateId = h.isDuplicate(), signing = statuses[systemId] ?: SigningStatus.Unsigned)
+                    }
                     publish()
                     return@collect
                 }
@@ -235,7 +272,8 @@ class ConnectionManager internal constructor(
                     val h = heard.getOrPut(frame.systemId) { Heard(now) }
                     h.lastHeartbeat = now
                     h.beats += now
-                    val info = vehicleFrom(frame.systemId, frame.componentId, message).copy(duplicateId = h.isDuplicate())
+                    val info = vehicleFrom(frame.systemId, frame.componentId, message)
+                        .copy(duplicateId = h.isDuplicate(), signing = signing.value[frame.systemId] ?: SigningStatus.Unsigned)
                     if (info != h.info) {
                         h.info = info
                         publish()
@@ -245,8 +283,12 @@ class ConnectionManager internal constructor(
             }
         }
         launch {
+            var beats = 0
             while (true) {
                 gateway.sendHeartbeat(GCS_HEARTBEAT)
+                // PRD "Timestamps": save the signing clocks every 10 s, so a crash loses at most 10 s of them. A failed
+                // save must not drop the link: a lost timestamp only costs a few replay-dropped frames after a restart.
+                if (++beats % TIMESTAMP_SAVE_BEATS == 0) runCatching { frames.saveTimestamps() }
                 delay(1.seconds)
             }
         }
@@ -277,6 +319,9 @@ class ConnectionManager internal constructor(
         val DUPLICATE_WINDOW = 10.seconds
         const val DUPLICATE_BEATS = 16
         const val DUPLICATE_CLEAR_BEATS = 12
+
+        /** The GCS heartbeat is 1 Hz, so saving the signing clocks every 10th one is every 10 s. */
+        private const val TIMESTAMP_SAVE_BEATS = 10
 
         /** No vehicle heartbeat for this long = link lost. ArduPilot sends one per second, so 3 s tolerates 2 drops. */
         val HEARTBEAT_TIMEOUT = 3.seconds

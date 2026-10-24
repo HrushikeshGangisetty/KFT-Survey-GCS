@@ -3,6 +3,8 @@ package com.kft.gcs.core.mavlink.di
 import com.kft.gcs.core.mavlink.Links
 import com.kft.gcs.core.mavlink.PodStatus
 import com.kft.gcs.core.mavlink.T12Link
+import com.kft.gcs.core.mavlink.signing.NoSigning
+import com.kft.gcs.core.mavlink.signing.SigningKeyring
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
@@ -15,9 +17,12 @@ val IoDispatcher = named("io")
  * the platform's [com.kft.gcs.core.mavlink.SerialPorts] (each shell builds its own; Android's needs a Context).
  * The pod status is fixed at "no pod" until the pod link exists; the gateway already reads it, so wiring the real
  * pod later only replaces this one binding.
+ *
+ * The [SigningKeyring] is optional: until `core:keys` binds its vault (S4) every link uses [NoSigning], which keeps every
+ * frame unsigned as before.
  */
 val mavlinkModule = module {
     // One T12Link for the app: the T12's single port is shared by its video and a MAVLink link over it.
     single { T12Link(scope = get(), ioDispatcher = get(IoDispatcher), ports = get()) }
-    single { Links(scope = get(), ioDispatcher = get(IoDispatcher), podStatus = MutableStateFlow(PodStatus.NoPod), serialPorts = get(), t12 = get()) }
+    single { Links(scope = get(), ioDispatcher = get(IoDispatcher), podStatus = MutableStateFlow(PodStatus.NoPod), serialPorts = get(), t12 = get(), keyring = getOrNull<SigningKeyring>() ?: NoSigning) }
 }

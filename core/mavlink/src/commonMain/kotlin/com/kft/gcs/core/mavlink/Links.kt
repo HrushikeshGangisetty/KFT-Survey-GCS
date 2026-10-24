@@ -1,5 +1,7 @@
 package com.kft.gcs.core.mavlink
 
+import com.kft.gcs.core.mavlink.signing.NoSigning
+import com.kft.gcs.core.mavlink.signing.SigningKeyring
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,9 +16,15 @@ import kotlinx.coroutines.flow.update
  * [connect] and [disconnect] are called from the UI thread only (the Links screen), so `nextId` needs no lock.
  */
 class Links internal constructor(private val newLink: (id: Int) -> ConnectionManager) {
-    /** Production constructor: each link gets the real transports and its own gateway. */
-    constructor(scope: CoroutineScope, ioDispatcher: CoroutineDispatcher, podStatus: StateFlow<PodStatus>, serialPorts: SerialPorts, t12: T12Link) :
-        this({ id -> ConnectionManager(scope, ioDispatcher, podStatus, serialPorts, t12, id) })
+    /** Production constructor: each link gets the real transports, its own gateway, and the app's one [keyring]. */
+    constructor(
+        scope: CoroutineScope,
+        ioDispatcher: CoroutineDispatcher,
+        podStatus: StateFlow<PodStatus>,
+        serialPorts: SerialPorts,
+        t12: T12Link,
+        keyring: SigningKeyring = NoSigning,
+    ) : this({ id -> ConnectionManager(scope, ioDispatcher, podStatus, serialPorts, t12, id, keyring) })
 
     private val _open = MutableStateFlow<List<ConnectionManager>>(emptyList())
 

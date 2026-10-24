@@ -145,7 +145,7 @@ internal class SigningSource(
             }
             if (!verifyV2(frame, key)) {
                 badSignatures[sysId]++
-                if (heartbeat) setStatus(sysId, SigningStatus.BadSignature(badSignatures[sysId]))
+                if (heartbeat) setStatus(sysId, SigningStatus.BadSignature(bound, badSignatures[sysId]))
                 return drop { it.copy(badSignature = it.badSignature + 1) }
             }
             bound

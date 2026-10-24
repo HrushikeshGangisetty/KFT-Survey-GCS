@@ -1,11 +1,17 @@
 package com.kft.gcs.core.mavlink
 
 import com.divpundir.mavlink.definitions.common.MissionCount
+import com.divpundir.mavlink.definitions.common.ParamRequestList
 import com.divpundir.mavlink.definitions.common.MissionSetCurrent
 import com.divpundir.mavlink.definitions.minimal.Heartbeat
 import com.divpundir.mavlink.definitions.minimal.MavType
+import com.kft.gcs.core.mavlink.signing.FakeKeyring
+import com.kft.gcs.core.mavlink.signing.SigningStatus
+import com.kft.gcs.core.mavlink.signing.trailerOf
+import com.kft.gcs.core.mavlink.signing.verifyV2
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -238,5 +244,94 @@ class ConnectionManagerTest {
         // A QuadPlane reports a VTOL type but runs ArduPlane.
         assertEquals(VehicleKind.PLANE, ConnectionManager.vehicleKindOf(MavType.VTOL_TILTROTOR.value))
         assertEquals(VehicleKind.UNKNOWN, ConnectionManager.vehicleKindOf(MavType.GROUND_ROVER.value))
+    }
+
+    // ---- signing S3 ----
+
+    private val keyA = ByteArray(32) { 0x11 }
+    private val keyB = ByteArray(32) { 0x22 }
+
+    /** The vehicle's signing status rides on its VehicleInfo, merged by the one collector: on its heartbeat, and at each tick. */
+    @Test
+    fun vehicleInfoCarriesTheSigningStatus() = runTest {
+        val link = FakeMavConnection()
+        val manager = manager(link)
+        manager.connect(udp)
+        runCurrent()
+        link.receive(copterHeartbeat(), seq = 0)
+        runCurrent()
+        assertEquals(listOf<SigningStatus>(SigningStatus.Unsigned), manager.vehicles().map { it.signing }, "the default")
+
+        // The signing layer sets the status before it passes the heartbeat on, as SigningSource does.
+        link.signing.value = mapOf(1u.toUByte() to SigningStatus.Signed("drone-a"))
+        link.receive(copterHeartbeat(), seq = 1)
+        runCurrent()
+        assertEquals(listOf<SigningStatus>(SigningStatus.Signed("drone-a")), manager.vehicles().map { it.signing })
+
+        // A bad heartbeat is dropped, so no frame carries the change: the next tick picks it up.
+        link.signing.value = mapOf(1u.toUByte() to SigningStatus.BadSignature("drone-a", 1))
+        advanceTimeBy(1.seconds + 1.milliseconds)
+        assertEquals(listOf<SigningStatus>(SigningStatus.BadSignature("drone-a", 1)), manager.vehicles().map { it.signing })
+    }
+
+    /**
+     * Bindings belong to one link session: after a reconnect the new session's signing state is used, whatever it is
+     * (the same system id may now be another drone). The old session's clock is saved first, so the new one starts above it.
+     */
+    @Test
+    fun aReconnectRebindsAndCarriesTheSigningClockOver() = runTest {
+        val keyring = FakeKeyring(mapOf("drone-a" to keyA, "drone-b" to keyB))
+        val first = FakeMavConnection(keyring = keyring)
+        val second = FakeMavConnection(keyring = keyring)
+        val manager = manager(first, second)
+        first.signing.value = mapOf(1u.toUByte() to SigningStatus.Signed("drone-a"))
+        manager.connect(udp)
+        runCurrent()
+        assertTrue(verifyV2(first.rawFrames.single(), keyA), "the GCS heartbeat is signed for drone A")
+
+        first.fail()
+        runCurrent()
+        val savedA = assertNotNull(keyring.timestamps["drone-a"], "saved when the link went down")
+        assertTrue(savedA > 0, "one frame was signed, so the clock moved past 0")
+
+        advanceTimeBy(1.seconds + 1.milliseconds) // backoff, then the second link opens
+        assertIs<LinkState.Connected>(manager.state.value)
+        assertFalse(second.rawFrames.single().let { it[2].toInt() and 1 != 0 }, "new session, nothing bound yet: unsigned")
+
+        // System 1 is now drone B; drone A turns up as system 2.
+        second.signing.value = mapOf(1u.toUByte() to SigningStatus.Signed("drone-b"), 2u.toUByte() to SigningStatus.Signed("drone-a"))
+        assertEquals(TxResult.Sent, manager.gateway.forVehicle(1u).send(ParamRequestList(targetSystem = 1u)))
+        assertTrue(verifyV2(second.rawFrames.last(), keyB), "system 1 is signed for drone B now")
+        assertEquals(TxResult.Sent, manager.gateway.forVehicle(2u).send(ParamRequestList(targetSystem = 2u)))
+        val toA = second.rawFrames.last()
+        assertTrue(verifyV2(toA, keyA))
+        // The fake wall clock is 0 in both sessions, so only the saved value can put drone A's clock above the last
+        // timestamp it was sent; without it the FC would drop this frame as a replay.
+        assertTrue(trailerOf(toA)!!.timestamp > trailerOf(first.rawFrames.single())!!.timestamp, "the clock carried over")
+    }
+
+    /** PRD "Timestamps": each bound drone's clock is saved every 10 s (every 10th 1 Hz heartbeat) and on disconnect. */
+    @Test
+    fun signingClocksAreSavedEvery10SecondsAndOnDisconnect() = runTest {
+        val keyring = FakeKeyring(mapOf("drone-a" to keyA))
+        val link = FakeMavConnection(keyring = keyring)
+        val manager = manager(link)
+        link.signing.value = mapOf(1u.toUByte() to SigningStatus.Signed("drone-a"))
+        manager.connect(udp)
+        runCurrent()
+
+        // Heartbeats at t = 0, 1, … 9 s: the 10th, at 9 s, saves. The clock starts at 0 (fake wall clock) and each
+        // signed heartbeat takes one tick, so after 10 of them the clock to save is 10.
+        advanceTimeBy(8.seconds + 500.milliseconds)
+        assertEquals(null, keyring.timestamps["drone-a"], "not before the 10th heartbeat")
+        advanceTimeBy(1.seconds)
+        assertEquals(10L, keyring.timestamps["drone-a"])
+        advanceTimeBy(10.seconds)
+        assertEquals(20L, keyring.timestamps["drone-a"])
+
+        advanceTimeBy(1.seconds) // heartbeat 21 goes out at t = 20 s
+        manager.disconnect()
+        runCurrent()
+        assertEquals(21L, keyring.timestamps["drone-a"], "and once more as the link closes")
     }
 }

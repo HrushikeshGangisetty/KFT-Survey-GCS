@@ -67,7 +67,7 @@ class BitExactCommandLongTest {
     fun nanBitPatternsSurviveTheGatewayToTheWire() = runTest {
         val link = FakeMavConnection()
         val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod))
-        gateway.attach(link.frameSink)
+        gateway.attach(link.frameSink, link.signing)
         assertEquals(TxResult.Sent, gateway.forVehicle(1u).send(command(patterns)))
 
         // The bytes FrameSink wrote, as the link would carry them.

@@ -22,6 +22,7 @@ import com.divpundir.mavlink.definitions.common.SetAttitudeTarget
 import com.divpundir.mavlink.definitions.common.SetMode
 import com.divpundir.mavlink.definitions.common.SetPositionTargetGlobalInt
 import com.divpundir.mavlink.definitions.common.SetPositionTargetLocalNed
+import com.divpundir.mavlink.definitions.common.SetupSigning
 import com.divpundir.mavlink.definitions.minimal.Heartbeat
 
 /** Which ArduPilot firmware family the vehicle runs. Mode numbers differ between them (GUIDED is 4 on Copter, 15 on Plane). */
@@ -111,6 +112,11 @@ internal object TxPolicy {
         // raise them. That would be engagement over the GCS, which pod invariant 4 forbids.
         is RcChannelsOverride -> never("RC_CHANNELS_OVERRIDE")
         is ManualControl -> never("MANUAL_CONTROL")
+        // SETUP_SIGNING (common.xml #256) carries a signing key in clear: anyone listening learns it. ArduPilot stores
+        // the key it carries (GCS_Signing.cpp handle_setup_signing); the PRD makes the flight controller take it over
+        // USB only (FR-3, firmware). Keys are written by the provisioning tool over USB, never by this GCS over a link
+        // (PRD "Key management", FR-14), so no key ever leaves this device.
+        is SetupSigning -> never("SETUP_SIGNING")
 
         else -> TxClassification(TxCategory.UNLISTED, message.instanceCompanion.id.let { "message id $it" })
     }

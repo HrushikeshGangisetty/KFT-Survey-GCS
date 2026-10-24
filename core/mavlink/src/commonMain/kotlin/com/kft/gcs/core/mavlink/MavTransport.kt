@@ -9,9 +9,11 @@ import com.divpundir.mavlink.definitions.ardupilotmega.ArdupilotmegaDialect
 import com.kft.gcs.core.mavlink.signing.NoSigning
 import com.kft.gcs.core.mavlink.signing.SigningKeyring
 import com.kft.gcs.core.mavlink.signing.SigningSource
+import com.kft.gcs.core.mavlink.signing.SigningStatus
 import kotlin.concurrent.Volatile
 import kotlin.time.Clock
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.flow.StateFlow
 import okio.BufferedSink
 import okio.BufferedSource
 import okio.IOException
@@ -52,12 +54,20 @@ internal class TransportMavConnection(
     var frameSink: FrameSink? = null
         private set
 
+    /** How each vehicle on this link signs, from this open's [SigningSource]. Null before [open]. */
+    @Volatile
+    var signingStatus: StateFlow<Map<UByte, SigningStatus>>? = null
+        private set
+
     override fun open(): MavConnection {
         val streams = transport.open()
         val frames = FrameSink(streams.sink, keyring, nowMs, io)
+        // A new SigningSource on every open, so bindings never outlive the link session they were made on.
+        val signing = SigningSource(streams.source, keyring, nowMs, frames::observeIncoming)
         frameSink = frames
+        signingStatus = signing.status
         return BufferedMavConnection(
-            SigningSource(streams.source, keyring, nowMs, frames::observeIncoming).buffer(),
+            signing.buffer(),
             // The library gets a sink that goes nowhere, so even a stray call to its send* can't reach the transport
             // behind FrameSink's back (two writers repeat sequence numbers and can mix frames: ADR-006 finding 4).
             blackholeSink().buffer(),
@@ -71,24 +81,33 @@ internal class TransportMavConnection(
 }
 
 /**
- * One link as [ConnectionManager] drives it: [connection] reads and decodes frames, and [frameSink] is the only way to
- * write. The sink exists only once [connection] has connected, because the transport opens inside `connect`.
+ * One link as [ConnectionManager] drives it: [connection] reads and decodes frames, [frameSink] is the only way to
+ * write, and [signingStatus] says how each vehicle on it signs. The last two exist only once [connection] has
+ * connected, because the transport opens inside `connect`.
  */
-internal class OpenedLink(val connection: CoroutinesMavConnection, val frameSink: () -> FrameSink)
+internal class OpenedLink(
+    val connection: CoroutinesMavConnection,
+    val frameSink: () -> FrameSink,
+    val signingStatus: () -> StateFlow<Map<UByte, SigningStatus>>,
+)
 
 /**
  * Builds the platform transport for [config], wrapped for coroutines, with its [FrameSink]. Socket code lives in
- * `jvmCommonMain`. [keyring] defaults to [NoSigning] until the vault exists (S4), which keeps every frame unsigned.
+ * `jvmCommonMain`. [keyring] is [NoSigning] until the vault exists (S4), which keeps every frame unsigned.
  */
 internal fun openTransportConnection(
     config: LinkConfig,
     ioDispatcher: CoroutineDispatcher,
     serialPorts: SerialPorts,
     t12: T12Link,
-    keyring: SigningKeyring = NoSigning,
+    keyring: SigningKeyring,
 ): OpenedLink {
     val transport = TransportMavConnection(createTransport(config, serialPorts, t12), keyring, { Clock.System.now().toEpochMilliseconds() }, ioDispatcher)
-    return OpenedLink(transport.asCoroutine(ioDispatcher)) { checkNotNull(transport.frameSink) { "the link has not opened yet" } }
+    return OpenedLink(
+        transport.asCoroutine(ioDispatcher),
+        { checkNotNull(transport.frameSink) { "the link has not opened yet" } },
+        { checkNotNull(transport.signingStatus) { "the link has not opened yet" } },
+    )
 }
 
 internal expect fun createTransport(config: LinkConfig, serialPorts: SerialPorts, t12: T12Link): MavTransport
