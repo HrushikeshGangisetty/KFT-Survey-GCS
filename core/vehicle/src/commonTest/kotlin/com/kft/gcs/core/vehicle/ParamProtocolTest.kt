@@ -179,6 +179,21 @@ class ParamProtocolTest {
         assertEquals(ap.names.size, repo.downloadAll().getOrThrow().size)
     }
 
+    /** `known` is what the Setup tab reads: the download, then whatever each set's echo said the vehicle holds. */
+    @Test
+    fun repositoryKeepsWhatTheVehicleLastReported() = runTest {
+        val link = MutableStateFlow<LinkState>(LinkState.Connected(LinkConfig.UdpListen(), VehicleInfo(1u, 1u, VehicleKind.COPTER, false, 0u), LinkStats()))
+        val repo = DefaultParamRepository(fc.frames, link, MutableStateFlow(VehicleState(login = KftLoginStatus.AUTHENTICATED)), fc)
+        assertTrue(repo.known.value.isEmpty(), "nothing before the first download")
+        repo.downloadAll().getOrThrow()
+        assertEquals(ap.names.toSet(), repo.known.value.keys)
+        repo.set(ap.param("CAM1_TYPE"), 1f)
+        assertEquals(1f, repo.known.value.getValue("CAM1_TYPE").value)
+        ap.locked += "FENCE_ENABLE"
+        repo.set(ap.param("FENCE_ENABLE"), 1f)
+        assertEquals(0f, repo.known.value.getValue("FENCE_ENABLE").value, "a locked parameter's echo keeps the old value")
+    }
+
     @Test
     fun inputIsCheckedAgainstTheStorageType() {
         assertEquals(3f, parseParamInput(" 3 ", ParamType.INT8).getOrThrow())

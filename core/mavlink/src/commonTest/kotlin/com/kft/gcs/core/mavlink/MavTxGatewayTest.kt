@@ -3,6 +3,7 @@ package com.kft.gcs.core.mavlink
 import com.divpundir.mavlink.api.MavEnumValue
 import com.divpundir.mavlink.api.MavMessage
 import com.divpundir.mavlink.definitions.ardupilotmega.CopterMode
+import com.divpundir.mavlink.definitions.ardupilotmega.MavCmd as ArduMavCmd
 import com.divpundir.mavlink.definitions.ardupilotmega.PlaneMode
 import com.divpundir.mavlink.definitions.common.CommandInt
 import com.divpundir.mavlink.definitions.common.CommandLong
@@ -329,5 +330,98 @@ class MavTxGatewayTest {
             assertEquals("SETUP_SIGNING", awaitItem().message)
         }
         assertTrue(link.wire.size == 0L, "no byte of it reaches the link")
+    }
+
+    /** A COMMAND_LONG with param1..7 as listed (missing ones 0). */
+    private fun setup(cmd: UInt, vararg p: Float) = CommandLong(
+        command = MavEnumValue.fromValue(cmd), targetSystem = 1u,
+        param1 = p.getOrElse(0) { 0f }, param2 = p.getOrElse(1) { 0f }, param3 = p.getOrElse(2) { 0f }, param4 = p.getOrElse(3) { 0f },
+        param5 = p.getOrElse(4) { 0f }, param6 = p.getOrElse(5) { 0f }, param7 = p.getOrElse(6) { 0f },
+    )
+
+    private val calibration = MavCmd.PREFLIGHT_CALIBRATION.value
+    private val reboot = MavCmd.PREFLIGHT_REBOOT_SHUTDOWN.value
+    private val accelPos = ArduMavCmd.ACCELCAL_VEHICLE_POS.value
+    private val startMag = ArduMavCmd.DO_START_MAG_CAL.value
+    private val cancelMag = ArduMavCmd.DO_CANCEL_MAG_CAL.value
+
+    /**
+     * The Setup tab's commands, exactly as `core:vehicle` builds them (Setup.kt), each checked against the KFT fork's
+     * handling (TxPolicy SETUP_PATTERNS). Allowed only on the ground; an unknown armed state fails closed. The pod's state
+     * doesn't matter: nothing here moves the aircraft.
+     */
+    @Test
+    fun setupCommandsOnlyWhileDisarmed() {
+        assertEquals(241u, calibration, "common.xml")
+        assertEquals(246u, reboot, "common.xml")
+        assertEquals(listOf(42429u, 42424u, 42426u), listOf(accelPos, startMag, cancelMag), "ardupilotmega.xml")
+        val allowed = listOf(
+            setup(calibration, 0f, 0f, 1f),               // barometer
+            setup(calibration, 0f, 0f, 0f, 1f),           // RC calibration flag on
+            setup(calibration),                           // RC calibration flag off
+            setup(calibration, 0f, 0f, 0f, 0f, 1f),       // accelerometer, 6 positions
+            setup(calibration, 0f, 0f, 0f, 0f, 2f),       // level
+            setup(calibration, 0f, 0f, 0f, 0f, 4f),       // simple accelerometer
+            setup(startMag, 0f, 0f, 1f),                  // every compass, autosave
+            setup(cancelMag),
+            setup(reboot, 1f),
+        ) + (1..6).map { setup(accelPos, it.toFloat()) }
+        val worstPod = PodStatus(PodLockState.ENGAGE, aiEnableHigh = true)
+        for (c in allowed) {
+            assertEquals(TxCategory.SETUP_DISARMED, TxPolicy.classify(c).category, "$c")
+            assertNull(verdict(c, worstPod, armed = false), "$c on the ground")
+            assertTrue(verdict(c, armed = true)!!.contains("disarmed"), "$c while armed")
+            assertTrue(verdict(c, armed = null)!!.contains("disarmed"), "$c with no vehicle heard")
+        }
+    }
+
+    /**
+     * The same command ids with any other numbers are not on the allowlist. Above all compassmot (param6 = 1), which spins
+     * a Copter's motors, an autoreboot after the compass calibration, and ArduPilot's reboot magic numbers.
+     */
+    @Test
+    fun otherSetupParametersAreNotOnTheAllowlist() {
+        val refused = listOf(
+            setup(calibration, 0f, 0f, 0f, 0f, 0f, 1f),   // compassmot
+            setup(calibration, 1f),                       // gyro only
+            setup(calibration, 0f, 76f),                  // force the compass calibration valid
+            setup(calibration, 0f, 0f, 0f, 0f, 76f),      // force the accel calibration valid
+            setup(calibration, 0f, 0f, 1f, 1f),           // two calibrations in one
+            setup(calibration, 0f, 0f, 0f, 0f, 0f, 0f, 1f),
+            setup(startMag, 0f, 0f, 1f, 0f, 1f),          // autoreboot
+            setup(startMag, 0f, 1f, 1f),                  // retry
+            setup(accelPos, 0f), setup(accelPos, 7f), setup(accelPos, 16777215f), setup(accelPos, 1.5f),
+            setup(reboot, 42f, 24f, 71f, 93f),             // lock-up the main loop
+            setup(reboot, 1f, 0f, 0f, 0f, 0f, 20190226f),  // forced reboot while armed
+            setup(reboot, 2f),                            // shutdown
+            setup(reboot, 3f),                            // reboot to bootloader
+        )
+        for (c in refused) {
+            assertEquals(TxCategory.UNLISTED, TxPolicy.classify(c).category, "$c")
+            assertTrue(verdict(c, armed = false)!!.contains("allowlist"), "$c")
+        }
+    }
+
+    /** COMMAND_INT carries param5..7 as x, y, z: the same patterns apply, so compassmot can't slip through that way. */
+    @Test
+    fun setupPatternsApplyToCommandIntToo() {
+        fun int(cmd: UInt, p1: Float = 0f, x: Int = 0, y: Int = 0) = CommandInt(command = MavEnumValue.fromValue(cmd), param1 = p1, x = x, y = y)
+        assertEquals(TxCategory.SETUP_DISARMED, TxPolicy.classify(int(calibration, x = 1)).category, "accelerometer")
+        assertEquals(TxCategory.UNLISTED, TxPolicy.classify(int(calibration, y = 1)).category, "compassmot")
+        assertEquals(TxCategory.UNLISTED, TxPolicy.classify(int(reboot, 1f, y = 20190226)).category, "forced reboot")
+    }
+
+    @Test
+    fun gatewayRefusesACalibrationWhileArmedWithoutWriting() = runTest {
+        var armed: Boolean? = false
+        val link = FakeMavConnection()
+        val gateway = MavTxGateway(MutableStateFlow(PodStatus.NoPod)) { info(armed) }
+        gateway.attach(link.frameSink, link.signing)
+        val sender = gateway.forVehicle(1u)
+        assertEquals(TxResult.Sent, sender.send(setup(startMag, 0f, 0f, 1f)))
+        armed = true
+        assertEquals("MAV_CMD_DO_START_MAG_CAL", assertIs<TxResult.Rejected>(sender.send(setup(startMag, 0f, 0f, 1f))).message)
+        assertIs<TxResult.Rejected>(sender.send(setup(calibration, 0f, 0f, 0f, 0f, 0f, 1f)))
+        assertEquals(1, link.sent.size, "only the disarmed start reaches the link")
     }
 }

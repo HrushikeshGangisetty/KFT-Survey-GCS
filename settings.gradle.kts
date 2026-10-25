@@ -47,6 +47,7 @@ include(":feature:fly")
 include(":feature:plan")
 include(":feature:params")
 include(":feature:settings")
+include(":feature:setup")
 
 // ---- apps ----
 include(":app:shared")   // KMP: App() root composable, DI graph, navigation

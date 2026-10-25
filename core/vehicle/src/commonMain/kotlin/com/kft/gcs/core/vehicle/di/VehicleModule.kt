@@ -11,6 +11,7 @@ import com.kft.gcs.core.vehicle.KFT_APP_SECRET_HEX
 import com.kft.gcs.core.vehicle.MissionRepository
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.ParamRepository
+import com.kft.gcs.core.vehicle.VehicleSetupRepository
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.parseKftKey
 import kotlinx.coroutines.flow.StateFlow
@@ -53,5 +54,6 @@ val vehicleModule = module {
     single<StateFlow<VehicleState>>(SelectedVehicle) { get<Fleet>().selected }
     single<MissionRepository> { get<Fleet>().missions }
     single<ParamRepository> { get<Fleet>().params }
+    single<VehicleSetupRepository> { get<Fleet>().setup }
 }
 

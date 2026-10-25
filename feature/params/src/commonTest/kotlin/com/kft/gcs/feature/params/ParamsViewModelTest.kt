@@ -37,6 +37,7 @@ internal class FakeParamRepository : ParamRepository {
     )
     val locked = mutableSetOf<String>()
     val sets = mutableListOf<Pair<String, Float>>()
+    override val known = MutableStateFlow<Map<String, Param>>(emptyMap())
 
     override suspend fun downloadAll(onProgress: (Int, Int) -> Unit): Result<List<Param>> {
         onProgress(vehicle.size, vehicle.size)

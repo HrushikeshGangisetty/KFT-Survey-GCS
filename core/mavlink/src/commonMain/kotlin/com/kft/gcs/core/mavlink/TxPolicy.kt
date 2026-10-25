@@ -1,6 +1,7 @@
 package com.kft.gcs.core.mavlink
 
 import com.divpundir.mavlink.api.MavMessage
+import com.divpundir.mavlink.definitions.ardupilotmega.MavCmd as ArduMavCmd
 import com.divpundir.mavlink.definitions.common.CommandInt
 import com.divpundir.mavlink.definitions.common.CommandLong
 import com.divpundir.mavlink.definitions.common.ManualControl
@@ -49,7 +50,7 @@ data class PodStatus(val lock: PodLockState = PodLockState.NONE, val aiEnableHig
  * anything that makes the aircraft move or change mode. Under S9 the GCS sends none of them, in any pod state, so
  * the GUIDED and safe-direction rules are covered by a stricter one (see open item GS-8 in the spec).
  */
-internal enum class TxCategory { ALWAYS, PARAM_CHANGE_DISARMED, MISSION_CHANGE, MISSION_CHANGE_DISARMED, PILOT_ONLY, NEVER, UNLISTED }
+internal enum class TxCategory { ALWAYS, PARAM_CHANGE_DISARMED, SETUP_DISARMED, MISSION_CHANGE, MISSION_CHANGE_DISARMED, PILOT_ONLY, NEVER, UNLISTED }
 
 /** A message's category plus a human-readable name for logs and rejection reasons. */
 internal data class TxClassification(val category: TxCategory, val label: String)
@@ -101,8 +102,10 @@ internal object TxPolicy {
         // Mission items can hold TAKEOFF, LAND or RTL: those are a plan the pilot starts by switching to AUTO on
         // the RC, not an immediate action, so they are MISSION_CHANGE above whatever command they carry (S9).
         is SetMode -> pilotOnly("SET_MODE")
-        is CommandLong -> classifyCommand(message.command.value)
-        is CommandInt -> classifyCommand(message.command.value)
+        is CommandLong -> with(message) { classifyCommand(command.value, listOf(param1, param2, param3, param4, param5, param6, param7)) }
+        // ArduPilot reads COMMAND_INT's x, y, z where COMMAND_LONG has param5..7 (GCS_Common.cpp
+        // try_command_long_as_command_int), so the setup patterns below are checked on the same seven numbers.
+        is CommandInt -> with(message) { classifyCommand(command.value, listOf(param1, param2, param3, param4, x.toFloat(), y.toFloat(), z)) }
 
         // Never, whatever the state. Guidance belongs to the pod's pod_mavlink module alone (pod invariant 7).
         is SetPositionTargetLocalNed -> never("SET_POSITION_TARGET_LOCAL_NED")
@@ -130,6 +133,7 @@ internal object TxPolicy {
     fun check(category: TxCategory, pod: PodStatus, armed: Boolean?): String? = when (category) {
         TxCategory.ALWAYS -> null
         TxCategory.PARAM_CHANGE_DISARMED -> if (armed != false) "parameters can only be changed while the vehicle is disarmed" else null
+        TxCategory.SETUP_DISARMED -> if (armed != false) "calibrations and reboots only while the vehicle is disarmed" else null
         TxCategory.MISSION_CHANGE -> missionLockout(pod)
         TxCategory.MISSION_CHANGE_DISARMED -> missionLockout(pod)
             ?: if (armed != false) "only allowed while the vehicle is disarmed (spec S9)" else null
@@ -166,7 +170,12 @@ internal object TxPolicy {
     private fun missionLockout(pod: PodStatus) =
         if (pod.lock in MISSION_LOCKOUT) "mission changes are blocked while the pod reports ${pod.lock}" else null
 
-    private fun classifyCommand(command: UInt): TxClassification = when (command) {
+    /**
+     * [params] are the command's seven numbers (param1..param7, or param1..4, x, y, z for COMMAND_INT). Most rows only
+     * look at the command id; the vehicle-setup rows also check the numbers, because one command id covers both a
+     * harmless calibration and one that isn't (see [SETUP_PATTERNS]).
+     */
+    private fun classifyCommand(command: UInt, params: List<Float>): TxClassification = when (command) {
         MavCmd.SET_MESSAGE_INTERVAL.value -> always("MAV_CMD_SET_MESSAGE_INTERVAL")
         MavCmd.REQUEST_MESSAGE.value -> always("MAV_CMD_REQUEST_MESSAGE")
         MavCmd.REQUEST_AUTOPILOT_CAPABILITIES.value -> always("MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES")
@@ -195,8 +204,48 @@ internal object TxPolicy {
         MavCmd.DO_SET_SERVO.value -> never("MAV_CMD_DO_SET_SERVO")
         MavCmd.DO_SET_RELAY.value -> never("MAV_CMD_DO_SET_RELAY")
 
+        // Vehicle setup: calibrations and a reboot, only on the ground, and only with the exact numbers this GCS sends.
+        in SETUP_PATTERNS -> {
+            val (label, allowed) = SETUP_PATTERNS.getValue(command)
+            if (params in allowed) TxClassification(TxCategory.SETUP_DISARMED, label)
+            else TxClassification(TxCategory.UNLISTED, "$label with parameters ${params.joinToString(",")}")
+        }
+
         else -> TxClassification(TxCategory.UNLISTED, "MAV_CMD $command")
     }
+
+    /**
+     * The vehicle-setup commands, by command id: a label and every parameter list (param1..7) that may be sent. Anything
+     * else with the same id is UNLISTED. ArduPilot refuses all of these while armed itself; SETUP_DISARMED refuses them
+     * here first, and fails closed when the armed state is unknown. Handling checked in the KFT fork (d91a40ef):
+     *
+     * - PREFLIGHT_CALIBRATION (common.xml #241), GCS_Common.cpp `_handle_command_preflight_calibration`. Allowed: baro
+     *   (param3 = 1, also zeroes a Plane's airspeed sensor), RC calibration flag on/off (param4 = 1 / all zero: "RC
+     *   calibrating" blocks arming while the sticks are swept), accelerometer 6-position (param5 = 1), level (param5 = 2),
+     *   simple accelerometer (param5 = 4). **Not** allowed: param6 = 1, Copter's compassmot, which spins the motors
+     *   (GCS_Mavlink.cpp `GCS_MAVLINK_Copter::_handle_command_preflight_calibration`); param2/param5 = 76, which
+     *   marks an old calibration valid without doing one; and gyro-only (param1 = 1), which ArduPilot does at every boot.
+     * - ACCELCAL_VEHICLE_POS (ardupilotmega.xml #42429), `handle_command_accelcal_vehicle_pos`: "the vehicle is now in
+     *   position N" (1..6) during the accelerometer calibration. Only starts a sample when N is the step the FC asked for.
+     * - DO_START_MAG_CAL (#42424), AP_Compass_Calibration.cpp `handle_mag_cal_command`: every compass (mask 0), no retry,
+     *   autosave on, no delay, and **no** autoreboot (param5): a reboot is its own, deliberate command below.
+     * - DO_CANCEL_MAG_CAL (#42426), same function: mask 0 cancels every compass.
+     * - PREFLIGHT_REBOOT_SHUTDOWN (common.xml #246), `handle_preflight_reboot`: param1 = 1 reboots the autopilot. The
+     *   other numbers are 0 on purpose: 42/24/71 in param1..3 are ArduPilot's fault-injection magic, and param6
+     *   (y) = 20190226 forces a reboot while armed.
+     */
+    private val SETUP_PATTERNS: Map<UInt, Pair<String, Set<List<Float>>>> = mapOf(
+        MavCmd.PREFLIGHT_CALIBRATION.value to ("MAV_CMD_PREFLIGHT_CALIBRATION" to setOf(
+            sevenOf(3 to 1f), sevenOf(4 to 1f), sevenOf(), sevenOf(5 to 1f), sevenOf(5 to 2f), sevenOf(5 to 4f),
+        )),
+        ArduMavCmd.ACCELCAL_VEHICLE_POS.value to ("MAV_CMD_ACCELCAL_VEHICLE_POS" to (1..6).map { sevenOf(1 to it.toFloat()) }.toSet()),
+        ArduMavCmd.DO_START_MAG_CAL.value to ("MAV_CMD_DO_START_MAG_CAL" to setOf(sevenOf(3 to 1f))),
+        ArduMavCmd.DO_CANCEL_MAG_CAL.value to ("MAV_CMD_DO_CANCEL_MAG_CAL" to setOf(sevenOf())),
+        MavCmd.PREFLIGHT_REBOOT_SHUTDOWN.value to ("MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN" to setOf(sevenOf(1 to 1f))),
+    )
+
+    /** Seven zeros with the given (1-based param number, value) pairs set. */
+    private fun sevenOf(vararg set: Pair<Int, Float>) = MutableList(7) { 0f }.also { list -> set.forEach { (n, v) -> list[n - 1] = v } }.toList()
 
     private fun always(label: String) = TxClassification(TxCategory.ALWAYS, label)
     private fun missionChange(label: String) = TxClassification(TxCategory.MISSION_CHANGE, label)

@@ -90,7 +90,7 @@ What the reference products offer, so that we pick deliberately.
 | Terrain server (`TERRAIN_REQUEST` → `TERRAIN_DATA`) so the FC can terrain-follow without an SD terrain cache | P1 |
 | RTK correction injection (NTRIP client → `GPS_RTCM_DATA`) | P1 — survey accuracy depends on it |
 | tlog recording + replay | P1 |
-| Calibration flows | P2 (existing KFT GCS covers these) |
+| Calibration flows (accelerometer, level, compass, barometer, radio), flight modes, failsafes, hardware ids, FC reboot: the Setup tab | **P0 (Pass 44).** Was P2 while the existing KFT GCS covered them; with signed firmware only this GCS can talk to the FC. Calibrations and reboot are allowed only while disarmed, with the exact parameters in TxPolicy `SETUP_PATTERNS` (compassmot, which spins the motors, is not) |
 
 ### 2.3 Maps
 

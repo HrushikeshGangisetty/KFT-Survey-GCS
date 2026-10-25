@@ -60,6 +60,9 @@ import com.kft.gcs.feature.settings.SigningKeysEffect
 import com.kft.gcs.feature.settings.SigningKeysRoute
 import com.kft.gcs.feature.settings.SigningKeysViewModel
 import com.kft.gcs.feature.settings.SigningUnlockPrompt
+import com.kft.gcs.feature.setup.CalibrationViewModel
+import com.kft.gcs.feature.setup.SetupRoute
+import com.kft.gcs.feature.setup.SetupViewModel
 import com.kft.gcs.ui.design.KftIcons
 import com.kft.gcs.ui.design.KftLogo
 import com.kft.gcs.ui.design.KftNavigationRail
@@ -151,6 +154,9 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val params: ParamsViewModel = koinViewModel() // window scope so it downloads on connect, before the Params tab is opened
     val fleet: FleetViewModel = koinViewModel() // window scope so alerts are raised whichever tab is showing
     val keys: SigningKeysViewModel = koinViewModel() // window scope so the unlock prompt shows at start, whichever tab is open
+    // Window scope so a calibration keeps running (and can be cancelled) when the operator looks at another tab.
+    val setup: SetupViewModel = koinViewModel()
+    val calibration: CalibrationViewModel = koinViewModel()
     // A fleet alert (link lost, battery low, RTL, mission done) is a toast on every tab, and a line on the Fleet tab.
     val alerts = remember { SnackbarHostState() }
     LaunchedEffect(fleet) { fleet.effects.collect { alerts.showSnackbar("${it.vehicle}: ${it.text}") } }
@@ -222,6 +228,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
             composable(Destination.KEYS.route) { Surface(Modifier.fillMaxSize()) { SigningKeysRoute(keys) } }
             composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute(params) } }
+            composable(Destination.SETUP.route) { Surface(Modifier.fillMaxSize()) { SetupRoute(setup, calibration) } }
             composable(Destination.FLEET.route) { Surface(Modifier.fillMaxSize()) { FleetRoute(fleet) { slot -> VehicleColors[slot.mod(VehicleColors.size)] } } }
         }
         SnackbarHost(alerts, Modifier.align(Alignment.TopCenter).zIndex(4f))
@@ -261,6 +268,7 @@ internal enum class Destination(val route: String, val label: String) {
     FLEET("fleet", "Fleet"),
     PLAN("plan", "Plan"),
     PARAMS("params", "Params"),
+    SETUP("setup", "Setup"),
     MAPS("maps", "Maps"),
     CONNECTIONS("connections", "Links"),
     KEYS("keys", "Keys"),
@@ -294,6 +302,7 @@ private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (
                     Destination.FLEET -> KftIcons.Stats
                     Destination.PLAN -> KftIcons.Plan
                     Destination.PARAMS -> KftIcons.Params
+                    Destination.SETUP -> KftIcons.Setup
                     Destination.MAPS -> KftIcons.Maps
                     Destination.CONNECTIONS -> KftIcons.Link
                     Destination.KEYS -> KftIcons.Lock

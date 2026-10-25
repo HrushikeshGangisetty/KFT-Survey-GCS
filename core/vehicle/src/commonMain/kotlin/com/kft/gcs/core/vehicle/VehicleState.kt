@@ -14,6 +14,7 @@ import com.divpundir.mavlink.definitions.common.MissionItemReached
 import com.divpundir.mavlink.definitions.common.MissionState
 import com.divpundir.mavlink.definitions.common.NamedValueInt
 import com.divpundir.mavlink.definitions.common.ParamValue
+import com.divpundir.mavlink.definitions.common.RcChannels
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
 import com.divpundir.mavlink.definitions.common.VfrHud
@@ -75,6 +76,13 @@ data class VehicleState(
      * (the S8 firmware change). Null until the FC reports one, which a stock ArduPilot never does.
      */
     val fcSignatureFailures: Int? = null,
+    /**
+     * What the RC receiver gives the FC, channel 1 first, in µs (RC_CHANNELS). As many channels as the receiver
+     * provides; empty when there is no RC input.
+     */
+    val rcChannels: List<Int> = emptyList(),
+    /** Board and firmware identity from AUTOPILOT_VERSION. Null until it arrives (it is requested at connect). */
+    val autopilot: AutopilotIdentity? = null,
 ) {
     /**
      * The vehicle's simple geofence, or null when it is off or not known yet. ArduPilot's AC_Fence parameters (Copter
@@ -205,9 +213,45 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
         if (name in WATCHED_PARAMS) copy(watchedParams = watchedParams + (name to message.paramValue)) else this
     }
     // AUTOPILOT_VERSION is in standard.xml.
-    is AutopilotVersion -> copy(firmwareVersion = firmwareVersionName(message.flightSwVersion))
+    is AutopilotVersion -> copy(firmwareVersion = firmwareVersionName(message.flightSwVersion), autopilot = autopilotIdentity(message))
+    // RC_CHANNELS (common.xml #65), in ArduPilot's RC_CHANNELS stream group. chancount is how many channels the
+    // receiver provides (RC_Channels::get_valid_channel_count, 0 = no RC); the 18 raw fields follow in order.
+    is RcChannels -> with(message) {
+        val all = listOf(chan1Raw, chan2Raw, chan3Raw, chan4Raw, chan5Raw, chan6Raw, chan7Raw, chan8Raw, chan9Raw,
+            chan10Raw, chan11Raw, chan12Raw, chan13Raw, chan14Raw, chan15Raw, chan16Raw, chan17Raw, chan18Raw)
+        copy(rcChannels = all.take(chancount.toInt()).map { it.toInt() })
+    }
     else -> this
 }
+
+/**
+ * Who the flight controller is, for the Hardware ID page.
+ * @property gitHash the firmware's git commit (first 8 characters), so a KFT build can be traced to its source.
+ * @property boardId ArduPilot's board type number (APJ_BOARD_ID, e.g. 140 = CubeOrange), or null when the build has none.
+ * @property usbId the board's USB vendor:product ids in hex ("2dae:1016"), or null when the build doesn't set them.
+ * @property uid the processor's unique id in hex: the same board always shows the same id, whatever firmware it runs.
+ */
+data class AutopilotIdentity(val firmware: String, val gitHash: String?, val boardId: Int?, val usbId: String?, val uid: String?)
+
+/**
+ * ArduPilot fills AUTOPILOT_VERSION like this (GCS_Common.cpp `send_autopilot_version`, KFT fork d91a40ef):
+ * board_version = APJ_BOARD_ID << 16; flight_custom_version = the git hash as 8 ASCII characters; vendor_id/product_id
+ * = the board's USB ids; uid = 0 always; uid2 = `get_system_id_unformatted`, 12 bytes on STM32 boards, zero-padded to 18.
+ * Trailing zero bytes are trimmed, but never below 12, so an STM32 id ending in a zero byte still shows whole.
+ */
+internal fun autopilotIdentity(m: AutopilotVersion): AutopilotIdentity {
+    val hash = m.flightCustomVersion.takeWhile { it != 0.toUByte() }.map { it.toInt().toChar() }.joinToString("")
+    val uid = m.uid2.dropLastWhile { it == 0.toUByte() }.let { if (it.isEmpty()) it else m.uid2.take(maxOf(it.size, 12)) }
+    return AutopilotIdentity(
+        firmware = firmwareVersionName(m.flightSwVersion),
+        gitHash = hash.ifEmpty { null },
+        boardId = (m.boardVersion shr 16).toInt().takeIf { it != 0 },
+        usbId = if (m.vendorId.toInt() == 0 && m.productId.toInt() == 0) null else "${hex4(m.vendorId)}:${hex4(m.productId)}",
+        uid = uid.joinToString("") { it.toString(16).padStart(2, '0') }.ifEmpty { null },
+    )
+}
+
+private fun hex4(v: UShort) = v.toString(16).padStart(4, '0')
 
 /**
  * Decodes AUTOPILOT_VERSION.flight_sw_version. ArduPilot packs it as major, minor, patch, FIRMWARE_VERSION_TYPE,
@@ -267,7 +311,7 @@ private const val UINT16_UNKNOWN: UShort = 65535u
 private fun Float.toDegrees() = this * 180.0 / PI
 
 // MAV_SEVERITY: 0-3 are emergency..error, 4 warning, 5+ notice/info/debug.
-private fun severityOf(value: UInt) = when {
+internal fun severityOf(value: UInt) = when {
     value <= 3u -> Severity.ERROR
     value == 4u -> Severity.WARNING
     else -> Severity.INFO

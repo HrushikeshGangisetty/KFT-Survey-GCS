@@ -4625,3 +4625,108 @@ Pi now still comes from the newest odometry `publish_time_pi_ns` plus GCS time s
 
 ### Open questions / next
 - map_fix 0.3 support. GNSS-Denied FLOW.md line about "0.2 only" updated to match.
+
+## Pass 44 — Setup tab: calibrations, flight modes, failsafes, hardware ID (2026-10-25)
+
+With signed firmware only this GCS can talk to the flight controller, so the setup jobs the old KFT GCS (and Mission Planner) did now have to live here. Spec §2.2 "Calibration flows" moves from P2 to P0.
+
+### What changed
+- `core/mavlink/.../TxPolicy.kt`: new category `SETUP_DISARMED`. `SETUP_PATTERNS` allows five commands, each with **exact** parameter lists only (see Safety). Commands are now classified on their seven numbers as well as their id.
+- `core/vehicle/.../Setup.kt` (new): `SetupCommand` (what the tab can ask for), `SetupReport` (what the FC answers during a calibration), and `VehicleSetupRepository` + `DefaultVehicleSetupRepository` (one per vehicle, gated on the KFT login like parameters).
+- `core/vehicle/.../ParamRepository.kt`: `known`, the vehicle's last-read parameters. `downloadAll` fills it and `set` keeps it current.
+- `core/vehicle/.../VehicleState.kt`: `rcChannels` (RC_CHANNELS) and `autopilot` (board id, git hash, USB id, unique id from AUTOPILOT_VERSION).
+- `core/vehicle/.../Fleet.kt`, `di/VehicleModule.kt`: a setup repository per vehicle, with the selected one bound in Koin. `params.known` follows the selection.
+- `feature/setup` (new module): `SetupFields.kt` (failsafe and flight-mode field tables, value checks, arming-problem rules), `HardwareIds.kt` (sensor id decoding), `RcCalibration.kt` (sweep → min/trim/max), `SetupViewModel`, `CalibrationViewModel`, `SetupScreen.kt`, `CalibrationPages.kt`, `di/SetupModule.kt`.
+- `app/shared`: a `Setup` rail tab after Params, with both ViewModels at window scope. `ui/design`: `KftIcons.Setup` (build) and `KftIcons.Reboot` (restart_alt), Material Symbols with the usual tint edit.
+- `docs/spec/01…`: the calibration row. `docs/design/45-setup-*.png`: screenshots from the headless UI test.
+
+### How it works
+```
+Setup tab ─▶ SetupViewModel ───────▶ ParamRepository.known / set ──PARAM_SET──────────────────────────────┐
+         └─▶ CalibrationViewModel ──run(SetupCommand)──▶ VehicleSetupRepository ──COMMAND_LONG──▶ MavTxGateway ─▶ FC
+                    ▲                                         │            (SETUP_DISARMED, exact numbers)
+                    └──────── reports: SetupReport ◀──────────┘ ACCELCAL_VEHICLE_POS (sent by the FC), MAG_CAL_PROGRESS/REPORT, STATUSTEXT
+```
+1. **Accelerometer (6 positions):** PREFLIGHT_CALIBRATION with param5=1. The FC calibrates its gyros and ACKs. Then, every second, it sends *us* a COMMAND_LONG ACCELCAL_VEHICLE_POS naming the position it wants. The operator places the vehicle and presses the button, and we answer with ACCELCAL_VEHICLE_POS(that position). The FC samples, asks for the next position, and ends with 16777215 (success) or 16777216 (failed).
+2. **Level, simple accelerometer, barometer:** one PREFLIGHT_CALIBRATION each (param5=2, param5=4, param3=1). The ACK is the result. On a Plane the baro command also zeroes the airspeed sensor and answers IN_PROGRESS first.
+3. **Compass:** DO_START_MAG_CAL (all compasses, autosave). MAG_CAL_PROGRESS gives a percentage per compass, plus `cal_mask` (which compasses take part). The calibration is over when every compass in the mask has sent a MAG_CAL_REPORT. The FC saves the result itself, and a reboot applies it.
+4. **Radio:** PREFLIGHT_CALIBRATION with param4=1 sets "RC calibrating", so the FC refuses to arm while the sticks are swept. The ranges come from RC_CHANNELS. Then centre → review → the changed RCn_MIN/MAX/TRIM are written one by one → flag off.
+5. **Flight modes and failsafes:** fields come from fixed tables, and current values from `params.known`. The Params tab downloads those at connect, so this costs no extra radio traffic. Each change is checked, confirmed and written with PARAM_SET.
+6. **Hardware ID:** AUTOPILOT_VERSION, plus every `*_DEV_ID` / `*_DEVID` parameter decoded into bus, address and chip.
+
+### Engineering learnings
+- **Read the firmware, not only the spec (S10).** Only the KFT fork's source (d91a40ef) showed these:
+  - The RC calibration flag is ACKed `UNSUPPORTED` even though it worked: the handler falls through to `return ret`.
+  - Calibrations block the FC's main loop and only ACK when done (`EXPECT_DELAY_MS(30000)`). So they are sent **once** with a 30 s wait; a resend would start them twice.
+  - ArduPilot has **no** MAVLink command to cancel an accelerometer calibration, so Cancel says a reboot clears it.
+  - MAG_CAL_REPORT keeps repeating the last result, so reports only count after the start's ACK.
+- **Allowlist by numbers, not only by id.** PREFLIGHT_CALIBRATION with param6=1 is Copter's compassmot, which spins the motors. PREFLIGHT_REBOOT_SHUTDOWN also carries fault-injection magic numbers and a "force reboot while armed" value. An id-only allowlist would have let all of these through. `SETUP_PATTERNS` lists the exact seven numbers of each allowed command, and anything else is UNLISTED.
+- **The repository owns the parameter cache** (`ParamRepository.known`). Setup reads the list the Params tab already downloads, instead of downloading again or reaching into another feature (features never import each other).
+- **Two ViewModels, one screen.** Calibrations are long-running conversations with the FC; parameter pages are edit dialogs. Keeping them apart makes each testable on its own, and the route composes both states. Both live at window scope, so a calibration keeps running (and can be cancelled) across tab switches.
+- **Fixed field tables, not downloaded metadata,** for failsafes and flight modes, because they must work in the field without internet. The values are copied from the fork's `@Values`/`@Range` comments. A value we don't list is still shown ("3, not a listed value").
+- **Arming problems are warnings, not refusals.** Low/critical battery inversion and Copter's "Check FS_THR_VALUE" show on the page and before a write, but don't block it, because the operator may be fixing a pair in two steps.
+- **Ponytail review (lite):** removed a 10 Hz RC_CHANNELS request during the radio sweep. The normal 4 Hz stream catches extremes that are held for a moment, and restoring the rate afterwards would have overridden the stream setting until reboot. Also removed a duplicated RCMAP role lookup. −18 lines.
+
+### What to look at
+1. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/TxPolicy.kt`: `SETUP_PATTERNS` and its KDoc (what is allowed, what isn't, and why).
+2. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/Setup.kt`: `toCommand` (numbers, attempts, timeouts), `toSetupResult`, `setupReport`.
+3. `feature/setup/src/commonMain/kotlin/com/kft/gcs/feature/setup/CalibrationViewModel.kt`: `launchCalibration`, `onReport`, `afterStop` / `abort`.
+
+### Tests
+- `MavTxGatewayTest`:
+  - `setupCommandsOnlyWhileDisarmed`: every allowed pattern is allowed when disarmed, in any pod state, and refused when armed or unknown.
+  - `otherSetupParametersAreNotOnTheAllowlist`: compassmot, gyro-only, force-valid 76, two calibrations in one, autoreboot, retry, accel positions 0/7/1.5, reboot magic, forced reboot, shutdown, reboot to bootloader.
+  - `setupPatternsApplyToCommandIntToo`.
+  - `gatewayRefusesACalibrationWhileArmedWithoutWriting`.
+- `SetupTest` (core:vehicle, fake FC, virtual time):
+  - each command's numbers, written out from the fork's handlers;
+  - a calibration is sent once and waits 8 s for a slow ACK; no answer gives up at 30 s;
+  - UNSUPPORTED counts as success only for the RC flag; IN_PROGRESS waits for the final ACK;
+  - a gateway refusal gives its reason; nothing is sent before the login;
+  - reports come only from the autopilot component (a gimbal's frame and KFT login texts are ignored);
+  - RC_CHANNELS keeps `chancount` channels;
+  - AUTOPILOT_VERSION matches hand-decoded values (4.6.3, board 140, a 12-byte UID ending in 0x00).
+- `ParamProtocolTest.repositoryKeepsWhatTheVehicleLastReported`.
+- `SetupLogicTest` (feature:setup):
+  - mode-switch bands, tested on both sides of each edge;
+  - labels, units and bits; range, list and bit checks; unique codes per page;
+  - ArduPilot's arming checks: equal battery values count as inverted, the FS_THR_VALUE + 10 boundary, the 910 floor, RCMAP_THROTTLE;
+  - four device ids decoded by hand in the KDoc;
+  - RC sweep, trims, only changed values written, an unmoved stick, a channel beyond the limits, unread parameters, the throttle failsafe warning.
+- `SetupViewModelsTest`:
+  - failsafe edit: check → confirm → write, with a warning for Terminate;
+  - out-of-range and removed values are refused; a write that breaks an arming check adds a note;
+  - no edit while armed, or after the selected vehicle changed;
+  - the mode-switch position follows the live RC;
+  - accelerometer conversation, with a late repeated request ignored; cancel advises a reboot, and reboot sends;
+  - compass waits for the whole mask and ignores reports from before the start; a failed compass is named; cancel sends DO_CANCEL_MAG_CAL;
+  - radio: sweep → centre → review → save → flag off;
+  - selecting another vehicle aborts, with nothing sent to the new one; armed blocks everything; a refused baro calibration shows why.
+- `SetupUiTest` (headless): failsafes in dark and light, the edit dialog, the accelerometer step, compass progress, the radio review with Save disabled on a problem, Hardware ID. Screenshots are in `docs/design/45-setup-*.png`.
+- `./gradlew check`: BUILD SUCCESSFUL. No new compiler warnings.
+- **Not run: SITL, and not tried in the running app or on a real FC.** Manual steps for a Copter SITL (`sim_vehicle.py -v ArduCopter`): connect, then open Setup.
+  1. Hardware ID shows the firmware and the SITL sensors ("SITL (simulated)").
+  2. Barometer → "Ground pressure set".
+  3. Accelerometer → press the button at each of the six requests; SITL accepts any attitude and ends with "successful".
+  4. Compass → in SITL it should finish within seconds. Then Reboot FC → the link drops and comes back, logged in again.
+  5. Radio → `rc 1 1000`, `rc 1 2000` and so on in MAVProxy for channels 1–4, centre them, Save. The new RCn_MIN/MAX should show on the Params tab after its next download (see Open questions).
+  6. Failsafes → set FS_GCS_ENABLE to RTL; the page shows "RTL".
+  7. Arm from MAVProxy → every Setup action greys out with "Disarm first".
+
+### Safety
+- **Allowlist change:** a new `SETUP_DISARMED` category. These are allowed only while the vehicle reports disarmed (an unknown state counts as armed), and only with exactly these numbers:
+  - PREFLIGHT_CALIBRATION: baro p3=1; RC flag p4=1 or all zero; accelerometer p5=1; level p5=2; simple accelerometer p5=4.
+  - ACCELCAL_VEHICLE_POS: p1 = 1..6.
+  - DO_START_MAG_CAL: mask 0, no retry, autosave, **no autoreboot**.
+  - DO_CANCEL_MAG_CAL: all compasses.
+  - PREFLIGHT_REBOOT_SHUTDOWN: p1=1 only.
+- Explicitly not allowed: compassmot (spins a Copter's motors), gyro-only, force-calibration-valid (76), the reboot magic numbers, forced reboot while armed, shutdown, reboot to bootloader.
+- None of these arms, disarms, takes off, changes mode, returns or lands (S9). ArduPilot also refuses every one of them while armed; the gateway refuses them first. The pod state doesn't affect them: on the ground and disarmed, nothing here moves the aircraft.
+- Flight-mode and failsafe changes are PARAM_SET, already PARAM_CHANGE_DISARMED. Choosing a "Terminate" battery action shows a warning before anything is sent.
+- The RC calibration flag blocks arming while the sticks are swept. If the link drops mid-calibration, the FC keeps "RC calibrating" (and refuses to arm) until it reboots; the screen says so.
+
+### Open questions / next
+- The SITL run of the steps above has not been done.
+- The Params tab keeps its own snapshot, so values changed in Setup show there only after its next download (or a reconnect). Suggestion: let `ParamsViewModel` follow `ParamRepository.known`.
+- Not included, possible next steps: Large Vehicle MagCal (MAV_CMD_FIXED_MAG_CAL_YAW, which needs a heading input), compass orientation and enable, battery monitor setup (BATT_MONITOR, capacity, voltage divider). ESC calibration and motor test both spin the motors, so they would need a decision against S9 first.
+- The failsafe tables are fixed to the fork's d91a40ef docs. A firmware that renumbers an option would show "N, not a listed value" until the table is updated.

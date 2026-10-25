@@ -14,13 +14,16 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -71,6 +74,7 @@ class Fleet(
         val state: StateFlow<VehicleState>,
         val missions: MissionRepository,
         val params: ParamRepository,
+        val setup: VehicleSetupRepository,
     )
 
     private val entries = MutableStateFlow<List<Entry>>(emptyList())
@@ -143,6 +147,7 @@ class Fleet(
             id, nextSlot++, child, view, repository.state,
             DefaultMissionRepository(frames, view, repository.state, sender),
             DefaultParamRepository(frames, view, repository.state, sender),
+            DefaultVehicleSetupRepository(frames, view, repository.state, sender),
         )
     }
 
@@ -179,11 +184,27 @@ class Fleet(
 
     /** Parameters of the selected vehicle; like [missions], each call stays with the vehicle it started on. */
     val params: ParamRepository = object : ParamRepository {
+        // The selected vehicle's values: switching vehicle switches the map, so one drone's values never show for another.
+        override val known: StateFlow<Map<String, Param>> = combine(entries, _selectedId) { list, id -> list.find { it.id == id } }
+            .flatMapLatest { it?.params?.known ?: flowOf(emptyMap()) }
+            .stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
         override suspend fun downloadAll(onProgress: (Int, Int) -> Unit): Result<List<Param>> =
             selectedEntry()?.params?.downloadAll(onProgress) ?: Result.failure(ParamTransferException(NO_VEHICLE))
 
         override suspend fun set(param: Param, value: Float): ParamSetResult =
             selectedEntry()?.params?.set(param, value) ?: ParamSetResult.NotApplied(NO_VEHICLE)
+    }
+
+    /**
+     * Calibrations and the reboot for the selected vehicle. Like [params], a command goes to the vehicle selected when it
+     * is sent; [VehicleSetupRepository.reports] follow the vehicle selected when collection starts.
+     */
+    val setup: VehicleSetupRepository = object : VehicleSetupRepository {
+        override suspend fun run(command: SetupCommand): SetupResult =
+            selectedEntry()?.setup?.run(command) ?: SetupResult.Failed(NO_VEHICLE)
+
+        override val reports: Flow<SetupReport> = flow { selectedEntry()?.setup?.reports?.let { emitAll(it) } }
     }
 
     private companion object {
