@@ -4876,3 +4876,74 @@ sink.finish() renames .part → .bin and returns the path; on failure or cancel,
 - `ponytail:` in `Logs.kt`: a re-request sent while the FC is still streaming an earlier one is dropped by the FC; the next quiet spell asks again (2 s lost, rarely).
 - Speed on real links: a telemetry radio (57 600 baud) gives about 5 kB/s, so a 20 MB log takes about an hour. The page says to use USB or Wi-Fi. Not measured on hardware.
 - Not done: a "download all", resuming a part-downloaded log, opening the logs folder from the app, MAVLink FTP downloads.
+
+## Pass 47 — Lossless frame delivery: the reader waits instead of dropping (2026-10-25)
+
+### What changed
+- `core/mavlink/.../BackpressureConnection.kt` (new): our own coroutine wrapper for a blocking `MavConnection`. It replaces mavlink-kotlin's `asCoroutine`. Its frame flow **suspends** the reader when full instead of dropping the oldest frame.
+- `core/mavlink/.../MavTransport.kt`: `openTransportConnection` wraps the transport in `BackpressureConnection` instead of `asCoroutine`.
+- `core/mavlink/.../ConnectionManager.kt`: `_frames` (the flow every vehicle collector reads) holds `FRAME_BUFFER` = 8192 frames, up from 256. It still drops the oldest frame when full (on purpose, see below).
+- `core/vehicle/.../Logs.kt`: `LogProtocol.CHUNK` is 1024 packets (92 KB), up from 128. The `ponytail:` note about the 256-frame buffer is gone; a new one says the chunk size is fixed.
+- Tests: `BackpressureConnectionTest` (new) and `ConnectionManagerTest.aBurstLargerThanTheOldBufferReachesASlowCollectorWhole` (new). In `LogsTest` the expected requests are now written in terms of `LogProtocol.CHUNK`, so retuning it doesn't mean rewriting the numbers.
+
+### How it works
+```
+socket ─▶ SigningSource ─▶ BufferedMavConnection.next()        (blocking, on the IO dispatcher)
+                              │
+                              ▼ emit: SUSPENDS when 64 frames are waiting  ◀── new: backpressure stops here
+               BackpressureConnection.mavFrame
+                              │
+                              ▼ (merge with the 1 s tick; channel of 64, also suspends)
+        ConnectionManager.runSession collector: link stats, heartbeats, vehicle list
+                              │
+                              ▼ emit: never suspends; drops the oldest beyond 8192
+               ConnectionManager.frames ─▶ VehicleRepository, tlog, Command/Mission/Param/Log protocols
+```
+1. The reader parses one frame and hands it on. If the manager's collector is 64 frames behind, the reader coroutine waits, so it stops reading the socket. Over TCP, the kernel's flow control then slows SITL (or the vehicle) down. Over UDP or serial the OS receive buffer overflows instead, which is what any busy reader causes, and those frames are counted as lost by `LinkStats`.
+2. The manager's collector does a few map lookups per frame and never waits on anything, so the reader is never held up for long.
+3. From the manager to the vehicle collectors, frames go through a big buffer that drops instead of waiting. A burst of up to 8192 frames (a log chunk is 1024) reaches every collector whole even when one is scheduled late.
+
+### Engineering learnings
+- **Find the drop point by counting, not by guessing.** The first fix was only the larger `_frames` buffer. On SITL it changed nothing: 512-packet chunks still ran at 57 kB/s. Two temporary counters (frames parsed by the reader vs frames reaching the manager's collector) showed 311 064 against 295 069: 5 % were lost *before* our buffer, inside mavlink-kotlin's coroutine adapter. Its `asCoroutine` reads into its own `MutableSharedFlow(extraBufferCapacity = 128, DROP_OLDEST)` (seen with `javap` on adapter-coroutines 1.2.15; the buffer can't be configured). With `BackpressureConnection` the two counts were equal in every run (e.g. 250 841 = 250 841). The counters were removed afterwards.
+- **Why SUSPEND at the reader but DROP_OLDEST at `_frames`.** The task offered both. They suit different places:
+  - Reader → manager: suspending is safe. Its only collector is cheap and never blocks. Suspending a TCP reader is real flow control, and for UDP and serial the loss just moves into the OS, as before. This is the only place where waiting can push back on the sender.
+  - Manager → collectors: dropping is safer. The manager's collector also runs the heartbeat timeout, the vehicle list and the 1 s stats tick. If `_frames` suspended, one stuck collector (say a tlog on a hung SD card) would freeze all of that, and the link would look "connected" with stale data forever. With a big drop-oldest buffer, a stuck collector only loses its own frames. I checked every collector: the Command, Mission, Param, Log and KftLogin listeners all `send` into `Channel.UNLIMITED` inboxes. `VehicleRepository` updates a `StateFlow` and `launch`es its session. `TlogFiles` writes to a buffered stream on the IO dispatcher. None of them waits on another frame inside `collect`, so none can deadlock the flow.
+  - A suspending `_frames` alone would not have worked. The manager would have blocked, and the adapter's 128-frame buffer upstream would have dropped instead, with an even smaller buffer.
+- **Replacing a library adapter, minimally.** `CoroutinesMavConnection` is an interface, so the replacement is about 40 lines and `ConnectionManager` and `FakeMavConnection` didn't change. It mirrors the adapter's observable behaviour: `connect` opens on IO and sets `Active`; an error while `Active` becomes `Failed(cause)`; `close` sets `Stopped` first, so the closed socket's exception isn't reported as a failure. Cancellation is rethrown, not turned into `Failed`. The three `send*` methods throw, because `FrameSink` is the only writer (ADR-006), the same as `FakeMavConnection`.
+- **`advanceUntilIdle` ignores `backgroundScope`.** The first version of `BackpressureConnectionTest` saw zero frames, because both coroutines run in `backgroundScope` and `advanceUntilIdle` doesn't run background work. `advanceTimeBy` does.
+- **Tests that prove they catch the bug.** Each new test was run against the old behaviour and failed: `ConnectionManagerTest` with `FRAME_BUFFER = 256`, and `BackpressureConnectionTest` with the library's `asCoroutine` in place, where it received only frames 872–999, the newest 128.
+- Ponytail review (lite) on the diff: lean already. The only note was the three identical `send*` error strings, and a shared helper would save no lines.
+
+### What to look at
+1. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/BackpressureConnection.kt:56`: the reader loop, and why `emit` suspending is the whole fix.
+2. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/ConnectionManager.kt:328`: `FRAME_BUFFER`'s KDoc, why the second buffer drops instead of waiting.
+3. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/Logs.kt:280`: `CHUNK` and the measured speeds.
+
+### Tests
+- `BackpressureConnectionTest.aSlowCollectorGetsEveryFrameOfABurst`: 1000 heartbeats are already waiting in an okio `Buffer` behind a real `BufferedMavConnection`, and a collector takes 1 ms per frame (virtual time). All 1000 arrive in order, then end of file gives `Failed`.
+- `ConnectionManagerTest.aBurstLargerThanTheOldBufferReachesASlowCollectorWhole`: 2000 LOG_DATA in zero virtual time, read through `ConnectionManager.frames` by a 1 ms/frame collector. All 2000 arrive in order.
+- `LogsTest`: the same 13 cases. Log 2 is now 8 whole chunks + 7 840 bytes (745 120 bytes), and its expected requests are computed from `CHUNK`.
+- `./gradlew check`: BUILD SUCCESSFUL, no new warnings.
+- **SITL, run** (`tools/sitl/start-sitl.ps1`, `wait_ready.py 5763`, then `KFT_SITL=127.0.0.1:5762 KFT_SITL_LOGDIR="%USERPROFILE%\Documents\Mission Planner\sitl\copter\logs" ./gradlew :core:vehicle:jvmTest --tests '*SitlCheck.logList*'`). Log 8 is 22 431 669 bytes. Every download below was byte-for-byte identical to the `.BIN` on disk:
+
+  | chunk (packets) | Pass 46 (adapter, 256 buffer) | `_frames` 8192 only | + BackpressureConnection |
+  |---|---|---|---|
+  | 128  | 358 kB/s | 340 kB/s | 480 kB/s |
+  | 256  | – | – | 930 kB/s |
+  | 512  | 59 kB/s | 57 kB/s | 1628 kB/s |
+  | 1024 | – | – | 2961 kB/s (**chosen**) |
+  | 2048 | – | – | 3985 kB/s |
+
+  Speed now grows with the chunk size: what is left is ArduPilot's per-request round trip, not lost frames. 1024 is 8× Pass 46. 2048 would be faster, but progress is reported once per chunk, and over a 57 600-baud radio (~5 kB/s) one 2048-packet chunk takes ~37 s.
+- **Whole `SitlCheck` suite against the same SITL**, to check that the new reader didn't break the other protocols: `startupRequestsBringVersionAndHome`, `missionUploadReadBackCompareAndClear`, `paramsDownloadSetReadBackAndArmedRefusal`, `preArmReportListsEveryFailureAndClears` and `logListAndDownloadMatchTheFileOnDisk` (2640 kB/s in that run) all passed. `threeVehiclesEachGetAndFlyTheirOwnMission` skipped itself (needs `KFT_SITL_FLEET` and `-Count 3`).
+
+### Safety
+- Receive path only. Nothing about what is sent, or when, changed: the TX allowlist, `MavTxGateway` and `FrameSink` are untouched, and S9 is unchanged.
+- It makes the GCS more reliable at hearing replies: under burst load, COMMAND_ACK, MISSION_ACK and PARAM_VALUE could be dropped before, and now aren't on TCP.
+- The new risk is one slow component slowing the link, and it is bounded. Only the manager's own (cheap) collector can make the reader wait. Every vehicle-level collector sits behind the drop-oldest buffer and can't stall the heartbeat watchdog.
+
+### Open questions / next
+- `ponytail:` in `ConnectionManager.kt`: `FRAME_BUFFER` is bounded, so a collector that is slower than the link *on average* (not just during a burst) still loses frames. None is today. If one ever is, the upgrade is a buffer per collector.
+- `ponytail:` in `Logs.kt`: `CHUNK` is fixed. Sizing it from the measured rate would give both top speed on Wi-Fi/USB and frequent progress on a radio.
+- Still open from Pass 46: the `ponytail:` about a re-request being ignored while the FC is still streaming.
+- Not measured: real hardware over a radio or serial, where the OS buffer (not TCP) is what absorbs a paused reader; and an Android tablet, which has less CPU for the manager's collector. On TCP a slow collector only slows the download down.

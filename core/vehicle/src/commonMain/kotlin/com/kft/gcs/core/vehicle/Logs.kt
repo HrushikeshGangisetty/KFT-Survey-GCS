@@ -277,13 +277,14 @@ internal class LogProtocol(
         const val BIN = 90
 
         /**
-         * 128 packets, 11.5 KB. ArduPilot sends a whole request as one burst, and the link's shared frame flow holds 256
-         * frames before it drops the oldest (ConnectionManager `_frames`). A bigger burst overflows it on a fast link, and
-         * every lost packet costs a quiet spell. Measured on SITL over TCP, 22.4 MB log: 512 packets per chunk 59 kB/s,
-         * 128 → 358 kB/s, 64 → 261 kB/s (more round trips).
-         * ponytail: tuned to that 256-frame buffer; a lossless (suspending) frame flow would allow bigger chunks.
+         * 1024 packets, 92 KB. Since Pass 47 no frame is lost between the socket and this protocol, so the chunk size
+         * only trades round trips (ArduPilot answers each request a main loop or so late) against how often progress
+         * moves. Measured on SITL over TCP, 22.4 MB log: 128 packets 480 kB/s, 256 → 930, 512 → 1628, 1024 → 2961,
+         * 2048 → 3985 kB/s. Progress is reported per chunk, and over a 57 600-baud radio (~5 kB/s) 1024 packets take
+         * about 18 s, so bigger would leave the bar still for too long.
+         * ponytail: fixed size; sizing it from the measured rate would get both speed on Wi-Fi and steady progress on a radio.
          */
-        const val CHUNK = BIN * 128
+        const val CHUNK = BIN * 1024
 
         /** ArduPilot sends one LOG_ENTRY per main-loop pass (hundreds a second); 2 s of nothing means it is done or lost. */
         val LIST_TIMEOUT = 2.seconds

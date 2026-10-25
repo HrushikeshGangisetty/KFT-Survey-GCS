@@ -31,10 +31,16 @@ import kotlinx.coroutines.test.runTest
  * d91a40ef), in virtual time. The FC pushes every packet of a request at once, as fast as the link allows.
  */
 class LogsTest {
+    private companion object {
+        /** One chunk's bytes, so the expected requests follow when [LogProtocol.CHUNK] is retuned. */
+        const val C = LogProtocol.CHUNK.toLong()
+        const val LOG2_SIZE = 8 * C + 7_840
+    }
+
     /** Logs on the fake SD card, by list id (1 = oldest). Contents are a fixed pattern, so any misplaced byte shows. */
     private val logs = mapOf(
         1 to ByteArray(500) { (it * 7).toByte() },
-        2 to ByteArray(100_000) { (it * 31 + it / 256).toByte() }, // nine chunks: 8 × 11 520 + 7 840
+        2 to ByteArray(LOG2_SIZE.toInt()) { (it * 31 + it / 256).toByte() }, // nine chunks: 8 whole + 7 840 bytes
         3 to ByteArray(90 * 3) { (255 - it).toByte() },             // ends exactly on a packet boundary
     )
     private val times = mapOf(1 to 1_761_383_642L, 2 to 0L, 3 to 1_761_390_000L)
@@ -81,7 +87,7 @@ class LogsTest {
     fun listsEveryLogOldestFirstWithItsTime() = runTest {
         val list = protocol.list(target).getOrThrow()
         assertEquals(
-            listOf(FlightLog(1, 500, 1_761_383_642L), FlightLog(2, 100_000, null), FlightLog(3, 270, 1_761_390_000L)),
+            listOf(FlightLog(1, 500, 1_761_383_642L), FlightLog(2, LOG2_SIZE, null), FlightLog(3, 270, 1_761_390_000L)),
             list,
             "time_utc 0 means the FC had no clock: null",
         )
@@ -112,16 +118,16 @@ class LogsTest {
         assertEquals(1 + LogProtocol.RETRIES, fc.sentOf<LogRequestList>().size)
     }
 
-    /** Nine chunks (128 packets = 11 520 bytes each, the last 7 840), each asked for once, written in order; then LOG_REQUEST_END. */
+    /** Nine chunks (8 whole, the last 7 840 bytes), each asked for once, written in order; then LOG_REQUEST_END. */
     @Test
     fun aCleanDownloadIsByteForByteTheLog() = runTest {
         val progress = mutableListOf<Long>()
         assertContentEquals(logs.getValue(2), download(2, progress).getOrThrow())
         assertEquals(
-            (0 until 8).map { it * 11_520L to 11_520L } + (92_160L to 7_840L),
+            (0 until 8).map { it * C to C } + (8 * C to 7_840L),
             fc.sentOf<LogRequestData>().map { it.ofs.toLong() to it.count.toLong() },
         )
-        assertEquals((1..8).map { it * 11_520L } + 100_000L, progress)
+        assertEquals((1..8).map { it * C } + LOG2_SIZE, progress)
         assertIs<LogRequestEnd>(fc.sent.last())
         assertEquals(0L, testScheduler.currentTime, "no waiting when nothing is lost")
     }
@@ -132,16 +138,16 @@ class LogsTest {
      */
     @Test
     fun lostPacketsAreAskedForAgain() = runTest {
-        drop += listOf(2 to 900L, 2 to 9_000L, 2 to 45_990L, 2 to 99_990L)
+        drop += listOf(2 to 900L, 2 to 9_000L, 2 to 4 * C - 90, 2 to LOG2_SIZE - 10)
         assertContentEquals(logs.getValue(2), download(2).getOrThrow())
         val requests = fc.sentOf<LogRequestData>().map { it.ofs.toLong() to it.count.toLong() }
         assertEquals(
             listOf(
-                0L to 11_520L, 900L to 8_190L,           // chunk 0 lost bins 10 and 100: bytes 900 up to the end of bin 100 (9 090)
-                11_520L to 11_520L, 23_040L to 11_520L,
-                34_560L to 11_520L, 45_990L to 90L,      // chunk 3 lost its last bin, 45 990..46 079
-                46_080L to 11_520L, 57_600L to 11_520L, 69_120L to 11_520L, 80_640L to 11_520L,
-                92_160L to 7_840L, 99_990L to 10L,       // chunk 8: only the log's last 10 bytes
+                0L to C, 900L to 8_190L,                 // chunk 0 lost bins 10 and 100: bytes 900 up to the end of bin 100 (9 090)
+                C to C, 2 * C to C,
+                3 * C to C, 4 * C - 90 to 90L,           // chunk 3 lost its last bin
+                4 * C to C, 5 * C to C, 6 * C to C, 7 * C to C,
+                8 * C to 7_840L, LOG2_SIZE - 10 to 10L,  // chunk 8: only the log's last 10 bytes (7 840 = 87 × 90 + 10)
             ),
             requests,
         )

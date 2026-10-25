@@ -1,7 +1,6 @@
 package com.kft.gcs.core.mavlink
 
 import com.divpundir.mavlink.adapters.coroutines.CoroutinesMavConnection
-import com.divpundir.mavlink.adapters.coroutines.asCoroutine
 import com.divpundir.mavlink.connection.AbstractMavConnection
 import com.divpundir.mavlink.connection.BufferedMavConnection
 import com.divpundir.mavlink.connection.MavConnection
@@ -92,8 +91,8 @@ internal class OpenedLink(
 )
 
 /**
- * Builds the platform transport for [config], wrapped for coroutines, with its [FrameSink]. Socket code lives in
- * `jvmCommonMain`. [keyring] is [NoSigning] until the vault exists (S4), which keeps every frame unsigned.
+ * Builds the platform transport for [config], wrapped for coroutines ([BackpressureConnection]), with its [FrameSink].
+ * Socket code lives in `jvmCommonMain`. [keyring] is [NoSigning] until the vault exists (S4), which keeps every frame unsigned.
  */
 internal fun openTransportConnection(
     config: LinkConfig,
@@ -104,7 +103,7 @@ internal fun openTransportConnection(
 ): OpenedLink {
     val transport = TransportMavConnection(createTransport(config, serialPorts, t12), keyring, { Clock.System.now().toEpochMilliseconds() }, ioDispatcher)
     return OpenedLink(
-        transport.asCoroutine(ioDispatcher),
+        BackpressureConnection(transport, ioDispatcher),
         { checkNotNull(transport.frameSink) { "the link has not opened yet" } },
         { checkNotNull(transport.signingStatus) { "the link has not opened yet" } },
     )

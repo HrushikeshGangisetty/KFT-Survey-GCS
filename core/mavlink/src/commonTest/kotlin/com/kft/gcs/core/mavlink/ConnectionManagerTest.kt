@@ -1,5 +1,6 @@
 package com.kft.gcs.core.mavlink
 
+import com.divpundir.mavlink.definitions.common.LogData
 import com.divpundir.mavlink.definitions.common.MissionCount
 import com.divpundir.mavlink.definitions.common.ParamRequestList
 import com.divpundir.mavlink.definitions.common.MissionSetCurrent
@@ -18,7 +19,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -357,5 +360,37 @@ class ConnectionManagerTest {
         manager.disconnect()
         runCurrent()
         assertEquals(21L, keyring.timestamps["drone-a"], "and once more as the link closes")
+    }
+
+    /**
+     * Pass 47: a burst bigger than the old 256-frame buffer, read by a collector that takes 1 ms per frame, arrives
+     * whole and in order. With the old buffer this test fails: most of the burst never reaches the collector.
+     */
+    @Test
+    fun aBurstLargerThanTheOldBufferReachesASlowCollectorWhole() = runTest {
+        val link = FakeMavConnection()
+        val manager = manager(link)
+        manager.connect(udp)
+        runCurrent()
+        val got = mutableListOf<UInt>()
+        backgroundScope.launch {
+            manager.frames.collect { frame ->
+                (frame.message as? LogData)?.let { got += it.ofs }
+                delay(1.milliseconds)
+            }
+        }
+        runCurrent()
+
+        // 2000 LOG_DATA arrive in no virtual time, as ArduPilot sends one log chunk. The fake link holds 64 at a time,
+        // so they go in 50 at a time with the reader draining in between; the slow collector gets no time meanwhile.
+        val burst = 2000
+        for (i in 0 until burst) {
+            link.receive(LogData(id = 1u, ofs = i.toUInt() * 90u, count = 90u), seq = i)
+            if (i % 50 == 49) runCurrent()
+        }
+        runCurrent()
+        advanceTimeBy((burst + 10).milliseconds) // 1 ms per frame, then some
+
+        assertEquals((0 until burst).map { it.toUInt() * 90u }, got)
     }
 }

@@ -168,8 +168,10 @@ class ConnectionManager internal constructor(
     private val _state = MutableStateFlow<LinkState>(LinkState.Disconnected)
     override val state: StateFlow<LinkState> = _state.asStateFlow()
 
-    // Telemetry consumers must never slow the reader down, so a slow collector loses the oldest frames instead.
-    private val _frames = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    // A collector must never stall the link (heartbeats, link state and the 1 s tick all run in the one collector
+    // that emits here), so overflow drops the oldest frame rather than suspending. The buffer is large so a burst
+    // (a log chunk, a parameter list) still reaches every collector whole; see [FRAME_BUFFER].
+    private val _frames = MutableSharedFlow<MavFrame<out MavMessage<*>>>(extraBufferCapacity = FRAME_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     override val frames: SharedFlow<MavFrame<out MavMessage<*>>> = _frames.asSharedFlow()
 
     // The gateway asks about the vehicle it is sending to at send time, from the same heartbeat the UI shows.
@@ -322,6 +324,20 @@ class ConnectionManager internal constructor(
     }
 
     companion object {
+        /**
+         * Frames [frames] holds for a collector that is behind (Pass 47). The old 256 lost LOG_DATA, and with it
+         * whatever ACK or PARAM_VALUE sat in the same burst, whenever a collector was scheduled late. 8192 frames is
+         * about 0.4 s of the fastest stream seen (SITL over TCP, ~22 000 LOG_DATA/s). At worst it holds about
+         * 16 MB (a decoded LOG_DATA is roughly 2 KB, its 90 bytes boxed one by one), and only while a collector is behind.
+         *
+         * Not SUSPEND, unlike the reader before it ([BackpressureConnection]): the collector that emits here also
+         * handles heartbeats, link state and the 1 s tick, so one stuck collector (a hung disk under the tlog, say)
+         * must cost that collector frames, not freeze the whole link.
+         * ponytail: bounded, so a collector slower than the link on average still loses frames. None is today (they
+         * all hand frames to unlimited channels or update a StateFlow); a per-collector buffer is the upgrade.
+         */
+        internal const val FRAME_BUFFER = 8192
+
         /** See [Heard.isDuplicate]. One sender gives 10 or 11 heartbeats in 10 s, two give about 20. */
         val DUPLICATE_WINDOW = 10.seconds
         const val DUPLICATE_BEATS = 16
