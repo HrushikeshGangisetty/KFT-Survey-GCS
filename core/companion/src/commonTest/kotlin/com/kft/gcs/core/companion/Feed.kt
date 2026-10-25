@@ -34,9 +34,19 @@ internal object Feed {
             "reset_counter":$reset,"last_visual_update_pi_ns":${ns(measurementS)}}}"""
     }
 
-    fun health(status: String = "OK", reason: String? = null, runId: String = "synthetic-test-seed0") =
-        """{"type":"health","msg":{"schema_version":"0.2","source":"synthetic","run_id":"$runId","component":"vio",
-            "status":"$status","reason":${reason?.let { "\"$it\"" }},"last_input_age_ms":50.0,"cpu_pct":40.0,"queue_len":0}}"""
+    /** [measurementS] is the Pi time the status was evaluated (default: the tick); [version] 0.3 or 0.4 are readable. */
+    fun health(
+        status: String = "OK",
+        reason: String? = null,
+        runId: String = "synthetic-test-seed0",
+        tickS: Double = 0.0,
+        measurementS: Double = tickS,
+        version: String = "0.4",
+        extra: String = "",
+    ) =
+        """{"type":"health","msg":{"schema_version":"$version","source":"synthetic","run_id":"$runId","component":"vio",
+            "status":"$status","reason":${reason?.let { "\"$it\"" }},"last_input_age_ms":50.0,"cpu_pct":40.0,"queue_len":0,
+            "measurement_time_pi_ns":${ns(measurementS)}$extra}}"""
 
     fun mapFix(tickS: Double, lat: Double, lon: Double, accepted: Boolean = true, reason: String? = null) =
         """{"type":"map_fix","msg":{"schema_version":"0.2","source":"synthetic","run_id":"synthetic-test-seed0",

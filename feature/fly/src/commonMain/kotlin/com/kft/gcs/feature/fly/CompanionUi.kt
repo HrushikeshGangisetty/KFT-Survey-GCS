@@ -96,8 +96,9 @@ fun companionUi(s: CompanionState, config: CompanionConfig, now: Duration, selec
         ),
         health = if (!show) emptyList() else s.health.keys.sorted().map { name ->
             val h = s.health.getValue(name).record
-            val age = s.healthAge(name, now)!!
-            val stale = age > config.healthTimeout
+            val age = s.healthAge(name, now)
+            // No Pi clock yet means the age is unknown, which is not fresh.
+            val stale = age == null || age > config.healthTimeout
             Line(
                 name,
                 listOfNotNull(
@@ -107,7 +108,7 @@ fun companionUi(s: CompanionState, config: CompanionConfig, now: Duration, selec
                     "cpu ${h.cpuPct.roundToInt()}%",
                     "queue ${h.queueLen}",
                     h.lastInputAgeMs?.let { "input ${it.roundToInt()} ms" },
-                    "${seconds(age)} since received",
+                    age?.let { "${seconds(it)} old" } ?: "age unknown",
                 ).joinToString(" · "),
                 when {
                     h.status == HealthStatus.FAILED -> Status.CRITICAL

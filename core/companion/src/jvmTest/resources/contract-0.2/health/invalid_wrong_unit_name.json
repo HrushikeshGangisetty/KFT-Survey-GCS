@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.2",
+  "schema_version": "0.4",
   "source": "synthetic",
   "run_id": "example-run-001",
   "component": "vio",
@@ -7,5 +7,6 @@
   "reason": null,
   "cpu_pct": 145.0,
   "queue_len": 2,
-  "last_input_age_s": 12.5
+  "last_input_age_s": 12.5,
+  "measurement_time_pi_ns": 912345600000
 }

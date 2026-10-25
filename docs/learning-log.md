@@ -4596,3 +4596,32 @@ open("COM_X") ──▶ SerialPort.getCommPort("COM_X")
 
 ### Open questions / next
 - None for this fix. The signing branch (PR #1) was blocked by the same red CI and can be rebased once this merges.
+
+## Pass 43 — WE-7: companion panel reads health with `measurement_time_pi_ns` (2026-10-25)
+
+### What changed
+- `core/companion/.../Contract.kt`: schema versions are now per record type (`READ_VERSIONS`): odometry 0.2, map_fix 0.2, **health 0.3 and 0.4**. `Health` gains `measurementTimePiNs` (required) and optional `signing`.
+- `CompanionState.kt`: `healthAge` is now Pi now − health measurement time (was: time since arrival). A health older than the stored one for the same component is rejected.
+- `feature/fly/.../CompanionUi.kt`: unknown age (no Pi clock yet) counts as STALE; the line says "N s old", not "since received".
+- Tests and fixtures: `Feed.health`, `CompanionStateTest`, `CompanionViewModelTest` (v0.4 fixtures, frozen-time STALE), `ContractExamplesTest` (health examples replaced by visionnav v0.4 examples from GNSS-Denied `f7e9918`: 30 examples).
+
+### How it works
+```
+health JSON ─ parseRecord ─▶ version in {0.3,0.4}? ─▶ strict decode ─▶ reduce ─▶ healthAge ─▶ STALE?
+                                                       (time required)   (not backwards)  PiNow − measurement_time
+```
+Pi now still comes from the newest odometry `publish_time_pi_ns` plus GCS time since it arrived (unchanged).
+
+### Engineering learnings
+- **Decision: health 0.2 is dropped, not kept as an arrival-time fallback.** Every producer in GNSS-Denied now writes 0.4, and the arrival rule is exactly the flaw the field fixes (a delayed or replayed message looks fresh). A second code path would also be the one that is never tested against a real producer. Cost: an old 0.2 Pi shows as rejected records, visible in the panel's Rejected line.
+- Contract is at health 0.4 (not 0.3 as the task text said): 0.3 added the time, 0.4 added optional `signing`. Reading both costs nothing since 0.3 is a subset.
+- Map_fix 0.3 (new required fields) is **not** done here; the panel still rejects it. Separate task.
+
+### What to look at
+- `Contract.kt` `READ_VERSIONS` and `Health`; `CompanionState.kt` `healthAge`.
+
+### Tests
+- `healthAgeIsFromMeasurementTime`, `frozenHealthMeasurementTimeGoesStale` (with fresh control), `healthAgeIsUnknownWithoutPiClock`, `healthMeasurementTimeGoingBackwardsIsRejected`, `healthVersionsAndMalformed` (0.3, 0.4+signing ok; 0.2, missing time, float time, bad signing rejected), `frozenHealthMeasurementTimeShowsStale` (panel line), contract examples. `./gradlew check` passes.
+
+### Open questions / next
+- map_fix 0.3 support. GNSS-Denied FLOW.md line about "0.2 only" updated to match.

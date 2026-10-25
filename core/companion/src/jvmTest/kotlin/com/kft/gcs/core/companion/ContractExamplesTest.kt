@@ -16,7 +16,7 @@ class ContractExamplesTest {
     @Test
     fun everyExampleIsReadAsTheContractSays() {
         val files = listOf("local_odometry", "health", "map_fix").flatMap { type -> File(root, type).listFiles()!!.map { type to it } }
-        assertEquals(24, files.size, "12 odometry + 5 health + 7 map_fix examples")
+        assertEquals(30, files.size, "12 odometry + 11 health (v0.4) + 7 map_fix examples")
         for ((type, file) in files) {
             val parsed = parseRecord("""{"type":"$type","msg":${file.readText()}}""")
             if (file.name.startsWith("valid")) assertIs<Parsed.Ok>(parsed, "$type/${file.name}: $parsed")
@@ -33,6 +33,7 @@ class ContractExamplesTest {
         assertEquals("negative variance", reason("local_odometry", "invalid_negative_variance.json"))
         assertEquals("unknown covariance with values", reason("local_odometry", "invalid_unknown_covariance_as_zero.json"))
         assertEquals("health FAILED without a reason", reason("health", "invalid_failed_without_reason.json"))
+        assertTrue(reason("health", "invalid_missing_measurement_time.json").startsWith("malformed"), "measurement_time is required")
         assertEquals("rejected fix without a reason", reason("map_fix", "invalid_rejected_without_reason.json"))
         assertTrue(reason("local_odometry", "invalid_wrong_unit_name.json").startsWith("malformed"), "an unknown field is an error")
     }

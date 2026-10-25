@@ -83,7 +83,7 @@ class CompanionViewModelTest {
     }
 
     /** Plays 20 Hz odometry from [fromS] to [toS] (scenario seconds) in virtual time, health every 0.5 s. */
-    private fun TestScope.play(fromS: Double, toS: Double, health: (Double) -> String? = { okHealth }, odometry: (Double) -> String) {
+    private fun TestScope.play(fromS: Double, toS: Double, health: (Double) -> String? = { t -> health("OK", null, t) }, odometry: (Double) -> String) {
         var k = (fromS * 20).toInt()
         while (k / 20.0 <= toS + 1e-9) {
             val t = k / 20.0
@@ -109,15 +109,27 @@ class CompanionViewModelTest {
         assertEquals(Status.OK, ui.health.single().status, "health still says OK: the panel must not trust it for freshness")
     }
 
+    /** WE-7: health keeps arriving at 2 Hz but the Pi stops advancing its measurement time at 5 s: the line says STALE. */
+    @Test
+    fun frozenHealthMeasurementTimeShowsStale() = runTest(dispatcher) {
+        val s = setup()
+        play(0.0, 4.95) { t -> odom(t) }
+        assertEquals(Status.OK, s.companion.state.value.health.single().status)
+        play(5.0, 7.0, health = { health("OK", null, 5.0) }) { t -> odom(t) }
+        val line = s.companion.state.value.health.single()
+        assertEquals(Status.WARN, line.status)
+        assertTrue(line.value.startsWith("STALE · OK"), line.value)
+    }
+
     @Test
     fun lostResetScenarioShowsLostThenTheReset() = runTest(dispatcher) {
         val s = setup()
         play(0.0, 9.95) { t -> odom(t, x = t) }
-        play(10.0, 12.95, health = { degraded }) { t -> odom(t, state = "LOST") }
+        play(10.0, 12.95, health = { t -> health("DEGRADED", "\"tracking lost\"", t) }) { t -> odom(t, state = "LOST") }
         var ui = s.companion.state.value
         assertEquals(Line("VIO", "LOST", Status.CRITICAL), ui.vio)
         assertEquals(Status.WARN, ui.health.single().status)
-        play(13.0, 13.45, health = { degraded }) { t -> odom(t, state = "INITIALIZING") }
+        play(13.0, 13.45, health = { t -> health("DEGRADED", "\"tracking lost\"", t) }) { t -> odom(t, state = "INITIALIZING") }
         assertEquals(Line("VIO", "INITIALIZING", Status.WARN), s.companion.state.value.vio)
         play(13.5, 14.0) { t -> odom(t, x = t - 13.5, reset = 1) }
         ui = s.companion.state.value
@@ -199,8 +211,6 @@ class CompanionViewModelTest {
     private fun position(altMm: Int): MavFrame<out MavMessage<*>> =
         Frame(GlobalPositionInt(lat = -353632610, lon = 1491652300, alt = 584_000 + altMm, relativeAlt = altMm, hdg = 0u))
 
-    private val okHealth = health("OK", null)
-    private val degraded = health("DEGRADED", "\"tracking lost\"")
 }
 
 private object NoReplySender : MavSender {
@@ -230,9 +240,10 @@ private fun odom(t: Double, measurementS: Double = t, x: Double = 0.0, state: St
         "reset_counter":$reset,"last_visual_update_pi_ns":${ns(measurementS)}}}"""
 }
 
-private fun health(status: String, reason: String?) =
-    """{"type":"health","msg":{"schema_version":"0.2","source":"synthetic","run_id":"synthetic-test","component":"vio",
-        "status":"$status","reason":$reason,"last_input_age_ms":50.0,"cpu_pct":40.0,"queue_len":0}}"""
+private fun health(status: String, reason: String?, t: Double) =
+    """{"type":"health","msg":{"schema_version":"0.4","source":"synthetic","run_id":"synthetic-test","component":"vio",
+        "status":"$status","reason":$reason,"last_input_age_ms":50.0,"cpu_pct":40.0,"queue_len":0,
+        "measurement_time_pi_ns":${ns(t)}}}"""
 
 private fun mapFix(t: Double, lat: Double) =
     """{"type":"map_fix","msg":{"schema_version":"0.2","source":"synthetic","run_id":"synthetic-test",

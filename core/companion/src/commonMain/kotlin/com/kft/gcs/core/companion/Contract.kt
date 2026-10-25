@@ -10,7 +10,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /*
- * The VisionNav companion contracts, schema_version 0.2 (visionnav repo, contracts/schemas/<name>.schema.json, approved
+ * The VisionNav companion contracts, schema_version 0.2 for odometry and map_fix, 0.3/0.4 for health (visionnav repo, contracts/schemas/<name>.schema.json, approved
  * 2026-10-17). Field names are the wire names, so each class reads side by side with its schema. Only the three
  * records the panel shows are here: local_odometry, health and map_fix.
  *
@@ -19,8 +19,17 @@ import kotlinx.serialization.json.JsonPrimitive
  * ("TRACKING must have a finite pose") or the consumer-only checks listed in contracts/README.md.
  */
 
-/** The schema version this GCS reads. Anything else is rejected, never guessed at (contracts/README.md). */
-const val CONTRACT_VERSION = "0.2"
+/**
+ * The schema versions this GCS reads, per record type (they moved separately: contracts/README.md "Changes").
+ * Anything else is rejected, never guessed at. Health 0.2 is dropped on purpose (WE-7): it has no measurement time,
+ * so its age could only come from arrival, which a delayed or replayed message fakes. 0.3 and 0.4 differ only by
+ * the optional `signing` field.
+ */
+private val READ_VERSIONS = mapOf(
+    "local_odometry" to setOf("0.2"),
+    "health" to setOf("0.3", "0.4"),
+    "map_fix" to setOf("0.2"),
+)
 
 /** Where a record came from. Shown on the panel, so synthetic or replayed data never looks live. */
 @Serializable
@@ -67,7 +76,14 @@ data class LocalOdometry(
     @SerialName("last_visual_update_pi_ns") val lastVisualUpdatePiNs: Long?,
 ) : CompanionRecord
 
-/** Periodic status of one Pi component (health.schema.json). It carries no timestamp in 0.2 (contracts/README.md "Open"). */
+/** Signing state a component reports (health 0.4, optional). ON means configured locally, not accepted by the FC. */
+@Serializable
+enum class SigningState { OFF, ON, KEY_MISSING }
+
+/**
+ * Periodic status of one Pi component (health.schema.json, 0.3/0.4). [measurementTimePiNs] is the Pi CLOCK_MONOTONIC
+ * time the status was evaluated; the panel judges staleness from it, never from arrival.
+ */
 @Serializable
 data class Health(
     @SerialName("schema_version") val schemaVersion: String,
@@ -79,6 +95,8 @@ data class Health(
     @SerialName("last_input_age_ms") val lastInputAgeMs: Double?,
     @SerialName("cpu_pct") val cpuPct: Double,
     @SerialName("queue_len") val queueLen: Int,
+    @SerialName("measurement_time_pi_ns") val measurementTimePiNs: Long,
+    val signing: SigningState? = null,
 ) : CompanionRecord
 
 /** One map-matching attempt, accepted or not (map_fix.schema.json). It describes the query image's instant, not now. */
@@ -120,7 +138,8 @@ fun parseRecord(text: String): Parsed {
         val envelope = json.decodeFromString<Envelope>(text)
         // Checked before decoding, so a producer on another version gets this reason instead of a field error.
         val version = (envelope.msg["schema_version"] as? JsonPrimitive)?.content
-        if (version != CONTRACT_VERSION) return Parsed.Rejected("schema_version $version, expected $CONTRACT_VERSION")
+        val readable = READ_VERSIONS[envelope.type] ?: return Parsed.Rejected("unknown type ${envelope.type}")
+        if (version !in readable) return Parsed.Rejected("schema_version $version, expected ${readable.joinToString(" or ")}")
         val serializer: KSerializer<out CompanionRecord> = when (envelope.type) {
             "local_odometry" -> LocalOdometry.serializer()
             "health" -> Health.serializer()
@@ -158,7 +177,7 @@ internal fun validate(r: CompanionRecord): String? {
         is Health -> when {
             !COMPONENT.matches(r.component) -> "bad component name"
             r.status != HealthStatus.OK && r.reason.isNullOrEmpty() -> "health ${r.status} without a reason"
-            r.cpuPct < 0 || r.queueLen < 0 || (r.lastInputAgeMs ?: 0.0) < 0 -> "negative health value"
+            r.cpuPct < 0 || r.queueLen < 0 || (r.lastInputAgeMs ?: 0.0) < 0 || r.measurementTimePiNs < 0 -> "negative health value"
             else -> null
         }
         is MapFix -> when {

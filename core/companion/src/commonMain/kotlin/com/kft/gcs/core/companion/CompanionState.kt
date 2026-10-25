@@ -83,7 +83,7 @@ fun CompanionState.reduce(parsed: Parsed, now: Duration): CompanionState = when 
 
 private fun CompanionState.apply(r: CompanionRecord, now: Duration): CompanionState = when (r) {
     is LocalOdometry -> odometry(r, now)
-    is Health -> copy(health = health + (r.component to Received(r, now)))
+    is Health -> health(r, now)
     is MapFix -> copy(
         mapFix = r,
         fixesAccepted = fixesAccepted + if (r.accepted) 1 else 0,
@@ -109,6 +109,14 @@ private fun CompanionState.odometry(r: LocalOdometry, now: Duration): CompanionS
         resetsSeen = resetsSeen + if (reset) 1 else 0,
         track = if (tracking) track.appendPoint(TrackPoint(r.positionM[0]!!, r.positionM[1]!!, r.resetCounter)) else track,
     )
+}
+
+private fun CompanionState.health(r: Health, now: Duration): CompanionState {
+    // Older evaluation time for the same component: reordered or replayed. A frozen (equal) one is accepted so its age
+    // shows; refusing only the strictly older keeps the newest status from being overwritten by a late one.
+    val last = health[r.component]?.record
+    if (last != null && r.measurementTimePiNs < last.measurementTimePiNs) return reject("health measurement time went backwards")
+    return copy(health = health + (r.component to Received(r, now)))
 }
 
 private fun CompanionState.reject(reason: String) = copy(rejected = rejected + 1, lastRejection = reason)
@@ -141,7 +149,9 @@ fun CompanionState.mapFixAge(now: Duration): Duration? =
     mapFix?.let { f -> piNowNs(now)?.let { (it - f.queryExposureTimePiNs).nanoseconds } }
 
 /**
- * Time since [component]'s health last arrived. Arrival time, because health has no timestamp in contract 0.2;
- * the panel labels it "since received". Proposed fix is in visionnav contracts/README.md "Open".
+ * How old [component]'s health status is: Pi now minus its measurement_time (WE-7: not arrival). Null if there is no
+ * such health yet or no Pi clock yet (no odometry has arrived); unknown, not fresh. Keeps growing when the Pi freezes
+ * the time while messages keep coming.
  */
-fun CompanionState.healthAge(component: String, now: Duration): Duration? = health[component]?.let { now - it.at }
+fun CompanionState.healthAge(component: String, now: Duration): Duration? =
+    health[component]?.let { h -> piNowNs(now)?.let { (it - h.record.measurementTimePiNs).nanoseconds } }

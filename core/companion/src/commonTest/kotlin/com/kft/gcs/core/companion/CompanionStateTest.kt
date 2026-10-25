@@ -2,7 +2,9 @@ package com.kft.gcs.core.companion
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -131,11 +133,50 @@ class CompanionStateTest {
         assertEquals(Connection.Connected, s.connection)
     }
 
-    /** Health has no timestamp in contract 0.2, so its age is from arrival. */
+    /** Health age is Pi now (from odometry's publish time) minus the health measurement time, not arrival. */
     @Test
-    fun healthAgeIsSinceArrival() {
-        val s = CompanionState().feed(Feed.health(), 3.0).feed(Feed.health("DEGRADED", "tracking lost"), 3.5)
+    fun healthAgeIsFromMeasurementTime() {
+        // Odometry tick 3.0 arrives at 3.01; Pi now at GCS 5.0 is 3.005 + (5.0 - 3.01) = 4.995 s. Health measured at 3.5.
+        val s = CompanionState().feed(Feed.odometry(3.0), 3.01).feed(Feed.health("DEGRADED", "tracking lost", measurementS = 3.5), 3.51)
         assertEquals(HealthStatus.DEGRADED, s.health.getValue("vio").record.status)
-        assertEquals(1.5.seconds, s.healthAge("vio", 5.0.seconds))
+        assertEquals((4.995 - 3.5).seconds, s.healthAge("vio", 5.0.seconds))
+    }
+
+    /** Messages keep arriving but the Pi's evaluation time is frozen at 2.0 s: the age grows, so the panel says STALE. */
+    @Test
+    fun frozenHealthMeasurementTimeGoesStale() {
+        var s = CompanionState().odometry(0.0, 6.0) { t -> Feed.odometry(t) }
+        for (k in 4..12) s = s.feed(Feed.health(tickS = k * 0.5, measurementS = 2.0), k * 0.5 + 0.01)
+        val timeout = CompanionConfig().healthTimeout
+        assertEquals(true, s.healthAge("vio", 6.01.seconds)!! > timeout, "frozen time must read older than $timeout")
+        // Control: the same stream with an advancing time stays fresh.
+        var fresh = CompanionState().odometry(0.0, 6.0) { t -> Feed.odometry(t) }
+        for (k in 4..12) fresh = fresh.feed(Feed.health(tickS = k * 0.5), k * 0.5 + 0.01)
+        assertEquals(true, fresh.healthAge("vio", 6.01.seconds)!! < timeout)
+    }
+
+    @Test
+    fun healthAgeIsUnknownWithoutPiClock() {
+        assertNull(CompanionState().feed(Feed.health(), 1.0).healthAge("vio", 2.0.seconds))
+    }
+
+    @Test
+    fun healthMeasurementTimeGoingBackwardsIsRejected() {
+        val s = CompanionState().feed(Feed.health(measurementS = 2.0), 2.0).feed(Feed.health(measurementS = 1.0), 2.5)
+        assertEquals(1, s.rejected)
+        assertEquals(Feed.ns(2.0), s.health.getValue("vio").record.measurementTimePiNs)
+    }
+
+    /** Health 0.3 and 0.4 (with signing) are read; 0.2 (no measurement time), a missing time and a float time are not. */
+    @Test
+    fun healthVersionsAndMalformed() {
+        assertIs<Parsed.Ok>(parseRecord(Feed.health(version = "0.3")))
+        assertIs<Parsed.Ok>(parseRecord(Feed.health(version = "0.4", extra = ""","signing":"ON"""")))
+        assertEquals("schema_version 0.2, expected 0.3 or 0.4", (parseRecord(Feed.health(version = "0.2")) as Parsed.Rejected).reason)
+        val noTime = Feed.health().replace(Regex(""",\s*"measurement_time_pi_ns":\d+"""), "")
+        assertTrue("measurement_time_pi_ns" !in noTime, "the regex must really remove the field")
+        assertIs<Parsed.Rejected>(parseRecord(noTime))
+        assertIs<Parsed.Rejected>(parseRecord(Feed.health().replace(Regex("""("measurement_time_pi_ns":\d+)"""), "$1.5")))
+        assertIs<Parsed.Rejected>(parseRecord(Feed.health(extra = ""","signing":"MAYBE"""")))
     }
 }
