@@ -23,7 +23,7 @@ class VideoViewModelTest {
     @Test
     fun firstRunOffersThePresetsWithVideoOff() {
         val s = VideoViewModel(MemoryStore(), t12).state.value
-        assertEquals(listOf("SIYI (RTSP 192.168.144.25:8554)", "Skydroid T12 (USB)"), s.profiles.map { it.name })
+        assertEquals(listOf("SIYI (RTSP 192.168.144.25:8554)", "Skydroid T12 (USB)", "VisionNav cam0 (RTSP visionnav-kft.local:8554)", "VisionNav cam1 (RTSP visionnav-kft.local:8554)"), s.profiles.map { it.name })
         assertNull(s.selected)
         assertNull(s.source)
         assertFalse(s.visible)
@@ -43,6 +43,13 @@ class VideoViewModelTest {
         val vm = VideoViewModel(MemoryStore(), t12)
         vm.onSourceSelected("SIYI (RTSP 192.168.144.25:8554)")
         assertEquals(PlayerSource("rtsp://192.168.144.25:8554/main.264"), vm.state.value.source)
+    }
+
+    @Test
+    fun theVisionNavPresetsPlayOneMediaMtxPathPerCamera() {
+        val vm = VideoViewModel(MemoryStore(), t12)
+        vm.onSourceSelected("VisionNav cam1 (RTSP visionnav-kft.local:8554)")
+        assertEquals(PlayerSource("rtsp://visionnav-kft.local:8554/cam1"), vm.state.value.source)
     }
 
     @Test
@@ -75,7 +82,7 @@ class VideoViewModelTest {
     @Test
     fun aBrokenFileFallsBackToThePresets() {
         val s = VideoViewModel(MemoryStore("{ not json"), t12).state.value
-        assertEquals(2, s.profiles.size)
+        assertEquals(VIDEO_PRESETS.size, s.profiles.size)
         assertNull(s.selected)
     }
 }

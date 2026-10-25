@@ -33,6 +33,10 @@ val VIDEO_PRESETS = listOf(
     // SIYI's documented RTSP address on its air units (the old KFT app's default); "main.264" is the main stream.
     VideoProfile("SIYI (RTSP 192.168.144.25:8554)", VideoLink.Rtsp("rtsp://192.168.144.25:8554/main.264")),
     VideoProfile("Skydroid T12 (USB)", VideoLink.T12),
+    // The VisionNav Pi's two IMX296 cameras, each published by MediaMTX as its own H.264 path (docs/pi-imx296-video.md).
+    // The hostname is the Pi's mDNS name; if it doesn't resolve on a network, add a profile with the Pi's IP instead.
+    VideoProfile("VisionNav cam0 (RTSP visionnav-kft.local:8554)", VideoLink.Rtsp("rtsp://visionnav-kft.local:8554/cam0")),
+    VideoProfile("VisionNav cam1 (RTSP visionnav-kft.local:8554)", VideoLink.Rtsp("rtsp://visionnav-kft.local:8554/cam1")),
 )
 
 /** Where the video profiles live, as one text blob (a file in the app's data folder; a string in tests). */

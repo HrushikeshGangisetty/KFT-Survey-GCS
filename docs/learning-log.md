@@ -4947,3 +4947,36 @@ socket ─▶ SigningSource ─▶ BufferedMavConnection.next()        (blocking
 - `ponytail:` in `Logs.kt`: `CHUNK` is fixed. Sizing it from the measured rate would give both top speed on Wi-Fi/USB and frequent progress on a radio.
 - Still open from Pass 46: the `ponytail:` about a re-request being ignored while the FC is still streaming.
 - Not measured: real hardware over a radio or serial, where the OS buffer (not TCP) is what absorbs a paused reader; and an Android tablet, which has less CPU for the manager's collector. On TCP a slow collector only slows the download down.
+
+## Pass 48 — VisionNav Pi camera video: RTSP presets and Pi setup guide (2026-10-25)
+
+### What changed
+- `feature/fly/.../Video.kt`: two new `VIDEO_PRESETS`, "VisionNav cam0" and "VisionNav cam1" (`rtsp://visionnav-kft.local:8554/cam0|cam1`).
+- `VideoViewModelTest.kt`: preset list updated, one new test (cam1 preset plays its URL), the broken-file test no longer hard-codes 2.
+- `docs/pi-imx296-video.md` (new): Pi setup (rpicam-vid → ffmpeg → MediaMTX), systemd units, troubleshooting table.
+- `docs/decisions/ADR-004-video.md`: short addendum.
+
+### How it works
+```
+IMX296 (CSI) → rpicam-vid (libx264, 728x544@15) → ffmpeg -c copy → MediaMTX :8554 /camN → RTSP → GCS PlayerSource
+```
+The GCS side is unchanged: `PlayerSource(url)` is played by Media3 (Android) or FFmpeg (desktop).
+
+### Engineering learnings
+- **Presets, not a new source kind.** The Pi speaks plain RTSP, so the existing `PlayerSource` covers it; a new kind would add code for nothing.
+- **Two paths, not one side-by-side picture.** Simpler on the Pi (no compositing CPU) and the PiP window shows one source anyway.
+- **Small H.264 stream.** Pi 5 has no hardware encoder, and libcamera allows one process per camera, so preview must not fight the recorder or VIO.
+
+### What to look at
+1. `feature/fly/src/commonMain/kotlin/com/kft/gcs/feature/fly/Video.kt:32` (the presets).
+2. `docs/pi-imx296-video.md`, "Three things to know first".
+
+### Tests
+- `VideoViewModelTest.theVisionNavPresetsPlayOneMediaMtxPathPerCamera`; `./gradlew check` passes.
+- **Manual, Pi (not yet run):** follow "Run it by hand" in the guide; expect `ffplay rtsp://127.0.0.1:8554/cam0` to show a picture, then Fly → Video → VisionNav cam0 within ~3 s. Check Pi CPU in `top`.
+
+### Open questions / next
+- Every Pi command is untested on hardware: encoder flags (`--libav-video-codec`), colour order, CPU cost with two streams, latency.
+- Streaming while recording needs the recorder (GNSS-Denied repo) to feed an encoder.
+- MediaMTX has no authentication; add before use on a shared network.
+- `.local` may not resolve on Android; fall back to a profile with the Pi's IP.

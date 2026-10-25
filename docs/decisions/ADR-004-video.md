@@ -127,3 +127,9 @@ test prints the frame types seen.
 - A plain **Serial** profile and the T12 link can't hold the T12's port at the same time: both claim it in
   `PortClaims` first, and the second is refused with "COM9 is in use by Skydroid T12" (or "by a Serial link"); the
   Links screen shows the port as in use (Pass 28). Use the "Skydroid T12" link type for MAVLink over the T12.
+
+## Addendum (2026-10-25): VisionNav Pi cameras
+
+The VisionNav Pi 5 (two IMX296 on CSI) publishes each camera as an H.264 RTSP path through MediaMTX. No new source
+kind: two `VIDEO_PRESETS` entries (`cam0`, `cam1`) use `PlayerSource`. Pi setup and limits (one process per camera,
+software x264 on Pi 5) are in `docs/pi-imx296-video.md`; not yet run on hardware.
