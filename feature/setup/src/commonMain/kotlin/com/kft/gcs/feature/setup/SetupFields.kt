@@ -15,8 +15,11 @@ sealed interface FieldKind {
     data class Bits(val bits: List<Pair<Int, String>>) : FieldKind
 }
 
-/** One parameter on a Setup page: its name, what the operator reads instead, and how it is edited. */
-data class FieldSpec(val param: String, val label: String, val kind: FieldKind, val help: String? = null)
+/**
+ * One parameter on a Setup page: its name, what the operator reads instead, and how it is edited. [reboot]: ArduPilot
+ * only applies it at boot (@RebootRequired), so the page offers a reboot after it is written.
+ */
+data class FieldSpec(val param: String, val label: String, val kind: FieldKind, val help: String? = null, val reboot: Boolean = false)
 
 /** A titled group of fields, with an optional [note] under the title. */
 data class SectionSpec(val title: String, val fields: List<FieldSpec>, val note: String? = null)

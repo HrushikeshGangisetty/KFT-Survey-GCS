@@ -223,6 +223,19 @@ internal object TxPolicy {
         MavCmd.DO_SET_SERVO.value -> never("MAV_CMD_DO_SET_SERVO")
         MavCmd.DO_SET_RELAY.value -> never("MAV_CMD_DO_SET_RELAY")
 
+        // Large Vehicle MagCal (common.xml #42006): compass offsets from a heading the operator states, for a vehicle too
+        // big to rotate. GCS_Common.cpp `handle_command_fixed_mag_cal_yaw` → AP_Compass_Calibration.cpp
+        // `mag_cal_fixed_yaw` (KFT fork 8e89f41a): it computes the expected field from the World Magnetic Model at the
+        // vehicle's position, rotates it by the given yaw, and saves offsets = expected − measured. It moves nothing.
+        // The yaw is a free number, so it can't be one of SETUP_PATTERNS' exact lists: allowed are a yaw in [0, 360)
+        // and every other number 0 (mask 0 = every compass; lat/lon 0 = the FC's own position). A typed latitude or a
+        // compass mask is UNLISTED: the GCS has no reason to send either.
+        MavCmd.FIXED_MAG_CAL_YAW.value -> {
+            val yaw = params[0]
+            if (yaw.isFinite() && yaw >= 0f && yaw < 360f && params.drop(1).all { it == 0f }) TxClassification(TxCategory.SETUP_DISARMED, "MAV_CMD_FIXED_MAG_CAL_YAW")
+            else TxClassification(TxCategory.UNLISTED, "MAV_CMD_FIXED_MAG_CAL_YAW with parameters ${params.joinToString(",")}")
+        }
+
         // Vehicle setup: calibrations and a reboot, only on the ground, and only with the exact numbers this GCS sends.
         in SETUP_PATTERNS -> {
             val (label, allowed) = SETUP_PATTERNS.getValue(command)

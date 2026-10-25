@@ -20,6 +20,7 @@ import com.kft.gcs.core.vehicle.parseParamInput
 import com.kft.gcs.core.vehicle.valueText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -68,12 +70,13 @@ sealed interface ParamsEffect {
 }
 
 /**
- * The Params screen. The parameter list lives here, not in the repository: it's a snapshot the operator asked for,
- * and only this screen uses it. Every write goes through [ParamRepository.set], which reports what the vehicle
- * actually holds afterwards, and that is what the list shows.
+ * The Params screen. The list follows the repository's live values ([knownOf], the same values the Setup tab reads
+ * and writes), so a change made in Setup shows here at once, and a download started from Setup fills this list too.
+ * Every write goes through [ParamRepository.set], which reports what the vehicle actually holds afterwards, and that
+ * is what the list shows.
  *
- * "Modified" compares with the values at download time, so after a set the operator sees what this session
- * changed.
+ * "Modified" compares with the values at the last full download (this tab's or Setup's), so the operator sees what
+ * this session changed, wherever it was changed.
  *
  * Descriptions, units, ranges, value names and bits come from ArduPilot's parameter metadata for the connected
  * vehicle and firmware version ([loadMetadata], after each download), or from a file the operator imports. The list
@@ -83,12 +86,19 @@ sealed interface ParamsEffect {
  * here; when [selectedId] changes, the list on screen is swapped for that vehicle's, so one drone's values are never
  * shown, edited or written while another is selected.
  */
+@OptIn(ExperimentalCoroutinesApi::class) // flatMapLatest
 class ParamsViewModel(
     private val vehicle: StateFlow<VehicleState>,
     private val repository: ParamRepository,
     private val files: ParamFiles,
     private val metadata: MetadataSource,
     private val selectedId: StateFlow<VehicleId?> = MutableStateFlow(null),
+    /**
+     * One vehicle's live parameter values (the app passes `Fleet.knownParams`). Asked per vehicle, not read from
+     * `repository.known`, because that one switches to the new vehicle's map a moment after [selectedId] does: in that
+     * moment the old vehicle's values would be filed under the new one.
+     */
+    private val knownOf: (VehicleId?) -> Flow<Map<String, Param>> = { repository.known },
 ) : ViewModel() {
 
     private data class Model(
@@ -125,18 +135,37 @@ class ParamsViewModel(
         viewModelScope.launch {
             vehicle.map(::ready).distinctUntilChanged().drop(1).filter { it }.collect { onDownloadClicked() }
         }
-        // Another vehicle was selected: stop what was running for the old one, put its list away and bring out the new
-        // one's. A vehicle seen for the first time has no list yet, so it is read now (once per vehicle, not at connect
-        // for every vehicle: three full downloads at once would flood a telemetry radio).
+        // The selected vehicle's live values, each tagged with the vehicle they belong to. One collector does both jobs
+        // below, so a vehicle's values can only ever land in that vehicle's list.
+        // 1. Another vehicle was selected: stop what was running for the old one, put its list away and bring out the
+        //    new one's. A vehicle with no values anywhere yet is read now (once per vehicle, not at connect for every
+        //    vehicle: three full downloads at once would flood a telemetry radio).
+        // 2. Take the values the vehicle last reported, whoever asked for them (this tab, Setup, a write).
         viewModelScope.launch {
-            selectedId.collect { id ->
-                if (id == shown) return@collect
-                job?.cancel()
-                others[shown] = model.value.copy(progress = null, edit = null, fileLoad = null)
-                model.value = others.remove(id) ?: Model()
-                shown = id
-                if (model.value.params.isEmpty() && ready(vehicle.value)) onDownloadClicked()
+            selectedId.flatMapLatest { id -> knownOf(id).map { id to it } }.collect { (id, known) ->
+                val switched = id != shown
+                if (switched) {
+                    job?.cancel()
+                    others[shown] = model.value.copy(progress = null, edit = null, fileLoad = null)
+                    model.value = others.remove(id) ?: Model()
+                    shown = id
+                }
+                adopt(known)
+                if (switched && model.value.params.isEmpty() && ready(vehicle.value)) onDownloadClicked()
             }
+        }
+    }
+
+    /**
+     * The repository's values into the list on screen. The same parameters as listed: only the values change, so a
+     * change made in Setup shows as modified here. A different set (a first or fresh download, wherever it was started):
+     * the list is replaced and becomes the new "downloaded" baseline. Empty (nothing read yet) changes nothing.
+     */
+    private fun adopt(known: Map<String, Param>) {
+        if (known.isEmpty()) return
+        model.update { m ->
+            if (m.params.size == known.size && m.params.all { it.name in known }) m.copy(params = m.params.map { known.getValue(it.name) })
+            else m.copy(params = known.values.sortedBy { it.index }, downloaded = known.mapValues { it.value.value }, notes = emptyMap())
         }
     }
 

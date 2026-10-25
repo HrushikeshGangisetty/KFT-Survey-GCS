@@ -4980,3 +4980,84 @@ The GCS side is unchanged: `PlayerSource(url)` is played by Media3 (Android) or 
 - Streaming while recording needs the recorder (GNSS-Denied repo) to feed an encoder.
 - MediaMTX has no authentication; add before use on a shared network.
 - `.local` may not resolve on Android; fall back to a profile with the Pi's IP.
+
+## Pass 49 — Params follows live values; compass details and Large Vehicle MagCal; frame and orientation; vibration and EKF health (2026-10-25)
+
+Four items from the Setup backlog (Pass 44 open questions, items 6–8). Only unit tests were run, as asked: no SITL, no app run.
+
+### What changed
+- `core/mavlink/.../TxPolicy.kt`: MAV_CMD_FIXED_MAG_CAL_YAW (#42006) allowed as `SETUP_DISARMED`, only with a heading in [0, 360) and every other number 0 (see Safety).
+- `core/vehicle/.../Setup.kt`: `SetupCommand.FixedYawCompass(yawDeg)`, its numbers, and a failure message that names what the FC needs (a GPS position, healthy compasses).
+- `core/vehicle/.../VehicleState.kt`: `ekfVariances` (EKF_STATUS_REPORT's five test ratios; until now only the flags were kept) and `vibration` (VIBRATION, new). Both are already streamed in EXTRA3.
+- `core/vehicle/.../Fleet.kt`: `knownParams(id)`, one vehicle's live parameter values.
+- `feature/params/.../ParamsViewModel.kt`, `di/ParamsModule.kt`: the list follows the live values (see How it works).
+- `feature/setup/CompassAndFrame.kt` (new): the compass-details and frame field tables (rotations, frame classes and types, priorities built from the detected compasses) and `priorityClash`.
+- `feature/setup/Health.kt` (new): `healthSections` / `overallVerdict`, vibration and EKF against ArduPilot's limits.
+- `feature/setup/SetupFields.kt`: `FieldSpec.reboot` (the parameter applies only at boot).
+- `feature/setup/SetupUiState.kt`, `SetupViewModel.kt`: new pages FRAME ("Frame and orientation") and HEALTH ("Vibration and EKF"); compass fields on the Compass page; "takes effect after a reboot" in the confirm question and, after the write, a banner with Reboot now; the live attitude line on the frame page.
+- `feature/setup/CalibrationViewModel.kt`, `CalibrationPages.kt`: the Large Vehicle MagCal card (heading field and button), `Calibration.FIXED_YAW_COMPASS`.
+- `feature/setup/HardwareIds.kt`: `compassLabel(id)` ("IST8310, I2C bus 1, address 0x0e").
+- `feature/setup/SetupScreen.kt`: the pages wired up, `HealthPage`.
+
+### How it works
+**Params follows Setup.**
+```
+Setup writes ─▶ ParamRepository.set ─▶ that vehicle's known map ─▶ Fleet.knownParams(id) ─┐
+selectedId ──flatMapLatest──▶ (id, map) pairs ──▶ one collector: swap the list if id changed, then adopt(map) ─▶ Params list
+```
+1. `adopt` with the same parameter names only replaces values, so a Setup change shows as *modified* in Params. A different set (a fresh download from either tab) replaces the list and becomes the new baseline.
+2. Each map arrives tagged with its vehicle, so the per-vehicle lists can't mix (see learnings).
+
+**Compass page.** The calibration, then the Large Vehicle MagCal card, then the parameters: Compasses (COMPASS_ENABLE); Priority and use (PRIO1..3_ID with the detected compasses as choices, USE/USE2/USE3); one section per detected compass (EXTERNAL/EXTERN2/3, ORIENT/ORIENT2/3).
+
+**Large Vehicle MagCal.** The operator types a true heading → checked 0 ≤ h < 360 → COMMAND_LONG FIXED_MAG_CAL_YAW(h, 0, 0, 0) → gateway (`SETUP_DISARMED`) → FC: `mag_cal_fixed_yaw` takes the Earth's field from the WMM at its own position, rotates it by the heading, saves offsets = expected − measured, and ACKs.
+
+**Frame page.** Copter FRAME_CLASS/TYPE; QuadPlane Q_FRAME_CLASS/TYPE when Q_ENABLE ≥ 1; a plain Plane gets a note. AHRS_ORIENTATION for both. A live roll / pitch / heading banner lets the operator tilt the vehicle and check the orientation.
+
+**Vibration and EKF page** (read-only, live, also while armed):
+
+| Value | Pass | Check | Fail |
+|---|---|---|---|
+| Vibration X/Y/Z (m/s/s) | < 30 | 30 to < 60 | ≥ 60 |
+| Clipping (since boot) | all 0 | any > 0 | – |
+| EKF velocity / horizontal / vertical position / compass ratios | < 0.5 | 0.5 to < threshold | ≥ FS_EKF_THRESH (0.8 when absent) |
+| EKF flags | attitude, velocity and position | no position yet, constant-position mode | uninitialised, no attitude, GPS glitching |
+
+### Engineering learnings
+- **Why the Params tab can't just read `params.known`.** `Fleet.params.known` is `combine(entries, selectedId).flatMapLatest {…}.stateIn(scope)`: it switches to the new vehicle's map a moment *after* `selectedId` changes, on another coroutine. A ViewModel that swapped lists on `selectedId` and then read `known` could, in that moment, file drone 1's values under drone 2. So the ViewModel asks for one vehicle's values (`Fleet.knownParams(id)`) and builds `(id, map)` pairs itself with `selectedId.flatMapLatest`. The id travels with the map, and one collector does both the swap and the adopt, so their order can't go wrong. `liveValuesOnlyReachTheirOwnVehiclesList` checks it.
+- **USE goes by priority, ORIENT goes by detected compass.** In AP_Compass (fork 8e89f41a) `_use_for_yaw` is indexed by `Priority`, while `orientation`/`external` are indexed by `StateIndex` (the DEV_ID order). So the page has a "Priority and use" section and one section per detected compass, matching what the FC does.
+- **A free number on an exact-numbers allowlist.** `SETUP_PATTERNS` holds exact parameter lists, and a heading can't be listed. FIXED_MAG_CAL_YAW gets its own branch: one number with a range, everything else exactly 0. A typed lat/lon or a compass mask is UNLISTED: the GCS never needs them.
+- **Read-only pages ignore "armed".** The health page shows no "disarm first" banner: vibration matters most with the motors running.
+- **Fixed tables, not metadata,** as in Pass 44: rotations and frame lists come from the fork's `@Values`, so the pages work offline.
+- Ponytail review (lite) on the diff: lean already. Two notes (a repeated `reboot` lookup, one-decimal rounding written three times) weren't worth a helper.
+
+### What to look at
+1. `feature/params/src/commonMain/kotlin/com/kft/gcs/feature/params/ParamsViewModel.kt`: the `selectedId.flatMapLatest` collector in `init`, and `adopt`.
+2. `feature/setup/src/commonMain/kotlin/com/kft/gcs/feature/setup/Health.kt`: the limits and their sources.
+3. `core/mavlink/src/commonMain/kotlin/com/kft/gcs/core/mavlink/TxPolicy.kt`: the FIXED_MAG_CAL_YAW branch in `classifyCommand`.
+
+### Tests
+- `MavTxGatewayTest.fixedYawCompassCalibrationOnlyWithAHeadingAndWhileDisarmed`: 0, 87.5 and 359.9 allowed while disarmed, refused armed or unknown; 360, −1, NaN, ∞, a mask, a position and a non-zero param5 are UNLISTED.
+- `SetupTest`: the wire numbers of `FixedYawCompass(87.5)`; a FAILED ACK says it needs a GPS position.
+- `VehicleStateTest.ekfVariancesAndVibrationAreKept`, including a uint32 clip count of 4294967295.
+- `ParamsViewModelTest.valuesChangedInSetupShowHereAtOnce`, `liveValuesOnlyReachTheirOwnVehiclesList`.
+- `CompassFrameHealthTest` (feature:setup): device ids packed by hand in the comment; priority choices and per-compass parameter names; priority clash; the frame page for Copter, Plane and QuadPlane; vibration edges 29.9 / 30 / 60; EKF ratios 0.49 / 0.5 / 0.79 / 0.8 and FS_EKF_THRESH 0.6; every EKF flag case; reboot note after FRAME_CLASS, cleared on link loss; the health page while armed; Large Vehicle MagCal refuses 360 and text, sends 87.5 (typed "87,5"), shows success and failure.
+- `./gradlew check`: BUILD SUCCESSFUL.
+- **Not run (manual, SITL Copter):**
+  1. Setup → Vibration and EKF shows Pass once the EKF has settled.
+  2. Frame → FRAME_CLASS Hexa → the reboot banner → Reboot now → the Params tab shows FRAME_CLASS 2 without a download.
+  3. Compass → type the heading the Fly view shows → "Compass offsets set".
+  4. `param set SIM_GPS_DISABLE 1`, reboot, retry → "needs a GPS position", with "Mag: no position available" in the messages.
+
+### Safety
+- **Allowlist change:** MAV_CMD_FIXED_MAG_CAL_YAW (common.xml #42006) in `SETUP_DISARMED`: only while disarmed (unknown counts as armed), param1 a finite heading 0 ≤ h < 360, params 2–7 exactly 0. ArduPilot handling checked in the KFT fork (8e89f41a): GCS_Common.cpp `handle_command_fixed_mag_cal_yaw` → AP_Compass_Calibration.cpp `mag_cal_fixed_yaw`. It writes compass offsets and moves nothing. That function has **no** armed check of its own, so the gateway's disarmed rule is the only guard. Test: `MavTxGatewayTest.fixedYawCompassCalibrationOnlyWithAHeadingAndWhileDisarmed`.
+- Frame, orientation and compass fields are PARAM_SET (already PARAM_CHANGE_DISARMED). A wrong FRAME_CLASS or AHRS_ORIENTATION makes a vehicle uncontrollable, so the page says to check motor order and direction, and the live attitude, before flying.
+- No flight action involved (S9 unchanged).
+
+### Open questions / next
+- All of it is unit-tested only; the SITL steps above haven't been run.
+- Parameter descriptions on the Params tab still load only after that tab's own download, so a list filled by a Setup download has none until then.
+- A wrongly typed heading gives wrong offsets without a warning. A cross-check against GPS course could come later.
+- Clip counts are since boot, so an old clip keeps "Check" until a reboot. Watching the count *increase* would be sharper.
+- Not done: COMPASS_AUTO_ROT, custom rotations (CUST_ROT*), motor test (needs an S9 decision).
+- Flaky, not from this pass: the first `./gradlew check` failed once in `core:keys` `IdleAutoLockTest.theWindowStartsWhenTheVaultIsUnlockedNotWhenTheTimerWasBuilt`. It passed 3/3 on its own and in the full re-run. Worth a look in its own pass.

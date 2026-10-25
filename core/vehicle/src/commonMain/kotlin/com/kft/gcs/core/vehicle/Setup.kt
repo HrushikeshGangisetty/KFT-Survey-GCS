@@ -51,6 +51,13 @@ sealed interface SetupCommand {
     data object CompassStart : SetupCommand
     data object CompassCancel : SetupCommand
 
+    /**
+     * Large Vehicle MagCal: the vehicle points at [yawDeg] (degrees from **true** north, 0 ≤ yaw < 360), and the FC sets
+     * every compass's offsets so it reads that heading. For an airframe too big to rotate. The FC needs a position (GPS
+     * 3D fix or an EKF position) to look up the Earth's field, and saves the offsets itself.
+     */
+    data class FixedYawCompass(val yawDeg: Float) : SetupCommand
+
     /** Tells the FC an RC calibration is running (on) or over (off). While on, it refuses to arm ("RC calibrating"). */
     data class RcCalibrating(val on: Boolean) : SetupCommand
 
@@ -170,6 +177,9 @@ internal fun SetupCommand.toCommand(target: MissionProtocol.Target): WireCommand
         // only restarts it, so the usual resends are fine.
         SetupCommand.CompassStart -> long(ArduMavCmd.DO_START_MAG_CAL.value, 0f, 0f, 1f, attempts = CommandProtocol.ATTEMPTS, timeout = CommandProtocol.ACK_TIMEOUT)
         SetupCommand.CompassCancel -> long(ArduMavCmd.DO_CANCEL_MAG_CAL.value, attempts = CommandProtocol.ATTEMPTS, timeout = CommandProtocol.ACK_TIMEOUT)
+        // MAV_CMD_FIXED_MAG_CAL_YAW (common.xml #42006): yaw, mask 0 (every compass used for yaw), lat/lon 0 (the FC's own
+        // position). `mag_cal_fixed_yaw` computes and saves at once and ACKs, so a resend only saves the same offsets again.
+        is SetupCommand.FixedYawCompass -> long(MavCmd.FIXED_MAG_CAL_YAW.value, yawDeg, attempts = CommandProtocol.ATTEMPTS, timeout = CommandProtocol.ACK_TIMEOUT)
         is SetupCommand.RcCalibrating -> long(calibration, 0f, 0f, 0f, if (on) 1f else 0f, attempts = CommandProtocol.ATTEMPTS, timeout = CommandProtocol.ACK_TIMEOUT)
         SetupCommand.Reboot -> long(MavCmd.PREFLIGHT_REBOOT_SHUTDOWN.value, 1f, timeout = CommandProtocol.ACK_TIMEOUT * 2)
         // MAV_CMD_RUN_PREARM_CHECKS (common.xml #401, no parameters). ArduPilot runs the checks in the same pass and ACKs
@@ -195,7 +205,11 @@ internal fun CommandResult.toSetupResult(command: SetupCommand): SetupResult = w
         if (command is SetupCommand.RcCalibrating && result == MavResult.UNSUPPORTED) SetupResult.Done
         else SetupResult.Failed(
             when (result) {
-                MavResult.DENIED, MavResult.FAILED -> "The vehicle refused it. Check its messages below and that it is disarmed and still."
+                MavResult.DENIED, MavResult.FAILED ->
+                    // mag_cal_fixed_yaw fails without a position, with an unhealthy compass, or on a WMM lookup error, and
+                    // says which in a STATUSTEXT ("Mag: no position available").
+                    if (command is SetupCommand.FixedYawCompass) "The vehicle couldn't do it: it needs a GPS position and healthy compasses. Check its messages below."
+                    else "The vehicle refused it. Check its messages below and that it is disarmed and still."
                 // handle_command_run_prearm_checks answers TEMPORARILY_REJECTED while armed, and only then.
                 MavResult.TEMPORARILY_REJECTED ->
                     if (command == SetupCommand.RunPreArmChecks) "The vehicle is armed. It only runs its pre-arm checks while disarmed."

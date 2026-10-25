@@ -78,7 +78,8 @@ fun SetupRoute(setup: SetupViewModel, calibration: CalibrationViewModel, preArm:
             CalibrationActions(
                 onAccelStart = calibration::onAccelStartClicked, onAccelPlaced = calibration::onAccelPlacedClicked,
                 onLevel = calibration::onLevelClicked, onSimpleAccel = calibration::onSimpleAccelClicked, onBaro = calibration::onBaroClicked,
-                onCompassStart = calibration::onCompassStartClicked, onRadioStart = calibration::onRadioStartClicked,
+                onCompassStart = calibration::onCompassStartClicked, onHeading = calibration::onHeadingChanged,
+                onFixedYaw = calibration::onFixedYawClicked, onRadioStart = calibration::onRadioStartClicked,
                 onRadioSweepDone = calibration::onRadioSweepDone, onRadioCentred = calibration::onRadioCentred,
                 onRadioSave = calibration::onRadioSaveClicked, onCancel = calibration::onCancelClicked, onReboot = calibration::onRebootClicked,
                 onRebootConfirm = calibration::onRebootConfirmed, onRebootDismiss = calibration::onRebootDismissed,
@@ -133,15 +134,25 @@ fun SetupScreen(
                     state.page == SetupPage.LOGS -> logs.hint
                     else -> state.notice
                 }?.let { Banner(it, Status.WARN) }
-                cal.rebootAdvice?.let { advice ->
+                // Both say a reboot is due: one after a calibration, one after a parameter that applies only at boot.
+                listOfNotNull(cal.rebootAdvice, state.rebootNote).forEach { advice ->
                     Banner(advice, Status.WARN) { TextButton(onClick = calActions.onReboot, enabled = cal.canReboot) { Text("Reboot now") } }
                 }
                 when (state.page) {
                     SetupPage.ACCEL -> AccelPage(cal, calActions)
-                    SetupPage.COMPASS -> CompassPage(cal, calActions)
+                    SetupPage.COMPASS -> {
+                        CompassPage(cal, calActions)
+                        FixedYawCard(cal, calActions)
+                        ParamPage(state, actions)
+                    }
                     SetupPage.BARO -> BaroPage(cal, calActions)
                     SetupPage.RADIO -> RadioPage(cal, calActions)
+                    SetupPage.FRAME -> {
+                        state.attitude?.let { Banner(it, Status.NEUTRAL) }
+                        ParamPage(state, actions)
+                    }
                     SetupPage.FLIGHT_MODES, SetupPage.FAILSAFES -> ParamPage(state, actions)
+                    SetupPage.HEALTH -> HealthPage(state)
                     SetupPage.HARDWARE -> HardwarePage(state)
                     SetupPage.PREARM -> PreArmPage(preArm, onRunPreArm)
                     SetupPage.LOGS -> LogsPage(logs, logActions)
@@ -166,7 +177,7 @@ fun SetupScreen(
 private val CALIBRATION_PAGES = setOf(SetupPage.ACCEL, SetupPage.COMPASS, SetupPage.BARO, SetupPage.RADIO)
 
 /** The pages that show parameter values (the radio page reads the RCx_ ranges), so their header offers "Read". */
-private val PARAM_PAGES = setOf(SetupPage.RADIO, SetupPage.FLIGHT_MODES, SetupPage.FAILSAFES, SetupPage.HARDWARE)
+private val PARAM_PAGES = setOf(SetupPage.COMPASS, SetupPage.RADIO, SetupPage.FRAME, SetupPage.FLIGHT_MODES, SetupPage.FAILSAFES, SetupPage.HARDWARE)
 
 @Composable
 private fun PageList(state: SetupUiState, cal: CalibrationUiState, actions: SetupActions, calActions: CalibrationActions) {
@@ -198,7 +209,7 @@ private fun PageList(state: SetupUiState, cal: CalibrationUiState, actions: Setu
 
 private fun pageOf(c: Calibration) = when (c) {
     Calibration.ACCEL, Calibration.LEVEL, Calibration.SIMPLE_ACCEL -> SetupPage.ACCEL
-    Calibration.COMPASS -> SetupPage.COMPASS
+    Calibration.COMPASS, Calibration.FIXED_YAW_COMPASS -> SetupPage.COMPASS
     Calibration.BARO -> SetupPage.BARO
     Calibration.RADIO -> SetupPage.RADIO
 }
@@ -287,6 +298,45 @@ private fun FieldRowView(row: FieldRow, enabled: Boolean, active: Boolean, onCli
         )
         if (enabled) Icon(KftIcons.Edit, contentDescription = "Change ${row.label}", Modifier.padding(start = Spacing.s).size(18.dp))
     }
+}
+
+/** The vibration and EKF checks, live: a verdict on top, then every value against its limit, with a word as well as a colour. */
+@Composable
+private fun HealthPage(state: SetupUiState) {
+    val (text, status) = when (state.healthVerdict) {
+        Verdict.PASS -> "Pass: vibration and the EKF are within ArduPilot's limits." to Status.OK
+        Verdict.WARN -> "Check the marked values before flying." to Status.WARN
+        Verdict.FAIL -> "Fail: a value is past ArduPilot's limit. Don't fly until it is fixed." to Status.CRITICAL
+        Verdict.UNKNOWN -> "Waiting for the vehicle's VIBRATION and EKF_STATUS_REPORT." to Status.NEUTRAL
+    }
+    Banner(text, status)
+    Text(
+        "Vibration with the motors off says little: look again with the motors running (the pilot arms; this page keeps updating) and after a short hover.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    state.health.forEach { section ->
+        SetupCard(section.title) {
+            section.rows.forEachIndexed { i, row ->
+                if (i > 0) HorizontalDivider()
+                Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(row.label, style = MaterialTheme.typography.bodyLarge)
+                        Text(row.limit, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(row.value, Modifier.padding(horizontal = Spacing.s), style = MaterialTheme.typography.bodyLarge, fontFamily = FontFamily.Monospace)
+                    StatusChip(row.verdict.label, row.verdict.status())
+                }
+            }
+        }
+    }
+}
+
+private fun Verdict.status() = when (this) {
+    Verdict.PASS -> Status.OK
+    Verdict.WARN -> Status.WARN
+    Verdict.FAIL -> Status.CRITICAL
+    Verdict.UNKNOWN -> Status.NEUTRAL
 }
 
 @Composable

@@ -11,5 +11,8 @@ import org.koin.dsl.module
  * [com.kft.gcs.feature.params.MetadataSource] (HTTP and a folder for the downloaded descriptions).
  */
 val paramsModule = module {
-    viewModel { ParamsViewModel(get(SelectedVehicle), get(), get(), get(), get<Fleet>().selectedId) }
+    viewModel {
+        val fleet = get<Fleet>()
+        ParamsViewModel(get(SelectedVehicle), get(), get(), get(), fleet.selectedId, fleet::knownParams)
+    }
 }

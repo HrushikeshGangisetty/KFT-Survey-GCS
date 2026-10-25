@@ -438,6 +438,30 @@ class MavTxGatewayTest {
         }
     }
 
+    /**
+     * Large Vehicle MagCal (common.xml #42006): any heading in [0, 360) with every other number 0 is setup, ground only.
+     * A compass mask, a typed position, a heading out of range or not a number is not on the allowlist.
+     */
+    @Test
+    fun fixedYawCompassCalibrationOnlyWithAHeadingAndWhileDisarmed() {
+        val fixedYaw = MavCmd.FIXED_MAG_CAL_YAW.value
+        assertEquals(42006u, fixedYaw, "common.xml")
+        for (yaw in listOf(0f, 87.5f, 359.9f)) {
+            val c = setup(fixedYaw, yaw)
+            assertEquals(TxCategory.SETUP_DISARMED, TxPolicy.classify(c).category, "yaw $yaw")
+            assertNull(verdict(c, armed = false), "yaw $yaw on the ground")
+            assertTrue(verdict(c, armed = true)!!.contains("disarmed"), "yaw $yaw while armed")
+            assertTrue(verdict(c, armed = null)!!.contains("disarmed"), "yaw $yaw with no vehicle heard")
+        }
+        val refused = listOf(
+            setup(fixedYaw, 360f), setup(fixedYaw, -1f), setup(fixedYaw, Float.NaN), setup(fixedYaw, Float.POSITIVE_INFINITY),
+            setup(fixedYaw, 90f, 1f),             // compass mask
+            setup(fixedYaw, 90f, 0f, 17.4f, 78.5f), // a typed position
+            setup(fixedYaw, 90f, 0f, 0f, 0f, 1f),
+        )
+        for (c in refused) assertEquals(TxCategory.UNLISTED, TxPolicy.classify(c).category, "$c")
+    }
+
     /** COMMAND_INT carries param5..7 as x, y, z: the same patterns apply, so compassmot can't slip through that way. */
     @Test
     fun setupPatternsApplyToCommandIntToo() {

@@ -59,6 +59,7 @@ class CalibrationViewModel(
         val compassMask: Int = 0,
         val compassRows: Map<Int, CompassRow> = emptyMap(),
         val compassResult: Outcome? = null,
+        val heading: String = "",
         val baroResult: Outcome? = null,
         val radioStep: RadioStep = RadioStep.IDLE,
         val ranges: List<RcRange?> = emptyList(),
@@ -116,6 +117,23 @@ class CalibrationViewModel(
 
     fun onSimpleAccelClicked() =
         oneShot(Calibration.SIMPLE_ACCEL, SetupCommand.SimpleAccel, "Accelerometer offsets saved from this level position.") { m, o -> m.copy(imuResult = o) }
+
+    // ---- compass from a known heading (Large Vehicle MagCal) ----
+
+    fun onHeadingChanged(text: String) = model.update { it.copy(heading = text) }
+
+    /**
+     * Sets every compass's offsets so it reads the typed true heading. Checked here first (0 ≤ heading < 360, what the
+     * gateway allows); the FC then needs a position to look up the Earth's field, and says so if it has none.
+     */
+    fun onFixedYawClicked() {
+        val yaw = model.value.heading.trim().replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() && it >= 0f && it < 360f }
+            ?: return say("Type the heading the vehicle points at: 0 to 359.9 degrees from true north")
+        oneShot(
+            Calibration.FIXED_YAW_COMPASS, SetupCommand.FixedYawCompass(yaw),
+            "Compass offsets set for a heading of ${number(yaw.toDouble())}° and saved. Check the heading on the map now matches.",
+        ) { m, o -> m.copy(compassResult = o) }
+    }
 
     // ---- barometer ----
 
@@ -290,6 +308,7 @@ class CalibrationViewModel(
             rebootAdvice = "An accelerometer calibration may still be waiting on the flight controller.",
         )
         Calibration.COMPASS -> copy(compassResult = Outcome(false, "$why. Nothing was saved."))
+        Calibration.FIXED_YAW_COMPASS -> copy(compassResult = Outcome(false, "$why before the vehicle answered. It may still have saved the offsets: check its messages."))
         Calibration.RADIO -> copy(radioStep = RadioStep.IDLE, review = null, radioResult = Outcome(false, "$why. Nothing was written."))
         Calibration.LEVEL, Calibration.SIMPLE_ACCEL -> copy(imuResult = Outcome(false, "$why before the vehicle answered. It may still have finished: check its messages."))
         Calibration.BARO -> copy(baroResult = Outcome(false, "$why before the vehicle answered."))
@@ -339,7 +358,10 @@ class CalibrationViewModel(
             vehicleKind = v.vehicleKind,
             accel = m.accel,
             imuResult = m.imuResult,
-            compass = CompassUi(m.compassRows.values.sortedBy { it.number }, m.compassResult),
+            compass = CompassUi(
+                m.compassRows.values.sortedBy { it.number }, m.compassResult, m.heading,
+                v.headingDeg?.let { "${number(kotlin.math.round(it * 10) / 10)}°" },
+            ),
             baroResult = m.baroResult,
             radio = RadioUi(
                 step = m.radioStep,

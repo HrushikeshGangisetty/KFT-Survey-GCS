@@ -33,6 +33,9 @@ fun sensorRows(values: Map<String, Float>): List<SensorRow> = values.mapNotNull 
     Triple(cls, instance, SensorRow("${cls.label} $instance", name, busText(d), chipName(cls, d), id))
 }.sortedWith(compareBy({ it.first.order }, { it.second })).map { it.third }
 
+/** A compass by its device id, as the operator would recognise it: "IST8310, I2C bus 1, address 0x0e". */
+internal fun compassLabel(id: Int): String = decodeDeviceId(id).let { "${chipName(SensorClass.COMPASS, it)}, ${busText(it)}" }
+
 private val INS = Regex("INS(\\d?)_(ACC|GYR)(\\d?)_ID")
 private val COMPASS = Regex("COMPASS_DEV_ID(\\d?)")
 private val BARO = Regex("BARO(\\d)_DEVID")

@@ -11,17 +11,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.kft.gcs.core.mavlink.VehicleKind
@@ -36,6 +40,8 @@ class CalibrationActions(
     val onSimpleAccel: () -> Unit = {},
     val onBaro: () -> Unit = {},
     val onCompassStart: () -> Unit = {},
+    val onHeading: (String) -> Unit = {},
+    val onFixedYaw: () -> Unit = {},
     val onRadioStart: () -> Unit = {},
     val onRadioSweepDone: () -> Unit = {},
     val onRadioCentred: () -> Unit = {},
@@ -130,6 +136,33 @@ internal fun CompassPage(cal: CalibrationUiState, actions: CalibrationActions) {
                     Text(listOfNotNull("${row.percent} %", row.status, row.fitness).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Large Vehicle MagCal: for an airframe too big to turn through every orientation. The operator points the vehicle at a
+ * known true heading (a surveyed line, a runway, a compass bearing corrected for declination) and types it.
+ */
+@Composable
+internal fun FixedYawCard(cal: CalibrationUiState, actions: CalibrationActions) {
+    SetupCard(
+        "Large vehicle: calibrate from a known heading",
+        "For a vehicle you can't rotate. Point it at a heading you know, measured from true north, level and away from metal. " +
+            "The FC needs a GPS position to look up the Earth's field here, then sets and saves the offsets of every compass used for heading." +
+            (cal.compass.headingNow?.let { " It reads $it now." } ?: ""),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = cal.compass.heading,
+                onValueChange = actions.onHeading,
+                label = { Text("True heading") },
+                suffix = { Text("°") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.widthIn(max = 200.dp),
+            )
+            RunButton("Calibrate from this heading", Calibration.FIXED_YAW_COMPASS, cal, actions.onFixedYaw)
         }
     }
 }

@@ -237,6 +237,56 @@ class ParamsViewModelTest {
         assertEquals("1000", vm.state.value.rows.first { it.name == "WPNAV_SPEED" }.value)
     }
 
+    /**
+     * The list follows the repository's live values: a value Setup wrote shows at once and counts as modified, and a
+     * download Setup started fills an empty list (as the new baseline, nothing modified) without one of our own.
+     */
+    @Test
+    fun valuesChangedInSetupShowHereAtOnce() = runTest(dispatcher) {
+        val vm = vm()
+        backgroundScope.launch { vm.state.collect {} }
+        runCurrent()
+        // Setup read the parameters (the Params tab didn't).
+        repo.known.value = repo.vehicle.toMap()
+        runCurrent()
+        assertEquals("3 parameters · 0 modified", vm.state.value.status)
+        assertEquals(listOf("CAM1_TYPE", "SERVO9_FUNCTION", "WPNAV_SPEED"), vm.state.value.rows.map { it.name })
+
+        // Setup wrote WPNAV_SPEED: the vehicle echoed 750.
+        repo.known.value = repo.known.value + ("WPNAV_SPEED" to repo.vehicle.getValue("WPNAV_SPEED").copy(value = 750f))
+        runCurrent()
+        val row = vm.state.value.rows.first { it.name == "WPNAV_SPEED" }
+        assertEquals("750" to true, row.value to row.modified)
+        assertEquals("3 parameters · 1 modified", vm.state.value.status)
+        assertTrue(repo.sets.isEmpty(), "following values sends nothing")
+    }
+
+    /**
+     * Live values are tagged with their vehicle: drone 1's value changing while drone 2 is selected doesn't touch drone 2's
+     * list, and shows when drone 1 is selected again.
+     */
+    @Test
+    fun liveValuesOnlyReachTheirOwnVehiclesList() = runTest(dispatcher) {
+        val (drone1, drone2) = VehicleId(1, 1u) to VehicleId(1, 2u)
+        val live = mapOf(drone1 to MutableStateFlow(repo.vehicle.toMap()), drone2 to MutableStateFlow(repo.vehicle.toMap()))
+        val selectedId = MutableStateFlow<VehicleId?>(drone1)
+        val vm = ParamsViewModel(vehicle, repo, files, metadata, selectedId) { id -> live.getValue(id!!) }
+        backgroundScope.launch { vm.state.collect {} }
+        runCurrent()
+        selectedId.value = drone2
+        runCurrent()
+
+        val one = live.getValue(drone1)
+        one.value = one.value + ("CAM1_TYPE" to one.value.getValue("CAM1_TYPE").copy(value = 2f))
+        runCurrent()
+        assertEquals("0", vm.state.value.rows.first { it.name == "CAM1_TYPE" }.value, "drone 2's list is untouched")
+
+        selectedId.value = drone1
+        runCurrent()
+        assertEquals("2", vm.state.value.rows.first { it.name == "CAM1_TYPE" }.value)
+        assertEquals("3 parameters · 1 modified", vm.state.value.status)
+    }
+
     /** A vehicle that isn't ready when it is selected is not read (and no other vehicle's list is shown instead). */
     @Test
     fun selectingAVehicleThatIsNotReadyShowsAnEmptyList() = runTest(dispatcher) {

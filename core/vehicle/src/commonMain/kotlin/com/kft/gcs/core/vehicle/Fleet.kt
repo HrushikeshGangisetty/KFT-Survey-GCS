@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flatMapLatest
@@ -156,6 +157,14 @@ class Fleet(
     }
 
     private fun selectedEntry() = entries.value.find { it.id == _selectedId.value }
+
+    /**
+     * [id]'s parameters as last read, empty for a vehicle that isn't known. Unlike `params.known`, which switches to the
+     * new vehicle's map a moment *after* the selection changes, a collector of this always knows whose values it holds,
+     * so a screen keeping one list per vehicle never files one drone's values under another.
+     */
+    fun knownParams(id: VehicleId?): Flow<Map<String, Param>> =
+        entries.map { list -> list.find { it.id == id } }.distinctUntilChanged().flatMapLatest { it?.params?.known ?: flowOf(emptyMap()) }
 
     /**
      * Mission transfers with the selected vehicle. The vehicle is fixed when a call starts: the whole transfer, and

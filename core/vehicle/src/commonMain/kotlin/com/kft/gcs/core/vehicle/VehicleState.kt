@@ -18,6 +18,7 @@ import com.divpundir.mavlink.definitions.common.RcChannels
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
 import com.divpundir.mavlink.definitions.common.VfrHud
+import com.divpundir.mavlink.definitions.common.Vibration as VibrationMessage
 import com.divpundir.mavlink.definitions.standard.AutopilotVersion
 import com.divpundir.mavlink.definitions.standard.GlobalPositionInt
 import com.kft.gcs.core.geo.LatLon
@@ -68,6 +69,10 @@ data class VehicleState(
     val watchedParams: Map<String, Float> = emptyMap(),
     /** EKF_STATUS_REPORT.flags (ardupilotmega.xml EKF_STATUS_FLAGS bitmask), as the FC reports it. Null until the first. */
     val ekfFlags: UInt? = null,
+    /** EKF_STATUS_REPORT's variances (test ratios). Null until the first report. */
+    val ekfVariances: EkfVariances? = null,
+    /** VIBRATION: accelerometer vibration and clipping. Null until the first report. */
+    val vibration: Vibration? = null,
     /** The latest estimator STATUSTEXTs ([isEstimatorText]), oldest first, at most [MAX_ESTIMATOR_MESSAGES]. */
     val estimatorMessages: List<StatusMessage> = emptyList(),
     /** How this vehicle signs its traffic on its link (PRD FR-8), from the link's signing layer. */
@@ -200,7 +205,22 @@ internal fun VehicleState.reduce(message: MavMessage<*>, now: Duration = Duratio
     }
     // EKF_STATUS_REPORT (ardupilotmega.xml #193). ArduPilot streams it in the EXTRA3 group (ArduCopter and ArduPlane
     // GCS_Mavlink.cpp, KFT fork 23c97b96), which the REQUEST_DATA_STREAM(ALL) at connect turns on.
-    is EkfStatusReport -> copy(ekfFlags = message.flags.value)
+    is EkfStatusReport -> copy(
+        ekfFlags = message.flags.value,
+        ekfVariances = EkfVariances(
+            velocity = message.velocityVariance.toDouble(), posHoriz = message.posHorizVariance.toDouble(),
+            posVert = message.posVertVariance.toDouble(), compass = message.compassVariance.toDouble(),
+            terrain = message.terrainAltVariance.toDouble(),
+        ),
+    )
+    // VIBRATION (common.xml #241), streamed in the same EXTRA3 group (GCS_Common.cpp `send_vibration`, KFT fork 8e89f41a):
+    // the vibration levels are AP_InertialSensor's filtered accel deviation (m/s/s), clipping the counts since boot.
+    is VibrationMessage -> copy(
+        vibration = Vibration(
+            x = message.vibrationX.toDouble(), y = message.vibrationY.toDouble(), z = message.vibrationZ.toDouble(),
+            clipping = listOf(message.clipping0.toLong(), message.clipping1.toLong(), message.clipping2.toLong()),
+        ),
+    )
     // The KFT firmware reports its signature-failure counter as a named value (S8); any other name is not ours to read.
     is NamedValueInt -> if (message.name.trimEnd(' ') == SIGFAIL_NAME) copy(fcSignatureFailures = message.value) else this
     // HOME_POSITION (common.xml). ArduPilot sends it only once home is set, on request, and on every change (for
@@ -333,3 +353,16 @@ internal fun severityOf(value: UInt) = when {
     value == 4u -> Severity.WARNING
     else -> Severity.INFO
 }
+
+/**
+ * EKF_STATUS_REPORT's variances (ardupilotmega.xml #193). ArduPilot sends each as a test ratio: the innovation over
+ * the size the filter would accept, so 1.0 is where the EKF starts rejecting that measurement. [compass] is the length
+ * of the three magnetometer ratios (AP_NavEKF3_Outputs.cpp `send_status_report`).
+ */
+data class EkfVariances(val velocity: Double, val posHoriz: Double, val posVert: Double, val compass: Double, val terrain: Double)
+
+/**
+ * VIBRATION (common.xml #241): vibration on each accelerometer axis in m/s/s, and [clipping], how often each of the first
+ * three accelerometers hit its limit since boot.
+ */
+data class Vibration(val x: Double, val y: Double, val z: Double, val clipping: List<Long>)

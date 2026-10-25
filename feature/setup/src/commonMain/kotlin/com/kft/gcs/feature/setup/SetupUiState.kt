@@ -10,9 +10,11 @@ enum class SetupPage(val title: String, val group: String) {
     COMPASS("Compass", "Calibration"),
     BARO("Barometer", "Calibration"),
     RADIO("Radio", "Calibration"),
+    FRAME("Frame and orientation", "Configuration"),
     FLIGHT_MODES("Flight modes", "Configuration"),
     FAILSAFES("Failsafes", "Configuration"),
     PREARM("Pre-arm checks", "Information"),
+    HEALTH("Vibration and EKF", "Information"),
     LOGS("Flight logs", "Information"),
     HARDWARE("Hardware ID", "Information"),
 }
@@ -26,6 +28,9 @@ enum class SetupPage(val title: String, val group: String) {
  * @property sections the parameter page on screen (flight modes or failsafes), empty on the other pages.
  * @property problems for that page: combinations the FC would refuse to arm with ([armingProblems]).
  * @property activeSlot the mode-switch position (0..5) the RC selects right now, for the flight-mode page.
+ * @property attitude the live roll, pitch and heading, for checking the board orientation on the frame page.
+ * @property rebootNote a parameter that only applies at boot was just written ("FRAME_CLASS takes effect after a reboot").
+ * @property health the vibration and EKF checks ([healthSections]), on the health page; [healthVerdict] is the worst.
  */
 data class SetupUiState(
     val page: SetupPage = SetupPage.ACCEL,
@@ -39,6 +44,10 @@ data class SetupUiState(
     val problems: List<String> = emptyList(),
     val modeSwitch: String? = null,
     val activeSlot: Int? = null,
+    val attitude: String? = null,
+    val rebootNote: String? = null,
+    val health: List<HealthSection> = emptyList(),
+    val healthVerdict: Verdict = Verdict.UNKNOWN,
     val edit: FieldEdit? = null,
     val board: List<Pair<String, String>> = emptyList(),
     val sensors: List<SensorRow> = emptyList(),
@@ -67,7 +76,8 @@ data class FieldEdit(
 /** Which calibration is running. One at a time: they share the FC's attention and the operator's. */
 enum class Calibration(val title: String) {
     ACCEL("Accelerometer calibration"), LEVEL("Level"), SIMPLE_ACCEL("Simple accelerometer calibration"),
-    COMPASS("Compass calibration"), BARO("Barometer calibration"), RADIO("Radio calibration"),
+    COMPASS("Compass calibration"), FIXED_YAW_COMPASS("Compass calibration from a known heading"), BARO("Barometer calibration"),
+    RADIO("Radio calibration"),
 }
 
 /** How something ended, in the operator's words. */
@@ -103,8 +113,11 @@ data class CalibrationUiState(
  */
 data class AccelUi(val waitingFor: AccelPosition? = null, val sampling: AccelPosition? = null)
 
-/** One row per compass the FC is calibrating, numbered from 1 as the operator counts them. */
-data class CompassUi(val rows: List<CompassRow> = emptyList(), val result: Outcome? = null)
+/**
+ * One row per compass the FC is calibrating, numbered from 1 as the operator counts them. [heading] is the typed true
+ * heading for the Large Vehicle MagCal; [headingNow] what the vehicle reads now, for reference.
+ */
+data class CompassUi(val rows: List<CompassRow> = emptyList(), val result: Outcome? = null, val heading: String = "", val headingNow: String? = null)
 
 data class CompassRow(val number: Int, val percent: Int, val status: String, val fitness: String?, val finished: Boolean, val ok: Boolean)
 

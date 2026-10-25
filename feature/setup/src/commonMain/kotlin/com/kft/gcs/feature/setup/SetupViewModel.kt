@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -42,7 +44,13 @@ class SetupViewModel(
     private val selectedId: StateFlow<VehicleId?> = MutableStateFlow(null),
 ) : ViewModel() {
 
-    private data class Model(val page: SetupPage = SetupPage.ACCEL, val busy: String? = null, val edit: FieldEdit? = null, val editFor: VehicleId? = null)
+    private data class Model(
+        val page: SetupPage = SetupPage.ACCEL,
+        val busy: String? = null,
+        val edit: FieldEdit? = null,
+        val editFor: VehicleId? = null,
+        val rebootNote: String? = null,
+    )
 
     private val model = MutableStateFlow(Model())
 
@@ -51,6 +59,14 @@ class SetupViewModel(
 
     private val _effects = Channel<SetupEffect>(Channel.BUFFERED)
     val effects: Flow<SetupEffect> = _effects.receiveAsFlow()
+
+    init {
+        // A reboot (the link drops) or another vehicle: the "reboot to apply" note no longer applies to what is on screen.
+        viewModelScope.launch {
+            combine(vehicle.map { it.connected }.distinctUntilChanged(), selectedId) { connected, id -> connected to id }
+                .collect { model.update { it.copy(rebootNote = null) } }
+        }
+    }
 
     fun onPageSelected(page: SetupPage) = model.update { it.copy(page = page, edit = null) }
 
@@ -87,6 +103,8 @@ class SetupViewModel(
         val confirm = buildString {
             append("Change ${edit.label} (${edit.param}) from ${edit.current} to $shown?")
             if (edit.kind is FieldKind.Choice && value.toInt() in edit.kind.danger) append(" Warning: $shown stops the motors in flight; the aircraft falls.")
+            priorityClash(edit.param, value, values())?.let { append(" Note: $it") }
+            if (specs().firstOrNull { it.param == edit.param }?.reboot == true) append(" It takes effect after the flight controller reboots.")
             // What this write would leave the FC refusing to arm with, that it isn't refusing already.
             val before = armingProblems(vehicle.value.vehicleKind, values())
             armingProblems(vehicle.value.vehicleKind, values() + (edit.param to value)).filter { it !in before }.forEach { append(" Note: $it") }
@@ -101,10 +119,14 @@ class SetupViewModel(
         val value = parseParamInput(edit.text, p.type).getOrNull() ?: return
         model.update { it.copy(edit = null) }
         if (selectedId.value != m.editFor) return say("The selected vehicle changed. Nothing was sent.")
+        val reboot = specs().firstOrNull { it.param == edit.param }?.reboot == true
         model.update { it.copy(busy = "Writing ${edit.param}…") }
         viewModelScope.launch {
             when (val r = params.set(p, value)) {
-                is ParamSetResult.Applied -> say("${edit.label} set to ${displayValue(edit.kind, r.param.value)}")
+                is ParamSetResult.Applied -> {
+                    say("${edit.label} set to ${displayValue(edit.kind, r.param.value)}")
+                    if (reboot) model.update { it.copy(rebootNote = "${edit.label} (${edit.param}) takes effect after the flight controller reboots.") }
+                }
                 is ParamSetResult.NotApplied -> say("${edit.label}: ${r.reason}")
             }
             model.update { it.copy(busy = null) }
@@ -117,7 +139,7 @@ class SetupViewModel(
 
     private fun values(): Map<String, Float> = params.known.value.mapValues { it.value.value }
 
-    private fun specs(): List<FieldSpec> = sectionsFor(model.value.page, vehicle.value.vehicleKind).flatMap { it.fields }
+    private fun specs(): List<FieldSpec> = sectionsFor(model.value.page, vehicle.value.vehicleKind, values()).flatMap { it.fields }
 
     private fun ready(v: VehicleState) = v.connected && v.login?.allowsTraffic != false
 
@@ -131,18 +153,20 @@ class SetupViewModel(
 
     private fun build(m: Model, v: VehicleState, known: Map<String, Param>): SetupUiState {
         val values = known.mapValues { it.value.value }
-        val sections = sectionsFor(m.page, v.vehicleKind).map { s ->
+        val sections = sectionsFor(m.page, v.vehicleKind, values).map { s ->
             FieldSection(s.title, s.note, s.fields.map { f ->
                 val p = known[f.param]
                 FieldRow(f.param, f.label, p?.let { displayValue(f.kind, it.value) } ?: "—", f.help, p != null)
             })
         }
         val switch = modeSwitch(v, values)
+        val health = if (m.page == SetupPage.HEALTH) healthSections(v, values) else emptyList()
         return SetupUiState(
             page = m.page,
             vehicle = vehicleLine(v),
             notice = when {
                 !v.connected -> "Connect a vehicle to set it up."
+                m.page == SetupPage.HEALTH -> null // read-only: it works logging in or armed too (that's when it matters)
                 v.login?.allowsTraffic == false -> "${v.login?.label}. Setup waits for the login."
                 v.armed -> "The vehicle is armed. Calibrations and changes are only possible on the ground, disarmed."
                 v.vehicleKind == VehicleKind.UNKNOWN || v.vehicleKind == null -> "Vehicle type unknown: the Copter lists are shown."
@@ -156,6 +180,10 @@ class SetupViewModel(
             problems = if (m.page == SetupPage.FAILSAFES) armingProblems(v.vehicleKind, values) else emptyList(),
             modeSwitch = if (m.page == SetupPage.FLIGHT_MODES) switch?.first else null,
             activeSlot = if (m.page == SetupPage.FLIGHT_MODES) switch?.second else null,
+            attitude = if (m.page == SetupPage.FRAME) attitudeLine(v) else null,
+            rebootNote = m.rebootNote,
+            health = health,
+            healthVerdict = overallVerdict(health),
             edit = m.edit,
             board = boardRows(v),
             sensors = sensorRows(values),
@@ -163,9 +191,11 @@ class SetupViewModel(
     }
 }
 
-internal fun sectionsFor(page: SetupPage, kind: VehicleKind?): List<SectionSpec> = when (page) {
+internal fun sectionsFor(page: SetupPage, kind: VehicleKind?, values: Map<String, Float>): List<SectionSpec> = when (page) {
     SetupPage.FAILSAFES -> failsafeSections(kind)
     SetupPage.FLIGHT_MODES -> flightModeSections(kind)
+    SetupPage.COMPASS -> compassSections(values)
+    SetupPage.FRAME -> frameSections(kind, values)
     else -> emptyList()
 }
 
@@ -177,6 +207,12 @@ private fun vehicleLine(v: VehicleState): String {
         else -> "Vehicle"
     }
     return listOfNotNull(kind, v.firmwareVersion, if (v.armed) "armed" else "disarmed", v.flightMode).joinToString(" · ")
+}
+
+/** "Live: roll 1.2°, pitch -0.5°, heading 87°", for checking the board orientation by tilting the vehicle. */
+private fun attitudeLine(v: VehicleState): String {
+    fun deg(d: Double?) = d?.let { "${number(kotlin.math.round(it * 10) / 10)}°" } ?: "—"
+    return "Live: roll ${deg(v.rollDeg)}, pitch ${deg(v.pitchDeg)}, heading ${deg(v.headingDeg)}"
 }
 
 /** "Channel 5 at 1495 µs: position 4", and that position (0-based), from the live RC and FLTMODE_CH. */

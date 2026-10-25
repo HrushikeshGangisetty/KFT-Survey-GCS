@@ -57,6 +57,8 @@ class SetupTest {
             SetupCommand.RcCalibrating(false) to (241u to listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f)),
             SetupCommand.Reboot to (246u to listOf(1f, 0f, 0f, 0f, 0f, 0f, 0f)),
             SetupCommand.RunPreArmChecks to (401u to listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f)),
+            // FIXED_MAG_CAL_YAW: yaw, compass mask 0 = all, lat 0 / lon 0 = the FC's own position (mag_cal_fixed_yaw).
+            SetupCommand.FixedYawCompass(87.5f) to (42006u to listOf(87.5f, 0f, 0f, 0f, 0f, 0f, 0f)),
         )
         for ((command, wire) in expected) {
             val m = command.toCommand(target).message
@@ -90,6 +92,8 @@ class SetupTest {
         assertContains(assertIs<SetupResult.Failed>(repo.run(SetupCommand.Baro)).reason, "doesn't support")
         fc.reply = { listOf(ackFor(it as CommandLong, MavResult.FAILED)) }
         assertContains(assertIs<SetupResult.Failed>(repo.run(SetupCommand.CompassStart)).reason, "refused")
+        // A failed fixed-heading calibration names what it needs (a position, healthy compasses).
+        assertContains(assertIs<SetupResult.Failed>(repo.run(SetupCommand.FixedYawCompass(10f))).reason, "GPS position")
     }
 
     /** On a Plane with an airspeed sensor the baro calibration answers IN_PROGRESS, then the final result. */

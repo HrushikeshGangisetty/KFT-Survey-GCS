@@ -17,6 +17,7 @@ import com.divpundir.mavlink.definitions.common.MavSeverity
 import com.divpundir.mavlink.definitions.common.NamedValueInt
 import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.SysStatus
+import com.divpundir.mavlink.definitions.common.Vibration as VibrationMessage
 import com.divpundir.mavlink.definitions.standard.GlobalPositionInt
 import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
@@ -119,6 +120,17 @@ class VehicleStateTest {
         assertEquals("Using EKF Source Set 2", s.lastMessage?.text, "the HUD's last message is unchanged")
         val many = (1..7).fold(s) { st, i -> st.reduce(Statustext(severity = MavEnumValue.of(MavSeverity.CRITICAL), text = "EKF3 lane switch $i")) }
         assertEquals((3..7).map { "EKF3 lane switch $it" }, many.estimatorMessages.map { it.text }, "only the last five")
+    }
+
+    /** The EKF variances and the VIBRATION levels are kept as the FC sends them (the Setup health page judges them). */
+    @Test
+    fun ekfVariancesAndVibrationAreKept() {
+        val s = VehicleState()
+            .reduce(EkfStatusReport(velocityVariance = 0.25f, posHorizVariance = 0.5f, posVertVariance = 0.125f, compassVariance = 0.75f, terrainAltVariance = 1f))
+            .reduce(VibrationMessage(vibrationX = 12.5f, vibrationY = 3f, vibrationZ = 61f, clipping0 = 0u, clipping1 = 4u, clipping2 = 4294967295u))
+        assertEquals(EkfVariances(velocity = 0.25, posHoriz = 0.5, posVert = 0.125, compass = 0.75, terrain = 1.0), s.ekfVariances)
+        // clipping is a uint32 count: the largest one must not turn negative.
+        assertEquals(Vibration(12.5, 3.0, 61.0, listOf(0L, 4L, 4294967295L)), s.vibration)
     }
 
     @Test
