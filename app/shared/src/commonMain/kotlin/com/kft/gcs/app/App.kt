@@ -61,6 +61,7 @@ import com.kft.gcs.feature.settings.SigningKeysRoute
 import com.kft.gcs.feature.settings.SigningKeysViewModel
 import com.kft.gcs.feature.settings.SigningUnlockPrompt
 import com.kft.gcs.feature.setup.CalibrationViewModel
+import com.kft.gcs.feature.setup.PreArmViewModel
 import com.kft.gcs.feature.setup.SetupRoute
 import com.kft.gcs.feature.setup.SetupViewModel
 import com.kft.gcs.ui.design.KftIcons
@@ -157,6 +158,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     // Window scope so a calibration keeps running (and can be cancelled) when the operator looks at another tab.
     val setup: SetupViewModel = koinViewModel()
     val calibration: CalibrationViewModel = koinViewModel()
+    val preArm: PreArmViewModel = koinViewModel()
     // A fleet alert (link lost, battery low, RTL, mission done) is a toast on every tab, and a line on the Fleet tab.
     val alerts = remember { SnackbarHostState() }
     LaunchedEffect(fleet) { fleet.effects.collect { alerts.showSnackbar("${it.vehicle}: ${it.text}") } }
@@ -228,7 +230,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
             composable(Destination.KEYS.route) { Surface(Modifier.fillMaxSize()) { SigningKeysRoute(keys) } }
             composable(Destination.PARAMS.route) { Surface(Modifier.fillMaxSize()) { ParamsRoute(params) } }
-            composable(Destination.SETUP.route) { Surface(Modifier.fillMaxSize()) { SetupRoute(setup, calibration) } }
+            composable(Destination.SETUP.route) { Surface(Modifier.fillMaxSize()) { SetupRoute(setup, calibration, preArm) } }
             composable(Destination.FLEET.route) { Surface(Modifier.fillMaxSize()) { FleetRoute(fleet) { slot -> VehicleColors[slot.mod(VehicleColors.size)] } } }
         }
         SnackbarHost(alerts, Modifier.align(Alignment.TopCenter).zIndex(4f))

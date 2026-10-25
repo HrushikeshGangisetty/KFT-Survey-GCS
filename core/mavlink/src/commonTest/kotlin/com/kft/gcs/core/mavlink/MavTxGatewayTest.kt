@@ -77,6 +77,20 @@ class MavTxGatewayTest {
     }
 
     /**
+     * Pass 45: the pre-arm panel's "run checks now" is read-only, so it is allowed in every pod and armed state (the FC
+     * itself refuses it while armed). Its number is common.xml's, and arming itself stays the pilot's.
+     */
+    @Test
+    fun runPrearmChecksIsAlwaysAllowed() {
+        val worstCase = PodStatus(PodLockState.ENGAGE, aiEnableHigh = true)
+        assertEquals(401u, MavCmd.RUN_PREARM_CHECKS.value, "MAV_CMD_RUN_PREARM_CHECKS in common.xml")
+        assertEquals(TxClassification(TxCategory.ALWAYS, "MAV_CMD_RUN_PREARM_CHECKS"), TxPolicy.classify(command(MavCmd.RUN_PREARM_CHECKS)))
+        assertNull(verdict(command(MavCmd.RUN_PREARM_CHECKS), worstCase, armed = true), "as COMMAND_LONG")
+        assertNull(verdict(commandInt(MavCmd.RUN_PREARM_CHECKS), worstCase, armed = null), "as COMMAND_INT")
+        assertTrue(verdict(command(MavCmd.COMPONENT_ARM_DISARM, param2 = 0f))!!.contains("S9"), "arming is still refused")
+    }
+
+    /**
      * Pass 18: PARAM_SET only on the ground. Unknown armed state (no vehicle heard) fails closed, like
      * MISSION_SET_CURRENT. Reading parameters stays allowed while armed (see alwaysAllowed…).
      */

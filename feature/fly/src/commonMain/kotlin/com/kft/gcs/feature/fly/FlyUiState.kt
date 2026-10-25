@@ -9,6 +9,7 @@ import com.kft.gcs.core.vehicle.GpsFix
 import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.Severity
 import com.kft.gcs.core.vehicle.VehicleState
+import com.kft.gcs.core.vehicle.preArmFailure
 import com.kft.gcs.ui.map.CameraRequest
 import com.kft.gcs.ui.map.MapOverlay
 import com.kft.gcs.ui.map.TileSourceConfig
@@ -75,6 +76,16 @@ fun hudItems(v: VehicleState): List<HudItem> = listOf(
     ),
     HudItem("Mission", missionText(v.mission)),
 )
+
+/**
+ * " (+2 more: Setup › Pre-arm checks)" after a pre-arm message when the FC's latest report has more failures than the
+ * one on show, so one reason can't hide the others; empty otherwise.
+ */
+internal fun morePreArm(v: VehicleState): String {
+    val text = v.lastMessage?.text ?: return ""
+    val more = v.preArm.failures.size - 1
+    return if (more > 0 && preArmFailure(text) != null) " (+$more more: Setup › Pre-arm checks)" else ""
+}
 
 /** GPS fix and satellites; a warning below a 3D fix, where ArduPilot won't fly a mission. */
 fun gpsItem(v: VehicleState) =

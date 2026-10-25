@@ -65,6 +65,9 @@ class VehicleRepository(
     private val _state = MutableStateFlow(VehicleState())
     val state: StateFlow<VehicleState> = _state.asStateFlow()
 
+    /** The zero of the clock [reduce] is given; only differences between its readings matter. */
+    private val epoch = timeSource.markNow()
+
     // Touched only by the collector coroutine below, so no locking.
     private var session: Job? = null
     private var lastSessionStart: ComparableTimeMark? = null
@@ -108,7 +111,8 @@ class VehicleRepository(
                         if (update.frame.systemId == v.systemId && update.frame.componentId == v.componentId) {
                             val message = update.frame.message
                             if (message is Heartbeat) lastHeartbeat = onVehicleHeartbeat(v, lastHeartbeat)
-                            _state.update { it.reduce(message) }
+                            val now = epoch.elapsedNow()
+                            _state.update { it.reduce(message, now) }
                         }
                     }
                 }

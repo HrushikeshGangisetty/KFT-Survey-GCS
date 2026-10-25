@@ -205,4 +205,38 @@ class SitlCheck {
         withTimeout(30.seconds) { fleet.selected.first { !it.armed } }
         assertEquals(cam.value, params.downloadAll().getOrThrow().single { it.name == "CAM1_TYPE" }.value, "unchanged by the refused set")
     }
+
+    /**
+     * Pass 45 acceptance: two pre-arm failures at once both reach the report, a run on request refreshes it, and fixing
+     * them clears it (through SYS_STATUS's pre-arm bit). Needs a SITL that is ready to arm (`wait_ready.py` first).
+     * The failures come from two parameters, restored at the end: BATT_ARM_VOLT above SITL's 12.6 V battery
+     * ("Battery 1 below minimum arming voltage") and RC1_MIN above RC1_TRIM ("RC1_MIN is greater than RC1_TRIM").
+     */
+    @Test
+    fun preArmReportListsEveryFailureAndClears() = withSitl { fleet ->
+        val params = fleet.params.downloadAll().getOrThrow().associateBy { it.name }
+        val volt = params.getValue("BATT_ARM_VOLT")
+        val rcMin = params.getValue("RC1_MIN")
+        withTimeout(10.seconds) { fleet.selected.first { it.sensorBits != null } }
+        println("sensors: " + fleet.selected.value.sensorBits!!.sensors.joinToString { "${it.name} ${it.state}" })
+        assertEquals(SensorState.HEALTHY, fleet.selected.value.sensorBits!!.sensors.single { it.name == "Gyro" }.state)
+        try {
+            assertTrue(fleet.params.set(volt, 20f) is ParamSetResult.Applied)
+            assertTrue(fleet.params.set(rcMin, 1600f) is ParamSetResult.Applied)
+            assertEquals(SetupResult.Done, fleet.setup.run(SetupCommand.RunPreArmChecks))
+            val failing = withTimeout(10.seconds) { fleet.selected.first { s -> s.preArm.failures.size >= 2 } }
+            println("report: ${failing.preArm.failures}")
+            assertTrue(failing.preArm.failures.any { "below minimum arming voltage" in it }, "${failing.preArm.failures}")
+            assertTrue(failing.preArm.failures.any { "RC1_MIN is greater than RC1_TRIM" in it }, "${failing.preArm.failures}")
+            withTimeout(10.seconds) { fleet.selected.first { it.sensorBits?.preArmPassing == false } }
+        } finally {
+            fleet.params.set(volt.copy(value = 20f), volt.value)
+            fleet.params.set(rcMin.copy(value = 1600f), rcMin.value)
+        }
+        assertEquals(SetupResult.Done, fleet.setup.run(SetupCommand.RunPreArmChecks))
+        // ArduPilot refreshes the pre-arm bit from its 1 Hz check; then the list clears.
+        val cleared = withTimeout(15.seconds) { fleet.selected.first { it.sensorBits?.preArmPassing == true } }
+        println("after restoring: passing, report ${cleared.preArm.failures}")
+        assertEquals(emptyList(), cleared.preArm.failures)
+    }
 }

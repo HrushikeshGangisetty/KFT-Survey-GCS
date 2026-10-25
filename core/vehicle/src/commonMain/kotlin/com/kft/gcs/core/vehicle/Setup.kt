@@ -56,6 +56,12 @@ sealed interface SetupCommand {
 
     /** Restarts the autopilot. The link drops for a few seconds and the GCS logs in again by itself. */
     data object Reboot : SetupCommand
+
+    /**
+     * Runs the pre-arm checks now, so the report ([PreArmReport]) is fresh. Changes nothing on the vehicle: the FC only
+     * sends a "PreArm:" text per failure, as it does by itself every 30 s.
+     */
+    data object RunPreArmChecks : SetupCommand
 }
 
 /** How a [SetupCommand] ended. [Failed.reason] is written for the operator. */
@@ -107,7 +113,8 @@ interface VehicleSetupRepository {
  * [VehicleSetupRepository] over COMMAND_LONG and the calibration messages, for one vehicle.
  *
  * Every command waits for the KFT login (like parameters), and the TX gateway allows them only while disarmed
- * (TxPolicy SETUP_PATTERNS, which allows exactly the numbers [toCommand] builds).
+ * (TxPolicy SETUP_PATTERNS, which allows exactly the numbers [toCommand] builds). The pre-arm run is the exception: it
+ * changes nothing, so the gateway always allows it, and the FC itself refuses it while armed.
  */
 class DefaultVehicleSetupRepository(
     private val frames: Flow<MavFrame<out MavMessage<*>>>,
@@ -119,7 +126,7 @@ class DefaultVehicleSetupRepository(
 
     override suspend fun run(command: SetupCommand): SetupResult {
         val target = loggedInTarget(link.value, vehicle.value)
-            ?: return SetupResult.Failed(notReadyReason(link.value, vehicle.value, "Calibrations"))
+            ?: return SetupResult.Failed(notReadyReason(link.value, vehicle.value, if (command == SetupCommand.RunPreArmChecks) "Pre-arm checks" else "Calibrations"))
         val (message, attempts, timeout) = command.toCommand(target)
         val result = commands.send(message, attempts, timeout)
         return result.toSetupResult(command)
@@ -165,6 +172,10 @@ internal fun SetupCommand.toCommand(target: MissionProtocol.Target): WireCommand
         SetupCommand.CompassCancel -> long(ArduMavCmd.DO_CANCEL_MAG_CAL.value, attempts = CommandProtocol.ATTEMPTS, timeout = CommandProtocol.ACK_TIMEOUT)
         is SetupCommand.RcCalibrating -> long(calibration, 0f, 0f, 0f, if (on) 1f else 0f, attempts = CommandProtocol.ATTEMPTS, timeout = CommandProtocol.ACK_TIMEOUT)
         SetupCommand.Reboot -> long(MavCmd.PREFLIGHT_REBOOT_SHUTDOWN.value, 1f, timeout = CommandProtocol.ACK_TIMEOUT * 2)
+        // MAV_CMD_RUN_PREARM_CHECKS (common.xml #401, no parameters). ArduPilot runs the checks in the same pass and ACKs
+        // at once (GCS_Common.cpp handle_command_run_prearm_checks), so the usual resends are fine: a second run only
+        // reports again.
+        SetupCommand.RunPreArmChecks -> long(MavCmd.RUN_PREARM_CHECKS.value, attempts = CommandProtocol.ATTEMPTS, timeout = CommandProtocol.ACK_TIMEOUT)
     }
 }
 
@@ -185,7 +196,10 @@ internal fun CommandResult.toSetupResult(command: SetupCommand): SetupResult = w
         else SetupResult.Failed(
             when (result) {
                 MavResult.DENIED, MavResult.FAILED -> "The vehicle refused it. Check its messages below and that it is disarmed and still."
-                MavResult.TEMPORARILY_REJECTED -> "The vehicle is busy. Try again in a moment."
+                // handle_command_run_prearm_checks answers TEMPORARILY_REJECTED while armed, and only then.
+                MavResult.TEMPORARILY_REJECTED ->
+                    if (command == SetupCommand.RunPreArmChecks) "The vehicle is armed. It only runs its pre-arm checks while disarmed."
+                    else "The vehicle is busy. Try again in a moment."
                 MavResult.UNSUPPORTED -> "This firmware doesn't support it."
                 else -> "The vehicle answered ${result.name}."
             },

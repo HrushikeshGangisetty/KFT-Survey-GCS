@@ -56,6 +56,7 @@ class SetupTest {
             SetupCommand.RcCalibrating(true) to (241u to listOf(0f, 0f, 0f, 1f, 0f, 0f, 0f)),
             SetupCommand.RcCalibrating(false) to (241u to listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f)),
             SetupCommand.Reboot to (246u to listOf(1f, 0f, 0f, 0f, 0f, 0f, 0f)),
+            SetupCommand.RunPreArmChecks to (401u to listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f)),
         )
         for ((command, wire) in expected) {
             val m = command.toCommand(target).message
@@ -98,6 +99,21 @@ class SetupTest {
         launch { delay(4.seconds); fc.emit(ackFor(fc.sentOf<CommandLong>().single())) }
         assertEquals(SetupResult.Done, repo.run(SetupCommand.Baro))
         assertEquals(1, fc.sent.size)
+    }
+
+    /**
+     * The pre-arm run ACKs at once, so a lost ACK is resent like any quick command; TEMPORARILY_REJECTED is ArduPilot's
+     * answer while armed (handle_command_run_prearm_checks) and is worded so.
+     */
+    @Test
+    fun preArmRunIsResentAndExplainsAnArmedRefusal() = runTest {
+        fc.reply = { emptyList() }
+        assertEquals(SetupResult.Failed("No answer from the vehicle."), repo.run(SetupCommand.RunPreArmChecks))
+        assertEquals(CommandProtocol.ATTEMPTS, fc.sent.size, "a quick command: the usual resends")
+        fc.reply = { listOf(ackFor(it as CommandLong, MavResult.TEMPORARILY_REJECTED)) }
+        assertContains(assertIs<SetupResult.Failed>(repo.run(SetupCommand.RunPreArmChecks)).reason, "armed")
+        fc.reply = { listOf(ackFor(it as CommandLong)) }
+        assertEquals(SetupResult.Done, repo.run(SetupCommand.RunPreArmChecks))
     }
 
     @Test

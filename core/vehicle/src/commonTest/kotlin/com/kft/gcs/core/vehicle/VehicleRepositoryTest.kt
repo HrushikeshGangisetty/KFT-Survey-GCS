@@ -1,7 +1,10 @@
 package com.kft.gcs.core.vehicle
 
 import com.kft.gcs.core.mission.Home
+import com.divpundir.mavlink.api.MavEnumValue
 import com.divpundir.mavlink.api.MavMessage
+import com.divpundir.mavlink.definitions.common.MavSeverity
+import com.divpundir.mavlink.definitions.common.Statustext
 import com.divpundir.mavlink.definitions.common.CommandLong
 import com.divpundir.mavlink.definitions.common.HomePosition
 import com.divpundir.mavlink.definitions.common.MavCmd
@@ -145,6 +148,23 @@ class VehicleRepositoryTest {
         frame(VfrHud(groundspeed = 99f), componentId = 154u) // a gimbal on the same system
         runCurrent()
         assertEquals(7.5, repo.state.value.groundspeedMs)
+    }
+
+    /** The repository's own clock tells pre-arm bursts apart: 30 s of (virtual) time between reports starts a new list. */
+    @Test
+    fun preArmReportsAreTimedByTheRepository() = runTest {
+        val repo = repository()
+        link.value = LinkState.Connected(udp, copter, LinkStats())
+        runCurrent()
+        fun preArm(text: String) = frame(Statustext(severity = MavEnumValue.of(MavSeverity.CRITICAL), text = "PreArm: $text"))
+        preArm("GPS 1: Bad fix")
+        preArm("RC not found")
+        runCurrent()
+        assertEquals(listOf("GPS 1: Bad fix", "RC not found"), repo.state.value.preArm.failures)
+        advanceTimeBy(30.seconds)
+        preArm("RC not found")
+        runCurrent()
+        assertEquals(listOf("RC not found"), repo.state.value.preArm.failures)
     }
 
     @Test

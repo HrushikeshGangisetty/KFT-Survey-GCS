@@ -179,6 +179,10 @@ internal object TxPolicy {
         MavCmd.SET_MESSAGE_INTERVAL.value -> always("MAV_CMD_SET_MESSAGE_INTERVAL")
         MavCmd.REQUEST_MESSAGE.value -> always("MAV_CMD_REQUEST_MESSAGE")
         MavCmd.REQUEST_AUTOPILOT_CAPABILITIES.value -> always("MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES")
+        // RUN_PREARM_CHECKS (common.xml #401): read-only. ArduPilot runs AP_Arming::pre_arm_checks(true), which only
+        // reports ("PreArm: …" texts), and answers TEMPORARILY_REJECTED while armed (GCS_Common.cpp
+        // handle_command_run_prearm_checks, KFT fork d91a40ef). It doesn't arm: arming is still the pilot's (S9).
+        MavCmd.RUN_PREARM_CHECKS.value -> always("MAV_CMD_RUN_PREARM_CHECKS")
         // KFT login (spec S12). common.xml defines USER_1/USER_2 (31010/31011) as free for private use; ardupilotKFT
         // uses them as the HMAC challenge request and response, and before login drops every message except
         // HEARTBEAT and these two (GCS_Common.cpp handle_message). ALWAYS: they move nothing, and the GCS must be

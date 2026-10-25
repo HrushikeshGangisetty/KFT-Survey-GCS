@@ -12,6 +12,7 @@ enum class SetupPage(val title: String, val group: String) {
     RADIO("Radio", "Calibration"),
     FLIGHT_MODES("Flight modes", "Configuration"),
     FAILSAFES("Failsafes", "Configuration"),
+    PREARM("Pre-arm checks", "Information"),
     HARDWARE("Hardware ID", "Information"),
 }
 

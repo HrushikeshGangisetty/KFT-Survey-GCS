@@ -21,6 +21,9 @@ import com.kft.gcs.core.mission.MissionCommand
 import com.kft.gcs.core.mission.MissionItem
 import com.kft.gcs.core.vehicle.MissionProgress
 import com.kft.gcs.core.vehicle.MissionSync
+import com.kft.gcs.core.vehicle.PreArmReport
+import com.kft.gcs.core.vehicle.Severity
+import com.kft.gcs.core.vehicle.StatusMessage
 import com.kft.gcs.core.vehicle.VehicleRepository
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.vehicleLabels
@@ -270,6 +273,17 @@ class FlyViewModelTest {
         assertEquals("12.6 V · 15%", hud.getValue("Battery").value)
         assertTrue(hud.getValue("Battery").warning, "below 20% warns")
         assertTrue(hud.getValue("State").warning, "armed is highlighted")
+    }
+
+    /** Fly shows one message; when the pre-arm report has more failures than that one, it says how many and where they are. */
+    @Test
+    fun aPreArmMessageSaysHowManyMoreThereAre() {
+        val three = PreArmReport(listOf("GPS 1: Bad fix", "RC not found", "Compass not calibrated"))
+        val preArm = VehicleState(lastMessage = StatusMessage("PreArm: Compass not calibrated", Severity.ERROR), preArm = three)
+        assertEquals(" (+2 more: Setup › Pre-arm checks)", morePreArm(preArm))
+        assertEquals("", morePreArm(preArm.copy(preArm = PreArmReport(listOf("Compass not calibrated")))), "one failure: nothing more to say")
+        assertEquals("", morePreArm(preArm.copy(lastMessage = StatusMessage("EKF3 IMU0 is using GPS", Severity.INFO))), "only after a pre-arm message")
+        assertEquals("", morePreArm(VehicleState()))
     }
 
     /** The HUD warns when the vehicle holds something other than the plan, and only when that's known. */

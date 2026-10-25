@@ -110,7 +110,7 @@ class FlyViewModel(
             login = v.login?.let { LoginUi(it.label, it.warning) },
             hud = hudItems(v) + photosItem(selected?.let(::photosOf)?.size ?: 0, s.plannedPhotos),
             gps = gpsItem(v),
-            message = v.lastMessage?.let { MessageUi(it.text, it.severity) },
+            message = v.lastMessage?.let { MessageUi(it.text + morePreArm(v), it.severity) },
             missionWarning = if (v.connected && s.differsFrom(v.mission?.total)) "Vehicle mission ≠ plan" else null,
             vehicleProblem = selected?.takeIf { it.duplicateId }?.let { "Two vehicles are using system id ${it.id.systemId}: nothing can be sent" },
             vehicles = all.map { VehicleChipUi(it.id, labels.getValue(it.id), it.slot, selected = it.id == selectedId, connected = it.state.connected) },

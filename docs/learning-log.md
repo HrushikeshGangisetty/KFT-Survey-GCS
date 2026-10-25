@@ -4730,3 +4730,73 @@ Setup tab ─▶ SetupViewModel ───────▶ ParamRepository.known /
 - The Params tab keeps its own snapshot, so values changed in Setup show there only after its next download (or a reconnect). Suggestion: let `ParamsViewModel` follow `ParamRepository.known`.
 - Not included, possible next steps: Large Vehicle MagCal (MAV_CMD_FIXED_MAG_CAL_YAW, which needs a heading input), compass orientation and enable, battery monitor setup (BATT_MONITOR, capacity, voltage divider). ESC calibration and motor test both spin the motors, so they would need a decision against S9 first.
 - The failsafe tables are fixed to the fork's d91a40ef docs. A firmware that renumbers an option would show "N, not a listed value" until the table is updated.
+
+## Pass 45 — Pre-arm check panel: every reason the vehicle won't arm, and sensor health (2026-10-25)
+
+### What changed
+- `core/vehicle/.../PreArm.kt` (new): `PreArmReport` (the failures in the FC's latest pre-arm report), `preArmFailure` (is this text one?), `plusFailure` (the burst rule), `SensorBits` (SYS_STATUS's present/enabled/health bitmasks, with `preArmPassing`, `preArmChecksOff` and a named `sensors` list).
+- `core/vehicle/.../VehicleState.kt`: two new fields, `sensorBits` and `preArm`. `reduce` takes the arrival time `now` (only the pre-arm report uses it). SYS_STATUS fills the bits and clears the report once the pre-arm bit is healthy; a CRITICAL "PreArm:"/"Arm:" text adds to the report.
+- `core/vehicle/.../VehicleRepository.kt`: passes its own clock (`epoch.elapsedNow()`) into `reduce`.
+- `core/vehicle/.../Setup.kt`: a new `SetupCommand.RunPreArmChecks` (MAV_CMD_RUN_PREARM_CHECKS, quick command with the usual resends) and an operator sentence for ArduPilot's "armed" refusal.
+- `core/mavlink/.../TxPolicy.kt`: MAV_CMD_RUN_PREARM_CHECKS is ALWAYS (see Safety).
+- `feature/setup/.../PreArmViewModel.kt` (new): `PreArmUiState`, `Readiness`, `PreArmViewModel` (the one event: `onRunChecksClicked`).
+- `feature/setup/.../PreArmPage.kt` (new): verdict banner with "Run checks now", the failure list, sensor-health chips.
+- `feature/setup/.../SetupScreen.kt`, `SetupUiState.kt`, `di/SetupModule.kt`, `app/shared/.../App.kt`: a "Pre-arm checks" page under Information; the header's "Read parameters" button is now only on the pages that show parameters (`PARAM_PAGES`).
+- `feature/fly/.../FlyUiState.kt`, `FlyViewModel.kt`: Fly's message line adds "(+2 more: Setup › Pre-arm checks)" when the report has more failures than the one on show.
+- Tests: `PreArmTest` (new), `PreArmViewModelTest` (new), additions to `MavTxGatewayTest`, `SetupTest`, `VehicleRepositoryTest`, `FlyViewModelTest`, and an env-gated `SitlCheck.preArmReportListsEveryFailureAndClears`.
+
+### How it works
+```
+FC: pre_arm_checks(report=true) ── one STATUSTEXT per failed check, all at once ──┐
+    (every 30 s while disarmed, on an arming attempt, on RUN_PREARM_CHECKS)        │
+                                                                                   ▼
+VehicleRepository ── reduce(message, now) ──▶ VehicleState.preArm = report.plusFailure(text, now)
+                                              (more than 2 s since the last text → a new report)
+SYS_STATUS ── reduce ──▶ VehicleState.sensorBits; pre-arm bit healthy → preArm cleared
+                                                                                   │
+PreArmViewModel: combine(vehicle, running) ─▶ PreArmUiState (readiness, failures, sensors) ─▶ PreArmPage
+"Run checks now" ─▶ VehicleSetupRepository.run(RunPreArmChecks) ─▶ COMMAND_LONG 401 ─▶ gateway (ALWAYS) ─▶ FC
+```
+1. ArduPilot runs every check in one pass and ANDs them with `&`, so one failure doesn't stop the next from being reported (AP_Arming.cpp `pre_arm_checks`, KFT fork d91a40ef). Each failure is a CRITICAL STATUSTEXT "PreArm: …".
+2. So one burst of texts is one complete report. A text more than 2 s after the previous one starts a new report, which replaces the old list: a check that now passes simply isn't in the new burst.
+3. ArduPilot sends nothing when the checks pass. The "all clear" is SYS_STATUS's MAV_SYS_STATUS_PREARM_CHECK bit, healthy "if armed or checks are passing" (GCS.cpp `update_sensor_status_flags`). When it turns healthy the list is cleared.
+4. The verdict: the bit when the FC reports it; otherwise "not ready" if a failure is listed, "checks off" if the bit is present but not enabled (ARMING_CHECK = 0), else "not known yet".
+5. Sensor health is the same SYS_STATUS: present and enabled and healthy = OK, present and enabled but not healthy = unhealthy, present but not enabled = off.
+
+### Engineering learnings
+- **Grouping by time instead of by message.** MAVLink has no "report start/end" marker for pre-arm texts. The alternatives were (a) keep every PreArm text ever seen until the checks pass, which shows a fixed problem until *everything* is fixed, or (b) keep only the latest text, which is what Fly did and why one reason hid the others. The 2 s gap works because ArduPilot sends a whole report in one main-loop pass and two reports are always at least 4 s apart.
+- **Time as an input to a pure function.** `reduce` stays pure: the repository reads its clock and passes `now`. Tests give literal times (`PreArmTest`) or virtual time (`VehicleRepositoryTest`), with no sleeping.
+- **Reusing `SetupCommand` instead of a new repository.** The pre-arm run has the same shape as a calibration command (one COMMAND_LONG, an ACK, an operator-worded result, wait for the login), so it is one more `SetupCommand` instead of a parallel `PreArmRepository` with its own Fleet plumbing.
+- **A third Setup ViewModel.** `PreArmViewModel` is separate from `CalibrationViewModel` because it shares none of its state (no running calibration, no cancel, no vehicle-switch abort). Its state is derived from `VehicleState`, so it holds only one flag of its own (`running`).
+- **Labels from the library's enum, not raw numbers.** `SENSOR_LABELS` names `MavSysStatusSensor` entries, so a typo in a bit value can't happen. The tests use the raw numbers from common.xml as the independent reference.
+- Ponytail review (lite) on the diff: one finding, applied. `morePreArm` re-checked the prefixes by hand; it now reuses `preArmFailure`.
+
+### What to look at
+1. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/PreArm.kt:45`: `plusFailure`, the burst rule.
+2. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/VehicleState.kt:179`: the SYS_STATUS and STATUSTEXT branches of `reduce`.
+3. `feature/setup/src/commonMain/kotlin/com/kft/gcs/feature/setup/PreArmViewModel.kt`: `readiness` and `onRunChecksClicked`.
+
+### Tests
+- `PreArmTest`: a burst lists every failure, once each, in order; a later burst replaces the old one (2 s is the same burst, 3 s a new one); "Arm:" texts count, DEBUG-severity (disabled-check) texts and other texts don't; a healthy pre-arm bit clears the list; ARMING_CHECK = 0 and "no bit" are both unknown, and only the first is "checks off"; sensor states from hand-built bitmasks (common.xml values written out in the test).
+- `VehicleRepositoryTest.preArmReportsAreTimedByTheRepository`: 30 s of virtual time between two texts starts a new report.
+- `SetupTest`: RUN_PREARM_CHECKS is command 401 with seven zeros; it is resent three times without an answer; TEMPORARILY_REJECTED reads "The vehicle is armed…".
+- `MavTxGatewayTest.runPrearmChecksIsAlwaysAllowed`: 401 is ALWAYS as COMMAND_LONG and COMMAND_INT, with the pod in ENGAGE and the vehicle armed or unknown; ARM_DISARM is still refused (S9).
+- `PreArmViewModelTest`: failures and sensors shown, verdict follows the bit; readiness cases; the run sends one command, blocks a second press while waiting, and reports; a refusal is shown; nothing is sent while armed or logging in.
+- `FlyViewModelTest.aPreArmMessageSaysHowManyMoreThereAre`.
+- `./gradlew check`: BUILD SUCCESSFUL. No new compiler warnings. (One run hit the flaky `core:keys` test below; the rerun was clean. Another run's Android lint crashed on `FlyViewModelTest.kt` because the file was edited while lint was reading it; it passed on rerun.)
+- **SITL, run** (Mission Planner's Windows ArduCopter SITL, `start-sitl.ps1`, `wait_ready.py 5763`): `KFT_SITL=127.0.0.1:5762 ./gradlew :core:vehicle:jvmTest --tests '*SitlCheck.preArm*'` passed. Output:
+  - sensors: Gyro, Accelerometer, Compass, Barometer, GPS, AHRS / EKF, RC receiver, Battery, Motor outputs, Propulsion, Rate/Attitude/Yaw control, Terrain HEALTHY; Altitude control, Position control, Geofence, Logging off.
+  - report after setting BATT_ARM_VOLT = 20 and RC1_MIN = 1600 and running the checks: `[Battery 1 below minimum arming voltage, Roll radio min too high, RC1_MIN is greater than RC1_TRIM]`. Three failures in one report; the old Fly line would have shown only the last.
+  - after restoring both and running again: pre-arm bit healthy, report empty.
+- The page itself was checked visually in the desktop app in Pass 46's session (see Pass 46).
+
+### Safety
+- **Allowlist change:** MAV_CMD_RUN_PREARM_CHECKS (common.xml #401) added as ALWAYS, as COMMAND_LONG or COMMAND_INT. It is read-only. ArduPilot calls `AP_Arming::pre_arm_checks(true)`, which only reports, and answers TEMPORARILY_REJECTED while armed (GCS_Common.cpp `handle_command_run_prearm_checks`, KFT fork d91a40ef). It doesn't arm and changes no state. Test: `MavTxGatewayTest.runPrearmChecksIsAlwaysAllowed`.
+- S9 is unchanged: the panel has no arm button, and COMPONENT_ARM_DISARM stays PILOT_ONLY. The page tells the operator *why*; the pilot still arms on the RC.
+- The SITL check changes BATT_ARM_VOLT and RC1_MIN to provoke failures and restores both in a `finally`. That's a test-only action against SITL, through the normal disarmed-only PARAM_SET.
+
+### Open questions / next
+- `ponytail:` in `PreArm.kt`: a report asked for within 2 s of a periodic one merges with it. Only wrong if a check was fixed in exactly those 2 s; the next report (≤ 30 s) corrects it.
+- The report is per link session and survives a heartbeat gap. After a reboot the first SYS_STATUS or report replaces it.
+- Flaky test seen once, not from this pass: `core:keys` `IdleAutoLockTest.theWindowStartsWhenTheVaultIsUnlockedNotWhenTheTimerWasBuilt` failed in the first `check` run and passed on rerun. Worth a look (the unlock may run on a real dispatcher while the test advances virtual time).
+- Next: Pass 46, flight log download.

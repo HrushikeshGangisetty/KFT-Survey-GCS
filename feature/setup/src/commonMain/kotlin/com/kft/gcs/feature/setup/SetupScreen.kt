@@ -55,14 +55,16 @@ import com.kft.gcs.ui.design.Spacing
 import com.kft.gcs.ui.design.Status
 import com.kft.gcs.ui.design.StatusChip
 
-/** Wires the stateless [SetupScreen] to its two ViewModels, and shows their messages as snackbars. */
+/** Wires the stateless [SetupScreen] to its ViewModels, and shows their messages as snackbars. */
 @Composable
-fun SetupRoute(setup: SetupViewModel, calibration: CalibrationViewModel) {
+fun SetupRoute(setup: SetupViewModel, calibration: CalibrationViewModel, preArm: PreArmViewModel) {
     val state by setup.state.collectAsStateWithLifecycle()
     val cal by calibration.state.collectAsStateWithLifecycle()
+    val pre by preArm.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(setup) { setup.effects.collect { (it as SetupEffect.ShowMessage).let { m -> snackbar.showSnackbar(m.text) } } }
     LaunchedEffect(calibration) { calibration.effects.collect { (it as SetupEffect.ShowMessage).let { m -> snackbar.showSnackbar(m.text) } } }
+    LaunchedEffect(preArm) { preArm.effects.collect { (it as SetupEffect.ShowMessage).let { m -> snackbar.showSnackbar(m.text) } } }
     Box(Modifier.fillMaxSize()) {
         SetupScreen(
             state, cal,
@@ -79,6 +81,7 @@ fun SetupRoute(setup: SetupViewModel, calibration: CalibrationViewModel) {
                 onRadioSave = calibration::onRadioSaveClicked, onCancel = calibration::onCancelClicked, onReboot = calibration::onRebootClicked,
                 onRebootConfirm = calibration::onRebootConfirmed, onRebootDismiss = calibration::onRebootDismissed,
             ),
+            pre, preArm::onRunChecksClicked,
         )
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
@@ -96,12 +99,19 @@ class SetupActions(
 )
 
 /**
- * Vehicle setup: a page list on the left, the page on the right. The calibration pages draw [cal]; the others draw
- * [state]. Everything that talks to the vehicle is disabled, with the reason shown, unless the vehicle is connected,
- * logged in and disarmed.
+ * Vehicle setup: a page list on the left, the page on the right. The calibration pages draw [cal], the pre-arm page
+ * [preArm]; the others draw [state]. Everything that talks to the vehicle is disabled, with the reason shown, unless
+ * the vehicle is connected, logged in and disarmed.
  */
 @Composable
-fun SetupScreen(state: SetupUiState, cal: CalibrationUiState, actions: SetupActions, calActions: CalibrationActions) {
+fun SetupScreen(
+    state: SetupUiState,
+    cal: CalibrationUiState,
+    actions: SetupActions,
+    calActions: CalibrationActions,
+    preArm: PreArmUiState = PreArmUiState(),
+    onRunPreArm: () -> Unit = {},
+) {
     Row(Modifier.fillMaxSize()) {
         PageList(state, cal, actions, calActions)
         VerticalDivider()
@@ -112,7 +122,11 @@ fun SetupScreen(state: SetupUiState, cal: CalibrationUiState, actions: SetupActi
             ) {
                 PageHeader(state, actions)
                 val calibrationPage = state.page in CALIBRATION_PAGES
-                (if (calibrationPage) cal.hint?.takeIf { cal.running == null } else state.notice)?.let { Banner(it, Status.WARN) }
+                when {
+                    calibrationPage -> cal.hint?.takeIf { cal.running == null }
+                    state.page == SetupPage.PREARM -> preArm.hint
+                    else -> state.notice
+                }?.let { Banner(it, Status.WARN) }
                 cal.rebootAdvice?.let { advice ->
                     Banner(advice, Status.WARN) { TextButton(onClick = calActions.onReboot, enabled = cal.canReboot) { Text("Reboot now") } }
                 }
@@ -123,6 +137,7 @@ fun SetupScreen(state: SetupUiState, cal: CalibrationUiState, actions: SetupActi
                     SetupPage.RADIO -> RadioPage(cal, calActions)
                     SetupPage.FLIGHT_MODES, SetupPage.FAILSAFES -> ParamPage(state, actions)
                     SetupPage.HARDWARE -> HardwarePage(state)
+                    SetupPage.PREARM -> PreArmPage(preArm, onRunPreArm)
                 }
                 if (calibrationPage && cal.log.isNotEmpty()) VehicleMessages(cal)
             }
@@ -142,6 +157,9 @@ fun SetupScreen(state: SetupUiState, cal: CalibrationUiState, actions: SetupActi
 }
 
 private val CALIBRATION_PAGES = setOf(SetupPage.ACCEL, SetupPage.COMPASS, SetupPage.BARO, SetupPage.RADIO)
+
+/** The pages that show parameter values (the radio page reads the RCx_ ranges), so their header offers "Read". */
+private val PARAM_PAGES = setOf(SetupPage.RADIO, SetupPage.FLIGHT_MODES, SetupPage.FAILSAFES, SetupPage.HARDWARE)
 
 @Composable
 private fun PageList(state: SetupUiState, cal: CalibrationUiState, actions: SetupActions, calActions: CalibrationActions) {
@@ -183,7 +201,7 @@ private fun PageHeader(state: SetupUiState, actions: SetupActions) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(state.page.title, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
         // Only the pages that show parameters need them read.
-        if (state.page !in CALIBRATION_PAGES || state.page == SetupPage.RADIO) {
+        if (state.page in PARAM_PAGES) {
             Text(state.params, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             TextButton(onClick = actions.onDownload, enabled = state.canDownload) {
                 Icon(KftIcons.Download, contentDescription = null, Modifier.size(18.dp))

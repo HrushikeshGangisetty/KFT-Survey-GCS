@@ -24,6 +24,7 @@ import com.kft.gcs.core.geo.LatLon
 import com.kft.gcs.core.mavlink.VehicleKind
 import com.kft.gcs.core.mavlink.signing.SigningStatus
 import kotlin.math.PI
+import kotlin.time.Duration
 
 /**
  * Everything the GCS knows about the vehicle, in plain units (metres, m/s, degrees, volts). Null means "not
@@ -83,6 +84,10 @@ data class VehicleState(
     val rcChannels: List<Int> = emptyList(),
     /** Board and firmware identity from AUTOPILOT_VERSION. Null until it arrives (it is requested at connect). */
     val autopilot: AutopilotIdentity? = null,
+    /** SYS_STATUS's sensor bitmasks: sensor health and whether the pre-arm checks pass. Null until the first SYS_STATUS. */
+    val sensorBits: SensorBits? = null,
+    /** Every failure in the FC's latest pre-arm report ([PreArmReport]); cleared once the checks pass. */
+    val preArm: PreArmReport = PreArmReport(),
 ) {
     /**
      * The vehicle's simple geofence, or null when it is off or not known yet. ArduPilot's AC_Fence parameters (Copter
@@ -153,8 +158,10 @@ enum class Severity { ERROR, WARNING, INFO }
 /**
  * Applies one telemetry message to the state. Pure, so each conversion (units, "unknown" sentinels) is tested
  * with hand-calculated values. Messages it doesn't use leave the state unchanged.
+ *
+ * @param now when [message] arrived, on the repository's clock; only the pre-arm report uses it ([PreArmReport]).
  */
-internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (message) {
+internal fun VehicleState.reduce(message: MavMessage<*>, now: Duration = Duration.ZERO): VehicleState = when (message) {
     is GlobalPositionInt -> copy(
         // ArduPilot sends 0,0 before it has a position; a vehicle at exactly 0°N 0°E is not a case we plan for.
         position = if (message.lat == 0 && message.lon == 0) null else LatLon.fromE7(message.lat, message.lon),
@@ -168,16 +175,26 @@ internal fun VehicleState.reduce(message: MavMessage<*>): VehicleState = when (m
         gpsFix = gpsFixOf(message.fixType.value),
         satellites = message.satellitesVisible.toInt().takeIf { it != 255 },
     )
-    is SysStatus -> copy(
-        batteryVolts = if (message.voltageBattery == UINT16_UNKNOWN) null else message.voltageBattery.toInt() / 1000.0, // mV -> V
-        batteryPercent = message.batteryRemaining.toInt().takeIf { it >= 0 },  // -1 = not estimated
-    )
+    is SysStatus -> SensorBits(
+        message.onboardControlSensorsPresent.value, message.onboardControlSensorsEnabled.value, message.onboardControlSensorsHealth.value,
+    ).let { bits ->
+        copy(
+            batteryVolts = if (message.voltageBattery == UINT16_UNKNOWN) null else message.voltageBattery.toInt() / 1000.0, // mV -> V
+            batteryPercent = message.batteryRemaining.toInt().takeIf { it >= 0 },  // -1 = not estimated
+            sensorBits = bits,
+            // The FC sends no "all clear" text, so passing checks (or arming, which also sets the bit) is what clears the list.
+            preArm = if (bits.preArmPassing == true) PreArmReport() else preArm,
+        )
+    }
     // KFTCH1:/KFTCH2: are the KFT login challenge (KftLogin reads them); they're protocol, not a message for the pilot.
     is Statustext -> message.text.trimEnd('\u0000').let { text ->
         if (text.startsWith("KFTCH")) this else StatusMessage(text, severityOf(message.severity.value)).let { m ->
             copy(
                 lastMessage = m,
                 estimatorMessages = if (isEstimatorText(text)) (estimatorMessages + m).takeLast(MAX_ESTIMATOR_MESSAGES) else estimatorMessages,
+                // A check that is turned off in ARMING_CHECK is still reported, but at DEBUG severity (AP_Arming::check_failed):
+                // it doesn't stop arming, so it isn't listed. Real failures are CRITICAL.
+                preArm = preArmFailure(text)?.takeIf { m.severity == Severity.ERROR }?.let { preArm.plusFailure(it, now) } ?: preArm,
             )
         }
     }
