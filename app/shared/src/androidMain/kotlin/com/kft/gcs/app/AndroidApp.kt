@@ -12,6 +12,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.kft.gcs.core.mavlink.SerialPorts
 import com.kft.gcs.core.mavlink.TlogFiles
+import com.kft.gcs.core.vehicle.LogFiles
+import com.kft.gcs.core.vehicle.LogStore
 import com.kft.gcs.core.mavlink.VehicleRecorder
 import com.kft.gcs.core.vehicle.RecordStore
 import com.kft.gcs.core.vehicle.di.WallClock
@@ -48,6 +50,8 @@ fun AndroidApp(context: Context) {
             // The app's own folder on shared storage (Android/data/<package>/files/tlogs): no permission needed, and
             // the logs can be copied off over USB. Falls back to private storage if shared storage isn't mounted.
             single<VehicleRecorder> { TlogFiles(File(app.getExternalFilesDir(null) ?: app.filesDir, "tlogs"), Dispatchers.IO) }
+            // Flight logs next to the tlogs, for the same reason (Android/data/<package>/files/logs).
+            single<LogStore> { LogFiles(File(app.getExternalFilesDir(null) ?: app.filesDir, "logs"), Dispatchers.IO) }
             single<RecordStore> { FileRecordStore(File(app.filesDir, "missions")) }
             single<WallClock> { SystemWallClock }
             single<ProfileStore> { FileTextStore(File(app.filesDir, "connection-profiles.json")) }

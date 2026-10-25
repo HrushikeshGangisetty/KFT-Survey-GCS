@@ -212,7 +212,8 @@ private fun failOnErrorAck(m: MavMessage<*>): Nothing? {
 
 private fun fail(reason: String): Nothing = throw MissionTransferException(reason)
 
-private fun describe(tx: TxResult) = when (tx) {
+/** A [TxResult] that isn't Sent, in words for a transfer error ("blocked by the TX gateway (…)"). */
+internal fun describe(tx: TxResult) = when (tx) {
     is TxResult.Rejected -> "blocked by the TX gateway (${tx.reason})"
     TxResult.NotConnected -> "no link"
     is TxResult.Failed -> "link error (${tx.cause.message})"

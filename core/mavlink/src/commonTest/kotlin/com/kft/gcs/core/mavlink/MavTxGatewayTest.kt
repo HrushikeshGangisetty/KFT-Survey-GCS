@@ -8,6 +8,10 @@ import com.divpundir.mavlink.definitions.ardupilotmega.PlaneMode
 import com.divpundir.mavlink.definitions.common.CommandInt
 import com.divpundir.mavlink.definitions.common.CommandLong
 import com.divpundir.mavlink.definitions.common.FileTransferProtocol
+import com.divpundir.mavlink.definitions.common.LogErase
+import com.divpundir.mavlink.definitions.common.LogRequestData
+import com.divpundir.mavlink.definitions.common.LogRequestEnd
+import com.divpundir.mavlink.definitions.common.LogRequestList
 import com.divpundir.mavlink.definitions.common.ManualControl
 import com.divpundir.mavlink.definitions.common.MavCmd
 import com.divpundir.mavlink.definitions.common.MissionAck
@@ -88,6 +92,24 @@ class MavTxGatewayTest {
         assertNull(verdict(command(MavCmd.RUN_PREARM_CHECKS), worstCase, armed = true), "as COMMAND_LONG")
         assertNull(verdict(commandInt(MavCmd.RUN_PREARM_CHECKS), worstCase, armed = null), "as COMMAND_INT")
         assertTrue(verdict(command(MavCmd.COMPONENT_ARM_DISARM, param2 = 0f))!!.contains("S9"), "arming is still refused")
+    }
+
+    /**
+     * Pass 46: the three log-download requests are allowed on the ground only (ArduPilot ignores them while armed), in any
+     * pod state; unknown armed state fails closed. LOG_ERASE wipes the card and is not on the list.
+     */
+    @Test
+    fun logDownloadOnlyWhileDisarmedAndEraseNever() {
+        val requests = listOf(LogRequestList(targetSystem = 1u), LogRequestData(targetSystem = 1u, id = 3u, count = 90u), LogRequestEnd(targetSystem = 1u))
+        assertEquals(listOf("LOG_REQUEST_LIST", "LOG_REQUEST_DATA", "LOG_REQUEST_END"), requests.map { TxPolicy.classify(it).label })
+        for (m in requests) {
+            assertEquals(TxCategory.LOG_READ_DISARMED, TxPolicy.classify(m).category, "$m")
+            assertNull(verdict(m, PodStatus(PodLockState.ENGAGE, aiEnableHigh = true), armed = false), "$m on the ground")
+            assertTrue(verdict(m, armed = true)!!.contains("disarmed"), "$m while armed")
+            assertTrue(verdict(m, armed = null)!!.contains("disarmed"), "$m with no vehicle heard")
+            assertEquals(1u.toUByte(), TxPolicy.targetSystem(m), "$m can be addressed to its vehicle")
+        }
+        assertTrue(verdict(LogErase(targetSystem = 1u))!!.contains("allowlist"), "erasing every log is not allowed")
     }
 
     /**

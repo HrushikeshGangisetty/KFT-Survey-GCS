@@ -55,6 +55,7 @@ data class FleetVehicle(val id: VehicleId, val slot: Int, val state: VehicleStat
  * link is disconnected.
  *
  * @param recorder writes each vehicle's frames to its tlog; null (tests, or no storage) records nothing.
+ * @param logStore where downloaded flight logs go; null (tests, or no storage) and a download says so.
  */
 @OptIn(ExperimentalCoroutinesApi::class) // flatMapLatest
 class Fleet(
@@ -64,6 +65,7 @@ class Fleet(
     private val sync: MissionSync,
     private val recorder: VehicleRecorder? = null,
     private val timeSource: TimeSource.WithComparableMarks = TimeSource.Monotonic,
+    private val logStore: LogStore? = null,
 ) {
     /** Everything that belongs to one vehicle. Cancelling [scope] stops its login, its requests and its tlog. */
     private class Entry(
@@ -75,6 +77,7 @@ class Fleet(
         val missions: MissionRepository,
         val params: ParamRepository,
         val setup: VehicleSetupRepository,
+        val logs: VehicleLogRepository,
     )
 
     private val entries = MutableStateFlow<List<Entry>>(emptyList())
@@ -148,6 +151,7 @@ class Fleet(
             DefaultMissionRepository(frames, view, repository.state, sender),
             DefaultParamRepository(frames, view, repository.state, sender),
             DefaultVehicleSetupRepository(frames, view, repository.state, sender),
+            DefaultVehicleLogRepository(frames, view, repository.state, sender, logStore),
         )
     }
 
@@ -205,6 +209,15 @@ class Fleet(
             selectedEntry()?.setup?.run(command) ?: SetupResult.Failed(NO_VEHICLE)
 
         override val reports: Flow<SetupReport> = flow { selectedEntry()?.setup?.reports?.let { emitAll(it) } }
+    }
+
+    /** Flight logs of the selected vehicle; like [params], each call stays with the vehicle it started on. */
+    val logs: VehicleLogRepository = object : VehicleLogRepository {
+        override suspend fun list(): Result<List<FlightLog>> =
+            selectedEntry()?.logs?.list() ?: Result.failure(LogTransferException(NO_VEHICLE))
+
+        override suspend fun download(log: FlightLog, onProgress: (Long) -> Unit): Result<String> =
+            selectedEntry()?.logs?.download(log, onProgress) ?: Result.failure(LogTransferException(NO_VEHICLE))
     }
 
     private companion object {

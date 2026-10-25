@@ -32,6 +32,9 @@ import kotlinx.coroutines.withTimeout
 class SitlCheck {
     private val target = System.getenv("KFT_SITL")
 
+    /** Where downloaded logs go in these checks: a fresh temporary folder per run. */
+    private val logDir = java.nio.file.Files.createTempDirectory("kft-sitl-logs").toFile()
+
     /**
      * Opens one TCP link per `host:port` in [targets] through the app's own [Links] and [Fleet], waits until that many
      * vehicles are heard with their startup data, runs [block], and always closes the links.
@@ -43,7 +46,7 @@ class SitlCheck {
         // Always attempt the KFT login: with no key configured, a dummy one. Stock SITL answers UNSUPPORTED whatever the
         // key (LEGACY_FIRMWARE); a KFT SITL would say DENIED to the dummy, which is the honest answer.
         val key = parseKftKey(KFT_APP_SECRET_HEX) ?: ByteArray(Kft.KEY_BYTES)
-        val fleet = Fleet(scope, links.open, key, MissionSync())
+        val fleet = Fleet(scope, links.open, key, MissionSync(), logStore = LogFiles(logDir, Dispatchers.IO))
         try {
             runBlocking {
                 addresses.forEach { (host, port) -> links.connect(LinkConfig.TcpClient(host, port.toInt())) }
@@ -238,5 +241,27 @@ class SitlCheck {
         val cleared = withTimeout(15.seconds) { fleet.selected.first { it.sensorBits?.preArmPassing == true } }
         println("after restoring: passing, report ${cleared.preArm.failures}")
         assertEquals(emptyList(), cleared.preArm.failures)
+    }
+
+    /**
+     * Pass 46 acceptance: list the SITL's logs, download one, and compare it byte for byte with the `.BIN` SITL wrote.
+     * `KFT_SITL_LOGDIR` is that SITL's log folder (Mission Planner's Windows SITL: Documents\Mission Planner\sitl\copter\logs).
+     * The log is the largest one up to 25 MB, matched to its file by size (ArduPilot's list numbers aren't file names).
+     */
+    @Test
+    fun logListAndDownloadMatchTheFileOnDisk() = withSitl { fleet ->
+        val folder = System.getenv("KFT_SITL_LOGDIR")?.let { java.io.File(it) } ?: return@withSitl println("KFT_SITL_LOGDIR not set: log check skipped")
+        val list = fleet.logs.list().getOrThrow()
+        println("SITL lists ${list.size} logs: " + list.joinToString { "${it.id}:${it.sizeBytes}" })
+        val onDisk = folder.listFiles { f -> f.name.endsWith(".BIN") }!!.associateBy { it.length() }
+        assertEquals(onDisk.size, list.size, "one entry per .BIN file")
+        val log = list.filter { it.sizeBytes in 1..25_000_000 }.maxBy { it.sizeBytes }
+        val file = onDisk.getValue(log.sizeBytes)
+        val started = System.nanoTime()
+        var last = 0L
+        val path = fleet.logs.download(log) { done -> if (done - last >= 2_000_000 || done == log.sizeBytes) { last = done; println("log ${log.id}: $done / ${log.sizeBytes}") } }.getOrThrow()
+        val seconds = (System.nanoTime() - started) / 1e9
+        println("log ${log.id} (${file.name}, ${log.sizeBytes} bytes) saved to $path in ${"%.1f".format(seconds)} s, ${"%.0f".format(log.sizeBytes / seconds / 1000)} kB/s")
+        assertTrue(java.io.File(path).readBytes().contentEquals(file.readBytes()), "the download is the SITL's own file, byte for byte")
     }
 }

@@ -4800,3 +4800,79 @@ PreArmViewModel: combine(vehicle, running) ─▶ PreArmUiState (readiness, fail
 - The report is per link session and survives a heartbeat gap. After a reboot the first SYS_STATUS or report replaces it.
 - Flaky test seen once, not from this pass: `core:keys` `IdleAutoLockTest.theWindowStartsWhenTheVaultIsUnlockedNotWhenTheTimerWasBuilt` failed in the first `check` run and passed on rerun. Worth a look (the unlock may run on a real dispatcher while the test advances virtual time).
 - Next: Pass 46, flight log download.
+
+## Pass 46 — Flight log download (LOG_REQUEST_LIST / LOG_REQUEST_DATA) (2026-10-25)
+
+### What changed
+- `core/vehicle/.../Logs.kt` (new): `FlightLog`, `LogStore` / `LogSink` (where a log is written), `VehicleLogRepository` + `DefaultVehicleLogRepository` (readiness, the file, cleanup), and `LogProtocol` (the list and the chunked download).
+- `core/vehicle/src/jvmCommonMain/.../LogFiles.kt` (new): the `LogStore` for Android and desktop. It writes `sys1_log8_2026-10-01_18-58-52Z.bin` via a `.part` file and never overwrites an earlier copy.
+- `core/vehicle/.../Fleet.kt`, `di/VehicleModule.kt`: one log repository per vehicle, and `Fleet.logs` for the selected one (like `params`). `Fleet` takes an optional `logStore`.
+- `core/vehicle/.../MissionProtocol.kt`: `describe(TxResult)` is now `internal`, so the log protocol reuses its wording.
+- `core/mavlink/.../TxPolicy.kt`: new category `LOG_READ_DISARMED` for LOG_REQUEST_LIST / _DATA / _END, plus their `target_system` (see Safety).
+- `app/shared/.../DesktopApp.kt`, `AndroidApp.kt`: logs go to `%APPDATA%\KFT-GCS\logs` on desktop and `Android/data/<package>/files/logs` on Android, next to the tlogs.
+- `feature/setup/.../LogsViewModel.kt` (new): `LogsUiState`, `LogsViewModel` (list, download one at a time with progress and rate, cancel), `bytes()` and `utcText()` for display.
+- `feature/setup/.../LogsPage.kt` (new), `SetupScreen.kt`, `SetupUiState.kt`, `di/SetupModule.kt`, `app/shared/.../App.kt`: a "Flight logs" page under Information. Its ViewModel is window-scoped, so a download keeps going while another tab is open.
+- Tests: `LogsTest` and `LogFilesTest` (new), `LogsViewModelTest` (new), `MavTxGatewayTest.logDownloadOnlyWhileDisarmedAndEraseNever`, `SitlCheck.logListAndDownloadMatchTheFileOnDisk`.
+
+### How it works
+```
+LogsPage ─ "Read the list" ─▶ LogsViewModel ─▶ Fleet.logs (selected vehicle) ─▶ DefaultVehicleLogRepository
+                                                                                 │ logged in? disarmed?
+                                                                                 ▼
+LogProtocol.list:   LOG_REQUEST_LIST(0, 0xFFFF) ──▶ FC: one LOG_ENTRY per log (id, num_logs, time_utc, size)
+                    2 s quiet with ids missing ──▶ LOG_REQUEST_LIST(first missing, last missing), up to 5 times
+
+"Download" ─▶ LogStore.create ─▶ LogSink (.part file)
+LogProtocol.download, per 11.5 KB chunk:
+    LOG_REQUEST_DATA(id, ofs, 11 520) ──▶ FC pushes 128 × LOG_DATA(ofs, count, data[90])
+    each packet marks its 90-byte bin; 2 s quiet with bins missing ──▶ LOG_REQUEST_DATA(first..last missing)
+    chunk whole ──▶ sink.write(chunk) ──▶ onProgress(bytes so far) ──▶ next chunk
+    always at the end (done, failed, cancelled): LOG_REQUEST_END
+sink.finish() renames .part → .bin and returns the path; on failure or cancel, sink.abort() deletes the .part
+```
+1. ArduPilot numbers logs 1..num_logs, oldest first. These are list numbers, not file names (AP_Logger_File maps them).
+2. LOG_DATA is pushed: one request and the FC streams packets until the count is reached or the log ends, and never resends. A lost packet is a gap the GCS must ask for. And while it is still sending, the FC silently drops another request from the same link. So a gap is asked for only once the FC falls quiet.
+3. Chunks keep memory small (one 11.5 KB buffer, whatever the log size), write the file in order, and limit what one lost packet costs.
+4. A packet shorter than 90 bytes is the end of the log, even if LOG_ENTRY listed it as larger.
+
+### Engineering learnings
+- **Measure the pipeline, not just the protocol.** The first SITL download (512-packet chunks) ran at 59 kB/s, while pymavlink showed SITL itself sends a 46 KB chunk in 0.04 s (1.2–2.2 MB/s). The cause was on our side: `ConnectionManager._frames` is a `MutableSharedFlow(extraBufferCapacity = 256, DROP_OLDEST)`, so a 512-packet burst overflowed it, and every lost packet cost a 2 s quiet spell before the re-request. With 128-packet chunks a burst fits: 358 kB/s. With 64-packet chunks it was 261 kB/s, because round trips start to dominate. The chunk size is tuned to that buffer (`ponytail:` in `Logs.kt`). The real fix is in core:mavlink (see Open questions); this pass doesn't change it because it would be a drive-by change to the link layer.
+- **Bins instead of "next expected offset".** Accepting packets in any order and asking for "first to last missing" means one dropout costs one short re-request, not a re-send of the rest of the log.
+- **`.part` then rename.** A cancelled, failed or crashed download never leaves a file that looks complete, and an earlier copy is never overwritten (`-2`, `-3`…). That matters for geotagging and PPK, where a truncated log would give wrong results without any error.
+- **`finally { withContext(NonCancellable) { send(LOG_REQUEST_END) } }`.** Cancellation is normal here (the operator's Cancel, or the screen going away), and the FC must still be told to stop streaming and resume logging. `NonCancellable` lets that one send run inside a cancelled coroutine.
+- **Reified inline helper.** `transfer<LogEntry, …>` / `transfer<LogData, …>` share the subscribe-before-send listener, the mutex and the error mapping, with the message type checked by `is T`.
+- **Hinnant's `civil_from_days`** formats the UTC date in common code instead of adding kotlinx-datetime (it is in the catalog, but no module uses it). The test checks it against Python's `datetime` for the epoch, one second before it, a leap day and 2099.
+- Ponytail review (lite) on the diff: one finding, applied. Two `send` overloads in `LogProtocol` became one generic `send<T>`.
+
+### What to look at
+1. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/Logs.kt`: `LogProtocol.fetchChunk`, the bin bookkeeping and the re-request.
+2. `core/vehicle/src/commonMain/kotlin/com/kft/gcs/core/vehicle/Logs.kt`: `DefaultVehicleLogRepository.download`, finish or abort on every path.
+3. `feature/setup/src/commonMain/kotlin/com/kft/gcs/feature/setup/LogsViewModel.kt`: `onDownloadClicked` / `onCancelClicked`.
+
+### Tests
+- `LogsTest` (scripted ArduPilot, virtual time):
+  - the list (oldest first; time_utc 0 → no date); a lost LOG_ENTRY asked for again by id after 2 s; an empty card; silence fails after 1 + 5 requests;
+  - a clean 100 000-byte download is byte for byte the log, in nine requests with no waiting;
+  - four lost packets (middle, chunk end, log end) are re-requested with exactly the expected spans, 6 s of virtual time;
+  - a log ending on a packet boundary, and one shorter than listed;
+  - silence fails but still sends LOG_REQUEST_END; cancelling sends LOG_REQUEST_END;
+  - repository: saves and returns the path; a failed or unwritable download aborts the file (and the FC is told to stop); nothing is sent while armed, logging in or without storage; a gateway refusal gives its reason.
+- `LogFilesTest`: naming from the log's own UTC time (reference value from Python), `.part` until finished, a second copy gets `-2`, abort leaves nothing, an untimed log uses the clock.
+- `LogsViewModelTest`: newest-first rows with size and date; progress, then the saved path; the rate from virtual time (1 MB in 2 s = 500 kB/s); cancel; failures shown and the list kept; another vehicle clears the list; armed or logging in blocks everything; `bytes()` and `utcText()`.
+- `MavTxGatewayTest.logDownloadOnlyWhileDisarmedAndEraseNever`.
+- `./gradlew check`: BUILD SUCCESSFUL. No new compiler warnings.
+- **SITL, run** (same SITL as Pass 45, 13 logs on its card): `KFT_SITL=127.0.0.1:5762 KFT_SITL_LOGDIR="%USERPROFILE%\Documents\Mission Planner\sitl\copter\logs" ./gradlew :core:vehicle:jvmTest --tests '*SitlCheck.logList*'` passed. All 13 logs listed. Log 8 (`00000008.BIN`, 22 431 669 bytes) downloaded in 62.7 s (358 kB/s over TCP) and is **byte for byte identical** to SITL's own file.
+- **Visual check in the desktop app against the same SITL** (one batched computer-use session; screenshots in `docs/design/`):
+  - Pass 45's page, `45-prearm-failing-sitl.jpg`: with BATT_ARM_VOLT = 20 and RC1_MIN = 1600 (set with pymavlink on SITL's port 5763), "Not ready to arm" lists all three failures, with the sensor chips below. After restoring both (0 and the SITL default 1000), "Run checks now" turned it into "Ready to arm" and "Nothing: every check passes".
+  - Flight logs: "Read the list" showed 13 logs, newest first, with UTC dates. `46-logs-downloading-sitl.jpg` shows Log 13 downloading ("2.3 MB of 12.3 MB · 498 kB/s", Cancel). `46-logs-saved-sitl.jpg` shows the saved path on the row. `cmp` of `%APPDATA%\KFT-GCS\logs\sys1_log13_2026-10-01_19-51-29Z.bin` against SITL's `00000013.BIN`: identical. That file is left in the app's logs folder.
+
+### Safety
+- **Allowlist change:** new category `LOG_READ_DISARMED` with LOG_REQUEST_LIST (#117), LOG_REQUEST_DATA (#119) and LOG_REQUEST_END (#122), all `common.xml`. They are allowed in any pod state, only while the vehicle reports disarmed (unknown counts as armed). They are read-only: they copy a log and change nothing on the vehicle. ArduPilot itself ignores them while armed ("Disarm for log download", `AP_Logger::handle_log_message`, KFT fork d91a40ef). Each has `target_system`, so the per-vehicle sender can address it (ADR-005 §3). Test: `MavTxGatewayTest.logDownloadOnlyWhileDisarmedAndEraseNever`.
+- **LOG_ERASE (#121) stays unlisted** (it wipes every log on the card), as you decided at the start of this session. The test checks it is refused.
+- No flight action is involved (S9 unchanged).
+
+### Open questions / next
+- `ponytail:` in `Logs.kt`: `CHUNK` (128 packets) is tuned to the 256-frame `DROP_OLDEST` buffer of `ConnectionManager._frames`. Suggested follow-up in core:mavlink: make the frame flow lossless (a suspending buffer) or much larger. That would let log downloads use bigger chunks (SITL can send about 2 MB/s). It would also stop *any* burst (a parameter download on a fast link, for example) from silently dropping frames, ACKs included.
+- `ponytail:` in `Logs.kt`: a re-request sent while the FC is still streaming an earlier one is dropped by the FC; the next quiet spell asks again (2 s lost, rarely).
+- Speed on real links: a telemetry radio (57 600 baud) gives about 5 kB/s, so a 20 MB log takes about an hour. The page says to use USB or Wi-Fi. Not measured on hardware.
+- Not done: a "download all", resuming a part-downloaded log, opening the logs folder from the app, MAVLink FTP downloads.

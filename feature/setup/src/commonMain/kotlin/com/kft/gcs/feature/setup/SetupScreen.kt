@@ -57,14 +57,16 @@ import com.kft.gcs.ui.design.StatusChip
 
 /** Wires the stateless [SetupScreen] to its ViewModels, and shows their messages as snackbars. */
 @Composable
-fun SetupRoute(setup: SetupViewModel, calibration: CalibrationViewModel, preArm: PreArmViewModel) {
+fun SetupRoute(setup: SetupViewModel, calibration: CalibrationViewModel, preArm: PreArmViewModel, logs: LogsViewModel) {
     val state by setup.state.collectAsStateWithLifecycle()
     val cal by calibration.state.collectAsStateWithLifecycle()
     val pre by preArm.state.collectAsStateWithLifecycle()
+    val logState by logs.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(setup) { setup.effects.collect { (it as SetupEffect.ShowMessage).let { m -> snackbar.showSnackbar(m.text) } } }
     LaunchedEffect(calibration) { calibration.effects.collect { (it as SetupEffect.ShowMessage).let { m -> snackbar.showSnackbar(m.text) } } }
     LaunchedEffect(preArm) { preArm.effects.collect { (it as SetupEffect.ShowMessage).let { m -> snackbar.showSnackbar(m.text) } } }
+    LaunchedEffect(logs) { logs.effects.collect { (it as SetupEffect.ShowMessage).let { m -> snackbar.showSnackbar(m.text) } } }
     Box(Modifier.fillMaxSize()) {
         SetupScreen(
             state, cal,
@@ -82,6 +84,7 @@ fun SetupRoute(setup: SetupViewModel, calibration: CalibrationViewModel, preArm:
                 onRebootConfirm = calibration::onRebootConfirmed, onRebootDismiss = calibration::onRebootDismissed,
             ),
             pre, preArm::onRunChecksClicked,
+            logState, LogsActions(logs::onListClicked, logs::onDownloadClicked, logs::onCancelClicked),
         )
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
@@ -100,7 +103,7 @@ class SetupActions(
 
 /**
  * Vehicle setup: a page list on the left, the page on the right. The calibration pages draw [cal], the pre-arm page
- * [preArm]; the others draw [state]. Everything that talks to the vehicle is disabled, with the reason shown, unless
+ * [preArm], the flight-log page [logs]; the others draw [state]. Everything that talks to the vehicle is disabled, with the reason shown, unless
  * the vehicle is connected, logged in and disarmed.
  */
 @Composable
@@ -111,6 +114,8 @@ fun SetupScreen(
     calActions: CalibrationActions,
     preArm: PreArmUiState = PreArmUiState(),
     onRunPreArm: () -> Unit = {},
+    logs: LogsUiState = LogsUiState(),
+    logActions: LogsActions = LogsActions(),
 ) {
     Row(Modifier.fillMaxSize()) {
         PageList(state, cal, actions, calActions)
@@ -125,6 +130,7 @@ fun SetupScreen(
                 when {
                     calibrationPage -> cal.hint?.takeIf { cal.running == null }
                     state.page == SetupPage.PREARM -> preArm.hint
+                    state.page == SetupPage.LOGS -> logs.hint
                     else -> state.notice
                 }?.let { Banner(it, Status.WARN) }
                 cal.rebootAdvice?.let { advice ->
@@ -138,6 +144,7 @@ fun SetupScreen(
                     SetupPage.FLIGHT_MODES, SetupPage.FAILSAFES -> ParamPage(state, actions)
                     SetupPage.HARDWARE -> HardwarePage(state)
                     SetupPage.PREARM -> PreArmPage(preArm, onRunPreArm)
+                    SetupPage.LOGS -> LogsPage(logs, logActions)
                 }
                 if (calibrationPage && cal.log.isNotEmpty()) VehicleMessages(cal)
             }

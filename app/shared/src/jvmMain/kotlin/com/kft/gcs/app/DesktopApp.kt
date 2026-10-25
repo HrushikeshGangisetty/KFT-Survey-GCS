@@ -6,6 +6,8 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.window.FrameWindowScope
 import com.kft.gcs.core.mavlink.SerialPorts
 import com.kft.gcs.core.mavlink.TlogFiles
+import com.kft.gcs.core.vehicle.LogFiles
+import com.kft.gcs.core.vehicle.LogStore
 import com.kft.gcs.core.mavlink.VehicleRecorder
 import com.kft.gcs.core.mavlink.di.IoDispatcher
 import com.kft.gcs.core.vehicle.RecordStore
@@ -43,6 +45,7 @@ private val desktopModule = module {
     single { bundlePicker { get<DesktopPlanFiles>().pickAndCopy(File(dir, "bundle-import")) } }
     single { SerialPorts() }
     single<VehicleRecorder> { TlogFiles(File(dir, "tlogs"), get(IoDispatcher)) }
+    single<LogStore> { LogFiles(File(dir, "logs"), get(IoDispatcher)) }
     single<RecordStore> { FileRecordStore(File(dir, "missions")) }
     single<WallClock> { SystemWallClock }
     single<ProfileStore> { FileTextStore(File(dir, "connection-profiles.json")) }

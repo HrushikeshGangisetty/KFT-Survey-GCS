@@ -11,6 +11,7 @@ import com.kft.gcs.core.vehicle.KFT_APP_SECRET_HEX
 import com.kft.gcs.core.vehicle.MissionRepository
 import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.ParamRepository
+import com.kft.gcs.core.vehicle.VehicleLogRepository
 import com.kft.gcs.core.vehicle.VehicleSetupRepository
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.parseKftKey
@@ -25,6 +26,7 @@ val SelectedVehicle = named("selectedVehicle")
  * `core:vehicle` bindings: the one [Fleet] over every open link, and the selected vehicle's state, [MissionRepository]
  * and [ParamRepository] taken from it, so screens that act on "the vehicle" get the selected one (ADR-005 §5).
  * The app shell may provide a [com.kft.gcs.core.mavlink.VehicleRecorder] (the tlog files); without one nothing is recorded.
+ * Likewise a [com.kft.gcs.core.vehicle.LogStore] (the flight-log folder); without one a log download says there is nowhere to save it.
  */
 /** The device's clock. The shells bind the system clock; common code has none of its own. */
 interface WallClock {
@@ -45,6 +47,7 @@ val vehicleModule = module {
             loginKey = parseKftKey(KFT_APP_SECRET_HEX),
             sync = get(),
             recorder = getOrNull(),
+            logStore = getOrNull(),
         )
     }
     // Progress records. The shells provide the folder (a RecordStore) and the clock; without them, memory only.
@@ -55,5 +58,6 @@ val vehicleModule = module {
     single<MissionRepository> { get<Fleet>().missions }
     single<ParamRepository> { get<Fleet>().params }
     single<VehicleSetupRepository> { get<Fleet>().setup }
+    single<VehicleLogRepository> { get<Fleet>().logs }
 }
 

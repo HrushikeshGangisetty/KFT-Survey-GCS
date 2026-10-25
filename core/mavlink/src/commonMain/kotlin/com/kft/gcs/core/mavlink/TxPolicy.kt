@@ -4,6 +4,9 @@ import com.divpundir.mavlink.api.MavMessage
 import com.divpundir.mavlink.definitions.ardupilotmega.MavCmd as ArduMavCmd
 import com.divpundir.mavlink.definitions.common.CommandInt
 import com.divpundir.mavlink.definitions.common.CommandLong
+import com.divpundir.mavlink.definitions.common.LogRequestData
+import com.divpundir.mavlink.definitions.common.LogRequestEnd
+import com.divpundir.mavlink.definitions.common.LogRequestList
 import com.divpundir.mavlink.definitions.common.ManualControl
 import com.divpundir.mavlink.definitions.common.MavCmd
 import com.divpundir.mavlink.definitions.common.MissionAck
@@ -50,7 +53,7 @@ data class PodStatus(val lock: PodLockState = PodLockState.NONE, val aiEnableHig
  * anything that makes the aircraft move or change mode. Under S9 the GCS sends none of them, in any pod state, so
  * the GUIDED and safe-direction rules are covered by a stricter one (see open item GS-8 in the spec).
  */
-internal enum class TxCategory { ALWAYS, PARAM_CHANGE_DISARMED, SETUP_DISARMED, MISSION_CHANGE, MISSION_CHANGE_DISARMED, PILOT_ONLY, NEVER, UNLISTED }
+internal enum class TxCategory { ALWAYS, PARAM_CHANGE_DISARMED, SETUP_DISARMED, LOG_READ_DISARMED, MISSION_CHANGE, MISSION_CHANGE_DISARMED, PILOT_ONLY, NEVER, UNLISTED }
 
 /** A message's category plus a human-readable name for logs and rejection reasons. */
 internal data class TxClassification(val category: TxCategory, val label: String)
@@ -87,6 +90,14 @@ internal object TxPolicy {
         // in the air can't be taken back before it matters. ArduPilot applies it at once and saves it to storage
         // (GCS_Param.cpp handle_param_set). Reading (PARAM_REQUEST_*) stays ALWAYS: it changes nothing.
         is ParamSet -> TxClassification(TxCategory.PARAM_CHANGE_DISARMED, "PARAM_SET")
+
+        // Flight-log download (common.xml #117, #119, #122). Read-only: they copy a log off the SD card and change nothing.
+        // ArduPilot ignores all three while armed ("Disarm for log download", AP_Logger_MAVLinkLogTransfer.cpp
+        // handle_log_message, KFT fork d91a40ef); refusing them here too says so at once and keeps a download from
+        // ever competing with telemetry in the air. LOG_ERASE (#121) wipes every log and stays unlisted on purpose.
+        is LogRequestList -> TxClassification(TxCategory.LOG_READ_DISARMED, "LOG_REQUEST_LIST")
+        is LogRequestData -> TxClassification(TxCategory.LOG_READ_DISARMED, "LOG_REQUEST_DATA")
+        is LogRequestEnd -> TxClassification(TxCategory.LOG_READ_DISARMED, "LOG_REQUEST_END")
 
         // Anything that changes the mission on the vehicle.
         is MissionCount -> missionChange("MISSION_COUNT")
@@ -134,6 +145,7 @@ internal object TxPolicy {
         TxCategory.ALWAYS -> null
         TxCategory.PARAM_CHANGE_DISARMED -> if (armed != false) "parameters can only be changed while the vehicle is disarmed" else null
         TxCategory.SETUP_DISARMED -> if (armed != false) "calibrations and reboots only while the vehicle is disarmed" else null
+        TxCategory.LOG_READ_DISARMED -> if (armed != false) "logs can only be downloaded while the vehicle is disarmed" else null
         TxCategory.MISSION_CHANGE -> missionLockout(pod)
         TxCategory.MISSION_CHANGE_DISARMED -> missionLockout(pod)
             ?: if (armed != false) "only allowed while the vehicle is disarmed (spec S9)" else null
@@ -162,6 +174,9 @@ internal object TxPolicy {
         is MissionSetCurrent -> message.targetSystem
         is CommandLong -> message.targetSystem
         is CommandInt -> message.targetSystem
+        is LogRequestList -> message.targetSystem
+        is LogRequestData -> message.targetSystem
+        is LogRequestEnd -> message.targetSystem
         else -> null
     }
 
