@@ -24,6 +24,7 @@ kotlin {
             implementation(project(":feature:params"))
             implementation(project(":feature:settings"))
             implementation(project(":feature:setup"))
+            implementation(project(":feature:replay"))
             implementation(project(":core:mavlink")) // for mavlinkModule and the IoDispatcher qualifier
             implementation(project(":core:vehicle"))
             implementation(project(":core:keys")) // the signing-key vault, bound in signingModule

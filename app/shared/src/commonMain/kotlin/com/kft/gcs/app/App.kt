@@ -54,6 +54,8 @@ import com.kft.gcs.feature.params.ParamsRoute
 import com.kft.gcs.feature.params.ParamsViewModel
 import com.kft.gcs.feature.plan.PlanRoute
 import com.kft.gcs.feature.plan.PlanViewModel
+import com.kft.gcs.feature.replay.ReplayRoute
+import com.kft.gcs.feature.replay.ReplayViewModel
 import com.kft.gcs.feature.settings.OfflineMapsRoute
 import com.kft.gcs.feature.settings.OfflineMapsViewModel
 import com.kft.gcs.feature.settings.SigningKeysEffect
@@ -161,6 +163,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val calibration: CalibrationViewModel = koinViewModel()
     val preArm: PreArmViewModel = koinViewModel()
     val logs: LogsViewModel = koinViewModel() // window scope so a download keeps going on another tab
+    val replay: ReplayViewModel = koinViewModel() // window scope: it draws on the map, and a loaded flight survives a tab change
     // A fleet alert (link lost, battery low, RTL, mission done) is a toast on every tab, and a line on the Fleet tab.
     val alerts = remember { SnackbarHostState() }
     LaunchedEffect(fleet) { fleet.effects.collect { alerts.showSnackbar("${it.vehicle}: ${it.text}") } }
@@ -180,15 +183,18 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
     val flyState by fly.state.collectAsStateWithLifecycle()
     val planState by plan.state.collectAsStateWithLifecycle()
     val videoState by video.state.collectAsStateWithLifecycle()
+    val replayState by replay.state.collectAsStateWithLifecycle()
     val current by nav.currentBackStackEntryAsState()
     val planning = current?.destination?.route == Destination.PLAN.route
     val mapsTab = current?.destination?.route == Destination.MAPS.route
     val keysTab = current?.destination?.route == Destination.KEYS.route
+    val replayTab = current?.destination?.route == Destination.REPLAY.route
 
     // One camera for the map, moved by whichever screen asked last: Fly (follow the vehicle) or Plan (show an import).
     var camera by remember { mutableStateOf<CameraRequest?>(null) }
     LaunchedEffect(flyState.cameraRequest) { flyState.cameraRequest?.let { camera = it } }
     LaunchedEffect(planState.cameraRequest) { planState.cameraRequest?.let { camera = it } }
+    LaunchedEffect(replayState.cameraRequest) { replayState.cameraRequest?.let { camera = it } }
 
     // The Plan tab's undo/redo keys; the desktop window calls this for every key press (see KeyShortcuts).
     SideEffect { shortcuts.handler = { planning && planShortcut(it, plan) } }
@@ -214,7 +220,8 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
         MapView(
             if (videoBig) Modifier.pip(pip).zIndex(2f) else Modifier.fillMaxSize(),
             basemap = flyState.selectedBasemap,
-            overlays = (if (mapsTab) mapsState.overlays else emptyList()) + planState.overlays + flyState.overlays,
+            // The Replay tab shows only the replayed flight: a live vehicle or the plan on top would be confused with it.
+            overlays = if (replayTab) replayState.overlays else (if (mapsTab) mapsState.overlays else emptyList()) + planState.overlays + flyState.overlays,
             cameraRequest = camera,
             onMapClick = if (planning) plan::onMapClick else null,
             onMarkerClick = if (planning) plan::onMarkerClick else null,
@@ -228,6 +235,7 @@ private fun MapAndScreens(nav: NavHostController, shortcuts: KeyShortcuts, modif
             composable(Destination.FLY.route) { FlyRoute(fly, video) }
             composable(Destination.PLAN.route) { PlanRoute(plan) }
             composable(Destination.MAPS.route) { OfflineMapsRoute(maps) }
+            composable(Destination.REPLAY.route) { ReplayRoute(replay) }
             // Opaque and full size, so it hides the map; M3 Surface also stops clicks reaching the map.
             composable(Destination.CONNECTIONS.route) { Surface(Modifier.fillMaxSize()) { ConnectionsRoute() } }
             composable(Destination.KEYS.route) { Surface(Modifier.fillMaxSize()) { SigningKeysRoute(keys) } }
@@ -273,6 +281,7 @@ internal enum class Destination(val route: String, val label: String) {
     PLAN("plan", "Plan"),
     PARAMS("params", "Params"),
     SETUP("setup", "Setup"),
+    REPLAY("replay", "Replay"),
     MAPS("maps", "Maps"),
     CONNECTIONS("connections", "Links"),
     KEYS("keys", "Keys"),
@@ -307,6 +316,7 @@ private fun AppRail(nav: NavHostController, theme: ThemeMode, onThemeSelected: (
                     Destination.PLAN -> KftIcons.Plan
                     Destination.PARAMS -> KftIcons.Params
                     Destination.SETUP -> KftIcons.Setup
+                    Destination.REPLAY -> KftIcons.Resume
                     Destination.MAPS -> KftIcons.Maps
                     Destination.CONNECTIONS -> KftIcons.Link
                     Destination.KEYS -> KftIcons.Lock

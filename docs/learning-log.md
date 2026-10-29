@@ -5096,3 +5096,69 @@ The Pi bridge says whether the FC accepted its KFT login (`auth`) and whether th
 ### Open questions / next
 - Colour stays driven by `status` (the contract guarantees OK means FOLLOWING); a separate FC-acceptance chip could come later if pilots miss the text.
 - Whether live KFT hardware should require `AUTHENTICATED` for OK is an open owner decision (visionnav NH-H3 Codex Q2).
+
+## Pass 51 — Replay tab: post-flight replay of GNSS-denied flights (2026-10-29)
+
+Asked for: copy the overlays and fields of a "NoGPS Flight Replay" screen from a LinkedIn post (tracks on the map, numbers at the playhead, whole-flight numbers, events, error chart, playback). Data source chosen by Hrushikesh: the FC's DataFlash log **plus** the Pi recording. No change to the GNSS-Denied repo was needed (its recorder already writes `odometry.jsonl`, and the bridge already stamps each ODOMETRY with the Pi time).
+
+### What changed
+- `core/geo-io/.../DataFlash.kt` (new): `readDataFlash(bytes, wanted)`, a reader for ArduPilot .bin logs that learns each message's layout from the log's own FMT messages.
+- `feature/replay` (new module): `FlightAnalysis.kt` (pure: FC log → truth, VISP, events; clock matching; alignment; errors and stats), `ReplayViewModel.kt`, `ReplayUiState.kt`, `ReplayScreen.kt`, `di/ReplayModule.kt`.
+- `app/shared`: a **Replay** tab in the rail (`App.kt`); on that tab the map shows only the replayed flight. `AppModule.kt` binds `ReplayFiles` to the Plan tab's import dialog (bytes, any file).
+- `settings.gradle.kts`, `app/shared/build.gradle.kts`: the new module.
+- Tests: `DataFlashTest`, `FlightAnalysisTest`, `ReplayViewModelTest`, and the test helper `DataFlashBuilder`.
+
+### How it works
+```
+.bin ─readDataFlash─▶ GPS / SIM / POS / VISP / MSG / EV / MODE records ─fcLogFrom─▶ FcLog (truth, VISP, events)
+odometry.jsonl ─parseRecord (contract checks)─▶ LocalOdometry ─odomSamples─▶ OdomSample (Pi time) ─┐
+                                                                                                    ▼
+                         analyse: Pi→FC clock offset, odom→map fit, errors, stats ─▶ Flight
+                                                                                                    ▼
+ReplayViewModel: playhead t (100 ms ticks × speed) ─render─▶ ReplayUiState ─▶ panel + chart; overlays ─▶ the one MapView
+```
+1. **Truth** is the GPS (rows with a 3D fix, first receiver only), or the SITL truth (SIM) when the log has no GPS fix. The P6 SITL runs have the GPS disabled.
+2. **Clock.** VISP has both clocks in one row: TimeUS (FC) and RTimeUS (the Pi's `measurement_time_pi_ns`/1000, set in `odometry_convert.py`). The median of TimeUS − RTimeUS puts every Pi record on the FC clock. With no VISP, the Pi track is left out with a note. A recording that doesn't overlap the flight is left out too.
+3. **Alignment ("anchor").** odom has no north (x = heading at VIO start, y right, z down; frames.md). Each track is fitted onto the truth with one rotation and shift (2D Kabsch/Umeyama, closed form) over its first 30 m of flight, and the rest is placed with that same fit, so later error is real drift. Swapping odom x/y first turns "x north-like, y east-like" into the map's east/north with the same handedness, so a rotation is enough.
+4. **Resets.** The Pi odometry is split at every `reset_counter` change, and each piece gets its own anchor. VISP is **not** split. In the P6 `noise30` log, VISP.Rst changed 2103 times while PX/PY stayed continuous: ArduPilot re-anchors the vision frame before logging. A first version that split VISP drew nothing for that log.
+
+| Post's field | Here |
+|---|---|
+| VILS error vs GPS / Published-to-FC error | VIO error (Pi odometry) / VISP error, vs GPS or SITL truth |
+| Output source, VIO features | VIO state (TRACKING/DEGRADED/LOST). Feature count isn't in the local_odometry contract. |
+| Ground speed, Altitude AGL, Satellites | GPS speed (or from SIM positions), POS.RelHomeAlt (above home, not AGL), GPS NSats |
+| Distance flown / Flown on NoGPS | truth path / path while the FC received non-ignored VISP |
+| Mean / peak error, error at handover, drift % | VISP mean/peak, RMS over the anchor window, last error ÷ distance since the anchor |
+| Origin commits / VIO resets | Alignments (anchors) / VISP reset-counter changes |
+| Events | MSG text, EV (armed, landed…), MODE, VIO state changes and resets, alignments; a click seeks |
+| Camera, Export video | not done (see Open questions) |
+
+### Engineering learnings
+- **Self-describing format → no per-version tables.** DataFlash carries its own FMT rows, so the reader parses the layout from the log. A message type with an inconsistent FMT (letters ≠ length) is skipped rather than guessed. A torn header costs one byte, not the rest of the file.
+- **Anchor, don't fit the whole flight.** A least-squares fit over the whole track would spread the drift out and hide it. Fitting only the first 30 m (about 1° of heading with 0.3 m noise) mirrors the GNSS-Denied handover idea: commit an origin while GPS is good, then measure.
+- **One plane for distances and errors.** Path lengths use `LocalProjection` (WGS84 radii) like the errors do, not `Geodesy`'s sphere. Otherwise drift % would be off by up to 0.3 %.
+- **Reusing map overlays.** Tracks and markers are existing `MapOverlay.Track` / `Vehicle` with colour slots (white truth, teal VISP, orange VIO), so `ui:map` needed no change.
+- **Window-scoped ViewModel**, like Fly and Plan: the map is composed once (ADR-001 F10), so the Replay VM lives at window scope and hands its overlays and camera to that map.
+- Ponytail review (lite): two cuts applied (a duplicate anchor count; the truth heading copied the whole track each frame). Otherwise lean.
+
+### What to look at
+1. `feature/replay/src/commonMain/kotlin/com/kft/gcs/feature/replay/FlightAnalysis.kt`: the KDoc on `analyse` (the steps), then `align` and `rigidFit`.
+2. `core/geo-io/src/commonMain/kotlin/com/kft/gcs/core/geoio/DataFlash.kt`: `readDataFlash` and `Format.decode`.
+3. `feature/replay/src/commonMain/kotlin/com/kft/gcs/feature/replay/ReplayViewModel.kt`: `load`, `play`, `render`.
+
+### Tests
+- `DataFlashTest`: a hand-built log with byte values worked out by hand (Lat 0x0A5A7F34 → 17.3702964°, Spd 1234 → 12.34 m/s); torn header and undeclared type skipped; an FMT whose letters don't match its length is refused.
+- `FlightAnalysisTest`: Kabsch recovers a 90° turn and shift exactly. No drift → zero error in any odom frame. Drift of 0.5 m/s after 5 s → 7.5 m at the end and 3.75 % over 200 m (hand-calculated). VIO resets anchor separately, a 9 m piece is dropped, and VISP with the same counter stays one piece. The Pi clock is matched through VISP (a 3 m offset shows; DEGRADED event at 15.1 s). No VISP → note. Another run's recording is left out. No truth → note. GPS without a fix and the second receiver are ignored. SIM speed is 11.087 m/s for 0.0001° at 31° (meridian radius, Snyder 4-18).
+- `ReplayViewModelTest`: opening a log fills title, tracks, satellites, events and a fit camera. 4× for 1 s of virtual time = 4 s of flight; it stops at the end; seeks are clamped. A bad odometry file keeps the flight and shows the reason. A non-log file is refused.
+- `.\gradlew.bat check` (JDK 25, `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:\Users\Hrushikesh`): BUILD SUCCESSFUL.
+- **Run by hand (desktop app, P6 SITL logs from WSL `~/p6runs/bp/`):**
+  1. `none_box/logs/00000001.BIN`: 41 m box, VISP mean 0.1 m, peak 0.3 m, 1 alignment, 0 resets.
+  2. Same log plus a synthetic `odometry.jsonl` made from its VISP (RTimeUS as Pi time, +2 %/+1 % drift): the orange VIO track and chart rise to ~5 m, and VIO state shows TRACKING. Playback at 8× ran 6 s → 48 s.
+  3. `noise30/logs/00000001.BIN`: 856 m, VISP mean 1.3 m, peak 3.0 m, drift 0.16 %, 2103 reset-counter changes, one alignment.
+
+### Open questions / next
+- **No real flight tested.** A real log with GPS and a real Pi recording from the same flight is the first thing to try. Check that the clock match lands (VIO error small near the anchor).
+- **"Flown with vision" is "FC receiving VISP", not "FC navigating without GPS".** Telling those apart needs the EKF source set (EK3_SRC options / XKF4 flags). That's worth adding once real flights switch sources mid-air.
+- The VISP alignment assumes the first 30 m of vision overlap good truth. A flight that starts on vision far from truth would be anchored wrongly. Real handovers anchor while GPS is good, so this matches.
+- Not done: the camera panel (the recording's `cam0/` frames could be shown by exposure time), video export, VIO feature count (not in the local_odometry contract; adding it is a both-owner contract change in GNSS-Denied), the EKF's own track (XKF1 + ORGN; in the yaw-6 SITL setup its frame isn't north-up).
+- Android: the picker hands over one file at a time, so the log and odometry.jsonl are picked separately (the same as desktop). Not run on a tablet.

@@ -10,6 +10,8 @@ import com.kft.gcs.feature.params.ParamFiles
 import com.kft.gcs.feature.params.di.paramsModule
 import com.kft.gcs.feature.plan.PlanFiles
 import com.kft.gcs.feature.plan.di.planModule
+import com.kft.gcs.feature.replay.ReplayFiles
+import com.kft.gcs.feature.replay.di.replayModule
 import com.kft.gcs.feature.settings.di.settingsModule
 import com.kft.gcs.feature.setup.di.setupModule
 import kotlinx.coroutines.CoroutineDispatcher
@@ -37,7 +39,9 @@ val appModule = module {
             override suspend fun open() = dialogs.open()?.let { it.name to it.text }
         }
     }
+    // Replay opens logs with the same dialog Plan imports with (bytes, not text: a .bin log is binary).
+    single<ReplayFiles> { ReplayFiles { get<PlanFiles>().openForImport() } }
 }
 
 /** Every Koin module in the app, in one list, so both shells start the same graph. */
-val allModules = listOf(appModule, mavlinkModule, vehicleModule, companionModule, connectionsModule, flyModule, planModule, paramsModule, settingsModule, setupModule)
+val allModules = listOf(appModule, mavlinkModule, vehicleModule, companionModule, connectionsModule, flyModule, planModule, paramsModule, settingsModule, setupModule, replayModule)

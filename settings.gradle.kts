@@ -48,6 +48,7 @@ include(":feature:plan")
 include(":feature:params")
 include(":feature:settings")
 include(":feature:setup")
+include(":feature:replay") // post-flight replay of GNSS-denied flights
 
 // ---- apps ----
 include(":app:shared")   // KMP: App() root composable, DI graph, navigation
