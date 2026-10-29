@@ -121,6 +121,17 @@ class CompanionViewModelTest {
         assertTrue(line.value.startsWith("STALE · OK"), line.value)
     }
 
+    /** NH-H3: the bridge's health line says whether the FC logged us in and follows our odometry; "not following" warns. */
+    @Test
+    fun bridgeHealthShowsAuthAndFcAcceptance() = runTest(dispatcher) {
+        val s = setup()
+        play(0.0, 1.95, health = { t -> bridgeHealth("DEGRADED", "\"FC not following\"", "AUTHENTICATED", "NOT_FOLLOWING", t) }) { t -> odom(t) }
+        val line = s.companion.state.value.health.single()
+        assertEquals("fc_bridge", line.label)
+        assertTrue("DEGRADED · FC not following · auth AUTHENTICATED · FC NOT FOLLOWING" in line.value, line.value)
+        assertEquals(Status.WARN, line.status)
+    }
+
     @Test
     fun lostResetScenarioShowsLostThenTheReset() = runTest(dispatcher) {
         val s = setup()
@@ -244,6 +255,11 @@ private fun health(status: String, reason: String?, t: Double) =
     """{"type":"health","msg":{"schema_version":"0.4","source":"synthetic","run_id":"synthetic-test","component":"vio",
         "status":"$status","reason":$reason,"last_input_age_ms":50.0,"cpu_pct":40.0,"queue_len":0,
         "measurement_time_pi_ns":${ns(t)}}}"""
+
+private fun bridgeHealth(status: String, reason: String?, auth: String, fc: String, t: Double) =
+    """{"type":"health","msg":{"schema_version":"0.5","source":"synthetic","run_id":"synthetic-test","component":"fc_bridge",
+        "status":"$status","reason":$reason,"last_input_age_ms":50.0,"cpu_pct":40.0,"queue_len":0,
+        "measurement_time_pi_ns":${ns(t)},"auth":"$auth","fc_acceptance":"$fc"}}"""
 
 private fun mapFix(t: Double, lat: Double) =
     """{"type":"map_fix","msg":{"schema_version":"0.2","source":"synthetic","run_id":"synthetic-test",

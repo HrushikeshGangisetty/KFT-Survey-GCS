@@ -1,0 +1,15 @@
+{
+  "schema_version": "0.5",
+  "source": "live",
+  "run_id": "example-run-001",
+  "component": "fc_bridge",
+  "status": "FAILED",
+  "reason": "FC auth NO_ACK: FC acceptance unknown, no odometry sent",
+  "last_input_age_ms": 12.5,
+  "cpu_pct": 8.0,
+  "queue_len": 0,
+  "measurement_time_pi_ns": 912345600000,
+  "signing": "ON",
+  "auth": "NO_ACK",
+  "fc_acceptance": "UNKNOWN"
+}

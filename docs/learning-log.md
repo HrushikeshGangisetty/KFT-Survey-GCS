@@ -5061,3 +5061,38 @@ selectedId ──flatMapLatest──▶ (id, map) pairs ──▶ one collector:
 - Clip counts are since boot, so an old clip keeps "Check" until a reboot. Watching the count *increase* would be sharper.
 - Not done: COMPASS_AUTO_ROT, custom rotations (CUST_ROT*), motor test (needs an S9 decision).
 - Flaky, not from this pass: the first `./gradlew check` failed once in `core:keys` `IdleAutoLockTest.theWindowStartsWhenTheVaultIsUnlockedNotWhenTheTimerWasBuilt`. It passed 3/3 on its own and in the full re-run. Worth a look in its own pass.
+
+## Pass 50 — NH-H3: companion panel reads health 0.5 (`auth`, `fc_acceptance`) (2026-10-29)
+
+### What changed
+- `core/companion/.../Contract.kt`: health versions 0.3, 0.4 and 0.5 are read; new enums `AuthState` and `FcAcceptance`; `Health` gains optional `auth` and `fcAcceptance`; `validate` adds the 0.5 schema's fc_bridge rules.
+- `feature/fly/.../CompanionUi.kt`: the health line shows `auth …` and `FC …` when the bridge sends them.
+- `core/companion/src/jvmTest/resources/contract-0.2/health/`: replaced with visionnav's v0.5 examples (GNSS-Denied 2606a62); README notes it.
+- Tests: `ContractExamplesTest` (42 examples, five new rejection reasons), `CompanionStateTest.health05BridgeAcceptance`, `CompanionViewModelTest.bridgeHealthShowsAuthAndFcAcceptance`; `Feed.health` takes a `component`.
+
+### How it works
+```
+WebSocket text -> parseRecord: version in {0.3,0.4,0.5}? -> decode Health (strict) -> validate
+  -> fc_bridge 0.5: both fields present; OK only with FC FOLLOWING and a sending login -> CompanionState -> companionUi line
+```
+The Pi bridge says whether the FC accepted its KFT login (`auth`) and whether the FC's own position follows the odometry it sends (`fc_acceptance`). Before this, a bridge that sent odometry to an FC that ignored it looked the same as one that worked.
+
+### Engineering learnings
+- Fields are nullable with defaults rather than a separate `Health05` class: one record type keeps the store and the panel unchanged, and `validate` ties the new fields to version 0.5 (a 0.4 record carrying them is rejected, matching the 0.4 schema's `additionalProperties: false`).
+- The rules are re-checked in `validate` even though the Pi validates too: the panel must never show unknown FC acceptance as OK, whatever a producer does.
+- 0.3/0.4 stay readable so a Pi still running the old bridge (before the NH-H7 sync) is shown, not dropped.
+- `/ponytail-review` not run this pass (run from the visionnav session); the diff adds no abstraction beyond two enums that mirror the schema.
+
+### What to look at
+- `core/companion/src/commonMain/kotlin/com/kft/gcs/core/companion/Contract.kt:90` (enums) and `:204` (the 0.5 rules).
+- `feature/fly/src/commonMain/kotlin/com/kft/gcs/feature/fly/CompanionUi.kt:109`.
+
+### Tests
+- `ContractExamplesTest.everyExampleIsReadAsTheContractSays`: every visionnav v0.5 health example parses or is rejected as the schema says; `conditionalRulesGiveTheirReason` checks OK+UNKNOWN, OK+NOT_FOLLOWING, OK+DENIED, OK+PENDING and a missing field give their own reasons.
+- `CompanionStateTest.health05BridgeAcceptance`: OK+FOLLOWING parses with both fields; OK+UNKNOWN and OK+NO_ACK are rejected; vio 0.5 needs no fields; a 0.4 record with `auth` is rejected.
+- `CompanionViewModelTest.bridgeHealthShowsAuthAndFcAcceptance`: a fc_bridge DEGRADED/NOT_FOLLOWING line reads "… auth AUTHENTICATED · FC NOT FOLLOWING" in WARN.
+- `.\gradlew.bat check` (JDK 25.0.4.1 Temurin, `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:\Users\Hrushikesh`): BUILD SUCCESSFUL, 640 tasks (70 executed). No app run, no SITL.
+
+### Open questions / next
+- Colour stays driven by `status` (the contract guarantees OK means FOLLOWING); a separate FC-acceptance chip could come later if pilots miss the text.
+- Whether live KFT hardware should require `AUTHENTICATED` for OK is an open owner decision (visionnav NH-H3 Codex Q2).

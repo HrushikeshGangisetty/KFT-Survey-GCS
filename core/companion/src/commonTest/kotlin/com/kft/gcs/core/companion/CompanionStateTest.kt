@@ -172,11 +172,30 @@ class CompanionStateTest {
     fun healthVersionsAndMalformed() {
         assertIs<Parsed.Ok>(parseRecord(Feed.health(version = "0.3")))
         assertIs<Parsed.Ok>(parseRecord(Feed.health(version = "0.4", extra = ""","signing":"ON"""")))
-        assertEquals("schema_version 0.2, expected 0.3 or 0.4", (parseRecord(Feed.health(version = "0.2")) as Parsed.Rejected).reason)
+        assertEquals("schema_version 0.2, expected 0.3 or 0.4 or 0.5", (parseRecord(Feed.health(version = "0.2")) as Parsed.Rejected).reason)
         val noTime = Feed.health().replace(Regex(""",\s*"measurement_time_pi_ns":\d+"""), "")
         assertTrue("measurement_time_pi_ns" !in noTime, "the regex must really remove the field")
         assertIs<Parsed.Rejected>(parseRecord(noTime))
         assertIs<Parsed.Rejected>(parseRecord(Feed.health().replace(Regex("""("measurement_time_pi_ns":\d+)"""), "$1.5")))
         assertIs<Parsed.Rejected>(parseRecord(Feed.health(extra = ""","signing":"MAYBE"""")))
+    }
+
+    /** NH-H3: health 0.5 carries auth/fc_acceptance for fc_bridge, and a fc_bridge OK needs a FOLLOWING FC. */
+    @Test
+    fun health05BridgeAcceptance() {
+        fun bridge(status: String, auth: String, fc: String, reason: String? = null) = parseRecord(
+            Feed.health(status, reason, version = "0.5", component = "fc_bridge", extra = ""","auth":"$auth","fc_acceptance":"$fc""""),
+        )
+        val ok = assertIs<Parsed.Ok>(bridge("OK", "AUTHENTICATED", "FOLLOWING")).record as Health
+        assertEquals(AuthState.AUTHENTICATED to FcAcceptance.FOLLOWING, ok.auth to ok.fcAcceptance)
+        assertIs<Parsed.Ok>(bridge("DEGRADED", "UNSUPPORTED", "UNKNOWN", "FC not following"))
+        assertEquals("fc_bridge OK while FC UNKNOWN", (bridge("OK", "AUTHENTICATED", "UNKNOWN") as Parsed.Rejected).reason)
+        assertEquals("fc_bridge OK with auth NO_ACK", (bridge("OK", "NO_ACK", "FOLLOWING") as Parsed.Rejected).reason)
+        // Other components do not report FC acceptance; a 0.4 record cannot carry the new fields.
+        assertIs<Parsed.Ok>(parseRecord(Feed.health(version = "0.5")))
+        assertEquals("fc_bridge health 0.5 without auth/fc_acceptance",
+            (parseRecord(Feed.health(version = "0.5", component = "fc_bridge")) as Parsed.Rejected).reason)
+        assertEquals("auth/fc_acceptance need health 0.5",
+            (parseRecord(Feed.health(extra = ""","auth":"AUTHENTICATED"""")) as Parsed.Rejected).reason)
     }
 }

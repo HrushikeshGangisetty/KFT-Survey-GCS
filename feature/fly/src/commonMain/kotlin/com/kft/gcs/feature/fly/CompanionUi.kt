@@ -105,6 +105,9 @@ fun companionUi(s: CompanionState, config: CompanionConfig, now: Duration, selec
                     if (stale) "STALE" else null,
                     h.status.name,
                     h.reason,
+                    // Bridge 0.5 only: whether the FC logged us in and whether its position follows ours.
+                    h.auth?.let { "auth ${it.name}" },
+                    h.fcAcceptance?.let { "FC ${it.name.replace('_', ' ')}" },
                     "cpu ${h.cpuPct.roundToInt()}%",
                     "queue ${h.queueLen}",
                     h.lastInputAgeMs?.let { "input ${it.roundToInt()} ms" },

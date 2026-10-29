@@ -34,7 +34,7 @@ internal object Feed {
             "reset_counter":$reset,"last_visual_update_pi_ns":${ns(measurementS)}}}"""
     }
 
-    /** [measurementS] is the Pi time the status was evaluated (default: the tick); [version] 0.3 or 0.4 are readable. */
+    /** [measurementS] is the Pi time the status was evaluated (default: the tick); [version] 0.3, 0.4 or 0.5 are readable. */
     fun health(
         status: String = "OK",
         reason: String? = null,
@@ -43,8 +43,9 @@ internal object Feed {
         measurementS: Double = tickS,
         version: String = "0.4",
         extra: String = "",
+        component: String = "vio",
     ) =
-        """{"type":"health","msg":{"schema_version":"$version","source":"synthetic","run_id":"$runId","component":"vio",
+        """{"type":"health","msg":{"schema_version":"$version","source":"synthetic","run_id":"$runId","component":"$component",
             "status":"$status","reason":${reason?.let { "\"$it\"" }},"last_input_age_ms":50.0,"cpu_pct":40.0,"queue_len":0,
             "measurement_time_pi_ns":${ns(measurementS)}$extra}}"""
 

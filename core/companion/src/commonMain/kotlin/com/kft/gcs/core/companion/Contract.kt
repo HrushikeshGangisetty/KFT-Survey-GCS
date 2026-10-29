@@ -10,7 +10,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /*
- * The VisionNav companion contracts, schema_version 0.2 for odometry and map_fix, 0.3/0.4 for health (visionnav repo, contracts/schemas/<name>.schema.json, approved
+ * The VisionNav companion contracts, schema_version 0.2 for odometry and map_fix, 0.3/0.4/0.5 for health (visionnav repo, contracts/schemas/<name>.schema.json, approved
  * 2026-10-17). Field names are the wire names, so each class reads side by side with its schema. Only the three
  * records the panel shows are here: local_odometry, health and map_fix.
  *
@@ -23,11 +23,12 @@ import kotlinx.serialization.json.JsonPrimitive
  * The schema versions this GCS reads, per record type (they moved separately: contracts/README.md "Changes").
  * Anything else is rejected, never guessed at. Health 0.2 is dropped on purpose (WE-7): it has no measurement time,
  * so its age could only come from arrival, which a delayed or replayed message fakes. 0.3 and 0.4 differ only by
- * the optional `signing` field.
+ * the optional `signing` field; 0.5 (visionnav NH-H3) adds `auth` and `fc_acceptance`. 0.3/0.4 stay readable so a Pi
+ * still running the older bridge is shown rather than dropped.
  */
 private val READ_VERSIONS = mapOf(
     "local_odometry" to setOf("0.2"),
-    "health" to setOf("0.3", "0.4"),
+    "health" to setOf("0.3", "0.4", "0.5"),
     "map_fix" to setOf("0.2"),
 )
 
@@ -81,7 +82,26 @@ data class LocalOdometry(
 enum class SigningState { OFF, ON, KEY_MISSING }
 
 /**
- * Periodic status of one Pi component (health.schema.json, 0.3/0.4). [measurementTimePiNs] is the Pi CLOCK_MONOTONIC
+ * The KFT login (handshake) result as the Pi bridge infers it (health 0.5, fc_bridge only). PENDING = not tried yet;
+ * NOT_CONFIGURED = no handshake set up (SITL); UNSUPPORTED = the FC has no KFT gate (stock ArduPilot). Inferred from
+ * the FC's replies: it does not prove the FC uses the odometry.
+ */
+@Serializable
+enum class AuthState { PENDING, NOT_CONFIGURED, AUTHENTICATED, UNSUPPORTED, DENIED, NO_ACK, FAILED }
+
+/**
+ * Whether the FC's own position follows the odometry the bridge sends (health 0.5, fc_bridge only). FOLLOWING needs a
+ * fresh FC position close to what was sent, so it is an inference: a stationary FC cannot prove it fuses the odometry.
+ * UNKNOWN is never "fine": it means the bridge has no evidence either way.
+ */
+@Serializable
+enum class FcAcceptance { UNKNOWN, FOLLOWING, NOT_FOLLOWING }
+
+/** Login results with which the bridge sends odometry at all; the only ones a fc_bridge OK record may carry. */
+private val SENDING_AUTH = setOf(AuthState.AUTHENTICATED, AuthState.UNSUPPORTED, AuthState.NOT_CONFIGURED)
+
+/**
+ * Periodic status of one Pi component (health.schema.json, 0.3/0.4/0.5). [measurementTimePiNs] is the Pi CLOCK_MONOTONIC
  * time the status was evaluated; the panel judges staleness from it, never from arrival.
  */
 @Serializable
@@ -97,6 +117,9 @@ data class Health(
     @SerialName("queue_len") val queueLen: Int,
     @SerialName("measurement_time_pi_ns") val measurementTimePiNs: Long,
     val signing: SigningState? = null,
+    /** Health 0.5, required for component fc_bridge, absent for the others. */
+    val auth: AuthState? = null,
+    @SerialName("fc_acceptance") val fcAcceptance: FcAcceptance? = null,
 ) : CompanionRecord
 
 /** One map-matching attempt, accepted or not (map_fix.schema.json). It describes the query image's instant, not now. */
@@ -178,6 +201,12 @@ internal fun validate(r: CompanionRecord): String? {
             !COMPONENT.matches(r.component) -> "bad component name"
             r.status != HealthStatus.OK && r.reason.isNullOrEmpty() -> "health ${r.status} without a reason"
             r.cpuPct < 0 || r.queueLen < 0 || (r.lastInputAgeMs ?: 0.0) < 0 || r.measurementTimePiNs < 0 -> "negative health value"
+            r.schemaVersion != "0.5" -> if (r.auth != null || r.fcAcceptance != null) "auth/fc_acceptance need health 0.5" else null
+            r.component != "fc_bridge" -> null
+            // The 0.5 schema's fc_bridge rules: unknown FC acceptance must never arrive as OK.
+            r.auth == null || r.fcAcceptance == null -> "fc_bridge health 0.5 without auth/fc_acceptance"
+            r.status == HealthStatus.OK && r.fcAcceptance != FcAcceptance.FOLLOWING -> "fc_bridge OK while FC ${r.fcAcceptance}"
+            r.status == HealthStatus.OK && r.auth !in SENDING_AUTH -> "fc_bridge OK with auth ${r.auth}"
             else -> null
         }
         is MapFix -> when {
