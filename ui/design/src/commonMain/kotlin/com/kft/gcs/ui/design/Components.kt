@@ -1,6 +1,7 @@
 package com.kft.gcs.ui.design
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,6 +9,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -27,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,6 +44,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /** What a status chip, a stat tile or a message means. Drives colour **and** icon, never colour alone. */
 enum class Status { NEUTRAL, OK, WARN, CRITICAL }
@@ -58,19 +63,27 @@ fun KftNavigationRail(
     extra: @Composable ColumnScope.() -> Unit = {},
     footer: @Composable ColumnScope.() -> Unit = {},
 ) {
-    NavigationRail(modifier, header = { KftLogo(Modifier.width(52.dp).padding(vertical = Spacing.m)) }) {
-        items.forEach { item ->
-            NavigationRailItem(
-                selected = item.selected,
-                onClick = item.onClick,
-                icon = { Icon(item.icon, contentDescription = null) },
-                label = { Text(item.label) },
-            )
+    // The darkest surface, with a hairline on its right edge: the rail is the frame around the display, not a panel.
+    Row(modifier) {
+        NavigationRail(
+            Modifier.fillMaxHeight(),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            header = { KftLogo(Modifier.width(52.dp).padding(vertical = Spacing.m)) },
+        ) {
+            items.forEach { item ->
+                NavigationRailItem(
+                    selected = item.selected,
+                    onClick = item.onClick,
+                    icon = { Icon(item.icon, contentDescription = null) },
+                    label = { Text(item.label.uppercase(), style = MaterialTheme.typography.instrumentLabel) },
+                )
+            }
+            // Under the tabs: things that apply to every tab, today the vehicle switcher.
+            extra()
+            Spacer(Modifier.weight(1f))
+            footer()
         }
-        // Under the tabs: things that apply to every tab, today the vehicle switcher.
-        extra()
-        Spacer(Modifier.weight(1f))
-        footer()
+        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -106,14 +119,19 @@ fun VehicleSwitcher(vehicles: List<VehicleChip>, modifier: Modifier = Modifier) 
 /**
  * A card floating over the map (HUD, map buttons, panels). Opaque on purpose: text over a half-transparent card
  * changes contrast with whatever map is underneath, and satellite imagery can make it unreadable. M3 Surface also
- * swallows clicks, so a tap on the card never reaches the map below it.
+ * swallows clicks, so a tap on the card never reaches the map below it. A hairline outline and a small shadow set it
+ * off the map ([panelBorder]), the way instrument panes are framed.
  */
 @Composable
 fun MapCard(modifier: Modifier = Modifier, padding: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
-    Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer, shadowElevation = 4.dp) {
+    Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer, border = panelBorder(), shadowElevation = 2.dp) {
         Column(if (padding) Modifier.padding(Spacing.m) else Modifier, content = content)
     }
 }
+
+/** The 1 dp outline around every floating card, toolbar and side panel, so they all look like one family. */
+@Composable
+fun panelBorder() = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
 
 /**
  * An icon button with its name in a tooltip (hover on desktop, long-press on the tablet). Every icon-only button
@@ -135,8 +153,10 @@ fun TooltipIconButton(icon: ImageVector, label: String, onClick: () -> Unit, mod
 internal expect fun Tooltip(label: String, modifier: Modifier, content: @Composable () -> Unit)
 
 /**
- * A section title in a panel. With [onToggle] it becomes a collapse control: the whole row is the touch target
- * (at least 48 dp tall), and a chevron shows the state.
+ * A section title in a panel: a short accent bar and the title in tracked-out letters, so sections scan like the
+ * pages of an instrument. Not capitals, unlike [StatTile] labels: some titles are sentences ("FC (MAVLink, from the
+ * flight controller)") and read badly shouted. With [onToggle] it becomes a collapse control: the whole row is the
+ * touch target (at least 48 dp tall), and a chevron shows the state.
  */
 @Composable
 fun SectionHeader(title: String, modifier: Modifier = Modifier, expanded: Boolean = true, onToggle: (() -> Unit)? = null) {
@@ -145,7 +165,13 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, expanded: Boolea
             .then(if (onToggle != null) Modifier.clickable(onClick = onToggle) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        Box(Modifier.size(width = 3.dp, height = 14.dp).background(MaterialTheme.colorScheme.primary))
+        Spacer(Modifier.width(Spacing.s))
+        Text(
+            title, Modifier.weight(1f),
+            style = MaterialTheme.typography.titleSmall.copy(letterSpacing = 0.5.sp),
+            color = MaterialTheme.colorScheme.primary,
+        )
         if (onToggle != null) Icon(if (expanded) KftIcons.ExpandLess else KftIcons.ExpandMore, contentDescription = if (expanded) "Collapse" else "Expand")
     }
 }
@@ -207,7 +233,7 @@ fun StatusChip(text: String, status: Status, modifier: Modifier = Modifier, icon
         Status.WARN -> c.warn.copy(alpha = 0.16f).compositeOver(base) to onBase
         else -> base to onBase
     }
-    Surface(modifier, shape = MaterialTheme.shapes.small, color = background, border = BorderStroke(1.dp, accent), shadowElevation = 2.dp) {
+    Surface(modifier, shape = MaterialTheme.shapes.small, color = background, border = BorderStroke(1.dp, accent), shadowElevation = 1.dp) {
         Row(Modifier.heightIn(min = 32.dp).padding(horizontal = Spacing.s), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon ?: statusIcon(status), contentDescription = null, Modifier.size(18.dp), tint = if (status == Status.CRITICAL) content else accent)
             Spacer(Modifier.width(Spacing.xs + 2.dp))
@@ -231,7 +257,7 @@ fun StatTile(label: String, value: String, modifier: Modifier = Modifier, status
     // One minimum width for every tile, so the columns line up and a value going from "–" to "12.3 m" barely moves.
     Column(modifier.widthIn(min = 88.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label.uppercase(), style = MaterialTheme.typography.instrumentLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (status == Status.WARN || status == Status.CRITICAL) Icon(statusIcon(status), contentDescription = null, Modifier.size(14.dp), tint = color)
         }
         Text(value, style = MaterialTheme.typography.hudValue, color = color, maxLines = 1)

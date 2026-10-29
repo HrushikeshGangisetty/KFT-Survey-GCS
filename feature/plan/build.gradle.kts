@@ -11,6 +11,7 @@ kotlin {
             implementation(project(":core:geo-io"))
             implementation(libs.kotlinx.serialization.json)
             implementation(project(":core:vehicle"))
+            implementation(project(":core:terrain")) // ground heights for the terrain profile
             implementation(project(":ui:design"))
             implementation(project(":ui:map"))
             implementation(libs.jb.lifecycle.viewmodel.compose)

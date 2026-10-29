@@ -5162,3 +5162,65 @@ ReplayViewModel: playhead t (100 ms ticks × speed) ─render─▶ ReplayUiStat
 - The VISP alignment assumes the first 30 m of vision overlap good truth. A flight that starts on vision far from truth would be anchored wrongly. Real handovers anchor while GPS is good, so this matches.
 - Not done: the camera panel (the recording's `cam0/` frames could be shown by exposure time), video export, VIO feature count (not in the local_odometry contract; adding it is a both-owner contract change in GNSS-Denied), the EKF's own track (XKF1 + ORGN; in the yaw-6 SITL setup its frame isn't north-up).
 - Android: the picker hands over one file at a time, so the log and odometry.jsonl are picked separately (the same as desktop). Not run on a tablet.
+
+## Pass 52 — UI restyle ("aerospace") and Plan's terrain profile (2026-10-29)
+
+Asked for: a cleaner, aerospace-style look where each feature is easy to see and use, plus a terrain graph like QGC's. The restyle is done in `ui:design` only, so every screen picks it up without per-screen edits. The terrain profile is new: the ground under the planned path, with a clearance warning.
+
+### What changed
+- `ui/design/KftColors.kt`: dark theme neutrals are now a deep, cool slate (#0A0E14 → #202936) with a darker outline variant. The primary (brand tint #B5C4FF) and the status colours are unchanged. `KftColorsTest` still passes (WCAG text and outline contrast).
+- `ui/design/KftTheme.kt`: smaller corner radii (cards 16 → 8 dp), `hudValue` semi-bold, tracked-out `labelSmall`, and a new `Typography.instrumentLabel`.
+- `ui/design/Components.kt`: the rail uses the darkest surface, has a hairline on its right edge and shows uppercase labels. `MapCard` has a 1 dp outline (`panelBorder()`) and a lighter shadow. `SectionHeader` has an accent bar. `StatTile` labels are uppercase ("ALT", "SPEED"). `Toolbar.kt` uses the same outline.
+- `core/terrain` (the empty P1 module, now used): `Elevations` (interface), `OpenMeteoElevations` (Ktor CIO, in-memory cache) and `terrainModule`.
+- `feature/plan/TerrainProfile.kt` (new, pure): `pathPoints` (where to sample) and `terrainProfile` (heights and lowest clearance).
+- `feature/plan/TerrainChart.kt` (new): `TerrainPanel`, a collapsible card along the bottom of the Plan map.
+- `feature/plan`: `PlanViewModel` (optional `elevations`, the `planned` flow shared with `MissionSync`, `followTerrain`), `PlanUiState.terrain` / `TerrainUi`, `PlanScreen` (the panel, plus the panel outline and header), `PlanModule`.
+- `app/shared`: `terrainModule` added to `allModules`, and the dependency.
+- Tests: `ElevationsTest`, `TerrainProfileTest`.
+
+### How it works
+```
+Plan edits ─▶ planned (flat items for the selected vehicle) ─┬─▶ MissionSync (as before)
+                                                              └─▶ + vehicle home ─debounce 600 ms─▶ pathPoints
+pathPoints ─▶ Elevations.elevationsM (Open-Meteo, ≤100 pts/request, cached) ─▶ terrainProfile ─▶ PlanUiState.terrain ─▶ TerrainPanel
+```
+1. **Path.** Home (on the ground) → every item with a location. A Copter takeoff with no location climbs where it stands, so it's a vertical step. Legs are sampled every 25 m, coarser for long routes so there are at most about 200 points (one or two requests).
+2. **Heights.** RELATIVE = home AMSL + altitude; AMSL as is; TERRAIN = ground + altitude, along the leg. Home AMSL comes from the vehicle's HOME_POSITION. With no vehicle, the ground under the first point is used, as QGC does with a planned home. Altitude is interpolated linearly along a leg (AC_WPNav does the same).
+3. **Clearance.** Path minus ground, ignoring the climb out of home and the descent into a LAND. Under 15 m is LOW (warn); under 0 is BELOW_GROUND (critical). The chip names the item the leg starts from ("after item 2").
+4. **Chart.** Ground is a filled area, the path a line coloured by clearance, with waypoint numbers on top. Hovering or touching shows distance, ground, path and clearance.
+
+### Engineering learnings
+- **Restyle through tokens, not screens.** Every screen already reads `MaterialTheme` / `KftTheme` / shared components (CLAUDE.md §2), so changing colours, shapes and four components restyled Fly, Plan, Params, Setup, Replay and the rest with no screen edits. That rule paid off here.
+- **Section titles keep their case; instrument labels don't.** A first version uppercased `SectionHeader` too; the UI tests caught "FC (MAVLink, from the flight controller)", which reads badly in capitals. Uppercase stays for short captions (stat labels, rail).
+- **No extra hop in a StateFlow pipeline.** Adding terrain as `.combine(terrain)` after the main combine delayed every state update by one dispatch, and `openingAQgcPlanImportsItsItems` caught it. Terrain now rides in the inner `combine(fleet, flown, terrain)`, so an edit still reaches the screen in one hop.
+- **debounce + collectLatest.** Dragging a waypoint causes one lookup when it settles, and an older lookup is cancelled by a newer edit, so a slow answer can't overwrite a fresh one.
+- **An interface for the elevation source** (`Elevations`): the tests use a made-up ground, and a DEM on disk can replace the online source later.
+- Ponytail review (lite): lean. The pointer readout was kept because it's how you find out *where* the clearance is low; the unbounded cache is marked `ponytail:`.
+
+### What to look at
+1. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/TerrainProfile.kt`: `pathPoints`, then `terrainProfile`.
+2. `feature/plan/src/commonMain/kotlin/com/kft/gcs/feature/plan/PlanViewModel.kt`: `followTerrain`.
+3. `ui/design/src/commonMain/kotlin/com/kft/gcs/ui/design/Components.kt`: `KftNavigationRail`, `MapCard`/`panelBorder`, `StatTile`.
+
+### Tests
+- `ElevationsTest`: the request and reply match the Open-Meteo documentation example (Berlin 52.52/13.41 → 38 m, Paris 48.85/2.35 → 43 m), and coordinates are rounded to 5 decimals.
+- `TerrainProfileTest`, worked by hand:
+  - level 250 m AMSL over a slope rising 0.1 m/m from 200 m crosses the ground at 500 m and ends at −50 m clearance at item 2 (42 sample points);
+  - a terrain-frame leg ends at 300 + 40 = 340 m;
+  - the climb and landing aren't flagged (lowest clearance 30 m, OK);
+  - with no home, the first waypoint's ground is home (210 m, LOW);
+  - a 20 km leg is sampled at 100 m (201 points);
+  - the ViewModel looks up once after two quick clicks (debounce), and an offline source says "Terrain unavailable: …".
+- `.\gradlew.bat check`: BUILD SUCCESSFUL. No new warnings: the `!!` at `PlanViewModel.kt:651` and the deprecations in `PlanUiTest` / `HttpMetadataSource` were already there.
+- Run by hand (desktop app):
+  - The Plan route Verona → Trento → Bolzano at 30 m above home: the profile shows the Adige valley and the ridges, the chip says "Path below ground · after item 2", and hovering reads "50.4 km · ground 604 m · path 128 m · clearance −476 m".
+  - A route across the Andes shows peaks over 5000 m.
+  - Fly, Params and Plan checked in the new dark style.
+
+### Open questions / next
+- **The terrain needs internet.** It is Open-Meteo, and the planned coordinates go to api.open-meteo.com, as tile requests go to the tile server. In the field without a connection the panel says "Terrain unavailable". Next: a DEM on disk in `core:terrain` (P1), downloaded with the offline map areas.
+- **The DEM is ±4 m before trees and buildings** (GLO-90 is a surface model of sorts: it includes some canopy). The 15 m LOW threshold is a fixed constant; it could become a plan setting.
+- A plan with mixed altitude frames draws a step at the frame change (the leg uses the destination's frame). P0 plans are all RELATIVE.
+- `ponytail:` the elevation cache is unbounded (a few thousand doubles per session); add an LRU if it ever matters.
+- The light and high-contrast themes only got the shapes, borders and labels; their colours are unchanged (they're for sunlight).
+- CLAUDE.md's module table now says `core:terrain` may use Ktor.

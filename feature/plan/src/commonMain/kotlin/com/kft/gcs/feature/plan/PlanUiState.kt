@@ -71,7 +71,12 @@ data class PlanUiState(
     val stopped: List<StoppedMission> = emptyList(),
     /** Every camera's name, for "resume with another camera". */
     val cameraNames: List<String> = emptyList(),
+    /** The terrain profile under the planned path; null when the plan has fewer than two points or no source. */
+    val terrain: TerrainUi? = null,
 )
+
+/** The terrain panel: the [profile] once known, and [message] while loading or when the lookup failed. */
+data class TerrainUi(val profile: TerrainProfile?, val message: String?)
 
 /**
  * A mission that was flown part-way (its record, Pass 31). [canResume] is false while its vehicle is still flying it.

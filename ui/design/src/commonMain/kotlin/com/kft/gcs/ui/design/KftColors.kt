@@ -14,9 +14,10 @@ import androidx.compose.ui.graphics.Color
  * reproduces every value here. What was changed by hand after generating, and why:
  * - **Light / high contrast: primary is the brand navy itself** (13.1:1 on white). TonalSpot would have used a
  *   lighter blue (#4C5C92), which isn't the logo colour.
- * - **Dark: navy-tinted neutrals.** The surfaces use neutral chroma 12 (neutral variant 16) at the seed's hue,
- *   instead of TonalSpot's 6 / 8, so the dark theme reads as KFT navy rather than grey. The primary is the tone-80
- *   tint of the same hue (#B5C4FF, 10.8:1 on the dark surface), so it stays visible.
+ * - **Dark: deep slate neutrals (Pass 52, the "aerospace" restyle).** The surfaces are a near-black blue-grey
+ *   (#0A0E14 up to #202936), cooler and darker than TonalSpot's, like a cockpit display: the map and the numbers are
+ *   the brightest things on screen, and panels separate by hairline outlines rather than by grey fills. The primary
+ *   stays the tone-80 tint of the brand hue (#B5C4FF, 11.6:1 on the surface), so the one accent is still KFT's.
  * - **One accent.** TonalSpot's tertiary is a pink. We use no tertiary accent, so the tertiary roles copy the
  *   secondary ones: then no component can pick up a second accent colour by default.
  * - **error = our critical colour** ([StatusColors]), so M3's own error states (a text field's red outline) look
@@ -75,35 +76,35 @@ object KftColors {
         inversePrimary = Color(0xFF4C5C92),
         secondary = Color(0xFFC1C5DD),
         onSecondary = Color(0xFF2B3042),
-        secondaryContainer = Color(0xFF414659),
-        onSecondaryContainer = Color(0xFFDEE1F9),
+        secondaryContainer = Color(0xFF243250),
+        onSecondaryContainer = Color(0xFFDCE3F7),
         tertiary = Color(0xFFC1C5DD),
         onTertiary = Color(0xFF2B3042),
-        tertiaryContainer = Color(0xFF414659),
-        onTertiaryContainer = Color(0xFFDEE1F9),
-        background = Color(0xFF10131F),
-        onBackground = Color(0xFFE0E1F3),
-        surface = Color(0xFF10131F),
-        onSurface = Color(0xFFE0E1F3),
-        surfaceVariant = Color(0xFF414659),
-        onSurfaceVariant = Color(0xFFC1C5DD),
+        tertiaryContainer = Color(0xFF243250),
+        onTertiaryContainer = Color(0xFFDCE3F7),
+        background = Color(0xFF0A0E14),
+        onBackground = Color(0xFFE3E8EF),
+        surface = Color(0xFF0A0E14),
+        onSurface = Color(0xFFE3E8EF),
+        surfaceVariant = Color(0xFF2A3442),
+        onSurfaceVariant = Color(0xFFA9B4C4),
         surfaceTint = Color(0xFFB5C4FF),
-        inverseSurface = Color(0xFFE0E1F3),
-        inverseOnSurface = Color(0xFF2D303D),
+        inverseSurface = Color(0xFFE3E8EF),
+        inverseOnSurface = Color(0xFF1A212B),
         error = Color(0xFFFF8A80),
         onError = Color(0xFF690005),
         errorContainer = Color(0xFF93000A),
         onErrorContainer = Color(0xFFFFDAD6),
-        outline = Color(0xFF8B90A5),
-        outlineVariant = Color(0xFF414659),
+        outline = Color(0xFF7A8698),
+        outlineVariant = Color(0xFF2C3644),
         scrim = Color(0xFF000000),
-        surfaceBright = Color(0xFF363946),
-        surfaceDim = Color(0xFF10131F),
-        surfaceContainer = Color(0xFF1C1F2B),
-        surfaceContainerHigh = Color(0xFF262936),
-        surfaceContainerHighest = Color(0xFF313441),
-        surfaceContainerLow = Color(0xFF181B27),
-        surfaceContainerLowest = Color(0xFF0A0E19),
+        surfaceBright = Color(0xFF2A3442),
+        surfaceDim = Color(0xFF0A0E14),
+        surfaceContainer = Color(0xFF121821),
+        surfaceContainerHigh = Color(0xFF18202B),
+        surfaceContainerHighest = Color(0xFF202936),
+        surfaceContainerLow = Color(0xFF0E131A),
+        surfaceContainerLowest = Color(0xFF06090D),
     )
 
     /**

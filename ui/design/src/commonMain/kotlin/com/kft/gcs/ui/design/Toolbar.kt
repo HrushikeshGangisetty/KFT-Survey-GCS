@@ -42,7 +42,7 @@ sealed interface ToolbarEntry {
  */
 @Composable
 fun KftToolbar(entries: List<ToolbarEntry>, modifier: Modifier = Modifier) {
-    Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer, shadowElevation = 4.dp) {
+    Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer, border = panelBorder(), shadowElevation = 2.dp) {
         BoxWithConstraints(Modifier.padding(horizontal = Spacing.xs)) {
             val (shown, overflow) = splitForWidth(entries, maxWidth)
             Row(verticalAlignment = Alignment.CenterVertically) {

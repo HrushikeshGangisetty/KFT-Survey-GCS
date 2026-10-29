@@ -16,6 +16,7 @@ import com.kft.gcs.core.planning.EntryCorner
 import com.kft.gcs.core.planning.altitudeForGsdM
 import com.kft.gcs.core.planning.gsdM
 import com.kft.gcs.core.mission.Mission
+import com.kft.gcs.core.terrain.Elevations
 import com.kft.gcs.core.vehicle.FleetVehicle
 import com.kft.gcs.core.vehicle.MissionRecords
 import com.kft.gcs.core.vehicle.MissionRepository
@@ -23,13 +24,16 @@ import com.kft.gcs.core.vehicle.MissionSync
 import com.kft.gcs.core.vehicle.VehicleState
 import com.kft.gcs.core.vehicle.vehicleLabels
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -67,6 +71,7 @@ enum class ExportFormat(val extension: String) { QGC_PLAN("plan"), WAYPOINTS("wa
  * @param missionsOf transfers with one named vehicle (`Fleet.missionsOf`), for a job's upload.
  * @param records the progress of every uploaded mission, saved as it happens. This screen starts a record after
  *   each upload and builds the mission for what is left of a stopped one. Null: nothing is recorded (most tests).
+ * @param elevations ground heights for the terrain profile. Null: no profile (most tests).
  */
 class PlanViewModel(
     private val vehicle: StateFlow<VehicleState>,
@@ -77,6 +82,7 @@ class PlanViewModel(
     private val fleet: StateFlow<List<FleetVehicle>> = MutableStateFlow(emptyList()),
     private val missionsOf: (VehicleId) -> MissionRepository = { missions },
     private val records: MissionRecords? = null,
+    private val elevations: Elevations? = null,
 ) : ViewModel(), PlanActions {
 
     private val edit = MutableStateFlow(PlanEdit())
@@ -93,24 +99,56 @@ class PlanViewModel(
         .let { r -> combine(r, fleet, settings.settings, ::flownOf) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Flown())
 
+    private val terrain = MutableStateFlow<TerrainUi?>(null)
+
     val state: StateFlow<PlanUiState> =
-        combine(edit, vehicle, settings.settings, sync.state, combine(fleet, flown, ::Pair)) { e, v, s, sy, (f, fl) -> buildPlanUiState(e, v, s, sy, f, fl) }
+        // Terrain rides in the inner combine with the other slow inputs, so an edit still reaches the screen in one hop.
+        combine(edit, vehicle, settings.settings, sync.state, combine(fleet, flown, terrain, ::Triple)) { e, v, s, sy, (f, fl, t) ->
+            buildPlanUiState(e, v, s, sy, f, fl).copy(terrain = t)
+        }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), buildPlanUiState(edit.value, vehicle.value, settings.settings.value, sync.state.value, fleet.value))
+
+    // "The plan" is the mission meant for the selected vehicle, so it follows the selection and the assignments.
+    private val planned: Flow<FlatMission> = combine(
+        edit.map { it.groups to it.assignments }.distinctUntilChanged(),
+        vehicle.map { it.vehicleKind }.distinctUntilChanged(),
+        settings.settings,
+        sync.state.map { it.selected }.distinctUntilChanged(),
+    ) { (groups, assignments), kind, s, selected ->
+        val flat = flatten(groups, kind, s.limitsFor(kind))
+        missionFor(selected, flat.missions, assignments)?.let(flat::only) ?: FlatMission(emptyList())
+    }
 
     init {
         // Keep the shared plan (for Fly's "≠ plan" warning and photo count) up to date, even while this tab is hidden.
-        // "The plan" is the mission meant for the selected vehicle, so it follows the selection and the assignments.
-        viewModelScope.launch {
-            combine(
-                edit.map { it.groups to it.assignments }.distinctUntilChanged(),
-                vehicle.map { it.vehicleKind }.distinctUntilChanged(),
-                settings.settings,
-                sync.state.map { it.selected }.distinctUntilChanged(),
-            ) { (groups, assignments), kind, s, selected ->
-                val flat = flatten(groups, kind, s.limitsFor(kind))
-                missionFor(selected, flat.missions, assignments)?.let(flat::only) ?: FlatMission(emptyList())
-            }.collect { sync.planChanged(it.items, it.plannedPhotos) }
-        }
+        viewModelScope.launch { planned.collect { sync.planChanged(it.items, it.plannedPhotos) } }
+        elevations?.let { source -> viewModelScope.launch { followTerrain(source) } }
+    }
+
+    /**
+     * Keeps [terrain] in step with the plan. Debounced, so dragging a waypoint asks the elevation source once when the
+     * drag settles rather than on every frame; collectLatest drops a lookup that a newer edit has made stale.
+     */
+    @OptIn(FlowPreview::class)
+    private suspend fun followTerrain(source: Elevations) {
+        combine(planned.map { it.items }.distinctUntilChanged(), vehicle.map { it.home }.distinctUntilChanged(), ::Pair)
+            .debounce(TERRAIN_DEBOUNCE_MS)
+            .collectLatest { (items, home) ->
+                val points = pathPoints(home?.position, items)
+                if (points.isEmpty()) {
+                    terrain.value = null
+                    return@collectLatest
+                }
+                // Keep the old chart while loading, so an edit doesn't make the panel blink.
+                terrain.update { TerrainUi(it?.profile, "Loading terrain…") }
+                terrain.value = try {
+                    TerrainUi(terrainProfile(points, source.elevationsM(points.map { it.at }), home?.altitudeMslM), null)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    TerrainUi(null, "Terrain unavailable: ${e.message ?: "no answer from the elevation server"}")
+                }
+            }
     }
 
     // ---- map ----
@@ -623,3 +661,6 @@ private fun PlanEdit.clampSelection() =
 private fun SurveyGroup.withSurvey(change: (SurveySettings) -> SurveySettings) = copy(survey = change(survey).withoutStaleResume(survey))
 
 private fun <T> List<T>.replace(index: Int, item: T) = mapIndexed { i, old -> if (i == index) item else old }
+
+/** How long the plan must stay unchanged before the terrain is looked up again. */
+internal const val TERRAIN_DEBOUNCE_MS = 600L

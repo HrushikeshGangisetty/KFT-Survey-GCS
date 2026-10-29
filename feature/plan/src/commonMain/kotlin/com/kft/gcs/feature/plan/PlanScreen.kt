@@ -53,6 +53,7 @@ import com.kft.gcs.ui.design.KftTheme
 import com.kft.gcs.ui.design.KftToolbar
 import com.kft.gcs.ui.design.MinTouchTarget
 import com.kft.gcs.ui.design.NumberField
+import com.kft.gcs.ui.design.panelBorder
 import com.kft.gcs.ui.design.SectionHeader
 import com.kft.gcs.ui.design.SegmentedChoice
 import com.kft.gcs.ui.design.Spacing
@@ -151,14 +152,15 @@ fun PlanScreen(state: PlanUiState, actions: PlanActions) {
             Modifier.align(Alignment.TopEnd).padding(Spacing.m).width(PANEL_WIDTH).fillMaxHeight(),
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shadowElevation = 4.dp,
+            border = panelBorder(),
+            shadowElevation = 2.dp,
         ) {
             Column {
                 Column(
                     Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(Spacing.m),
                     verticalArrangement = Arrangement.spacedBy(Spacing.s),
                 ) {
-                    Text("Mission", style = MaterialTheme.typography.titleMedium)
+                    SectionHeader("Mission")
                     Text(state.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     state.transfer?.let { progress ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -175,6 +177,10 @@ fun PlanScreen(state: PlanUiState, actions: PlanActions) {
                 }
                 state.survey?.stats?.takeIf { it.isNotEmpty() }?.let { StatsFooter(it) }
             }
+        }
+        // Along the bottom, left of the panel: the route reads left to right like the map does.
+        state.terrain?.let {
+            TerrainPanel(it, Modifier.align(Alignment.BottomStart).padding(Spacing.m).padding(end = PANEL_WIDTH + Spacing.xl).fillMaxWidth())
         }
     }
     if (confirmClear) {

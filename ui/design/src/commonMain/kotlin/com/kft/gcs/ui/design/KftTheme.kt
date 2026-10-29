@@ -11,6 +11,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /** The three themes the operator can pick. [label] is what the theme menu shows. */
 enum class ThemeMode(val label: String) {
@@ -64,31 +65,39 @@ object Spacing {
 val MinTouchTarget = 48.dp
 
 /**
- * Corner radii. Floating cards on the map use [Shapes.large] (16 dp): rounder than the M3 default card, so a card
- * reads as "floating over the map" rather than as part of the map.
+ * Corner radii: small and crisp, like an instrument panel (Pass 52). Floating cards use [Shapes.large] (8 dp) and a
+ * hairline outline ([MapCard]) to read as "over the map"; big round corners made them look like a phone app.
  */
 val KftShapes = Shapes(
-    extraSmall = RoundedCornerShape(4.dp),
-    small = RoundedCornerShape(8.dp),
-    medium = RoundedCornerShape(12.dp),
-    large = RoundedCornerShape(16.dp),
-    extraLarge = RoundedCornerShape(28.dp),
+    extraSmall = RoundedCornerShape(2.dp),
+    small = RoundedCornerShape(4.dp),
+    medium = RoundedCornerShape(6.dp),
+    large = RoundedCornerShape(8.dp),
+    extraLarge = RoundedCornerShape(12.dp),
 )
 
 /**
- * M3's type scale with one change: numbers use **tabular figures** (OpenType `tnum`), where every digit has the same
- * width. Without them "11.1 m" is narrower than "18.8 m", so a HUD value jitters sideways as it changes. The platform
- * fonts (Roboto on Android, Segoe UI on Windows) both have `tnum`.
+ * M3's type scale with two changes. Numbers use **tabular figures** (OpenType `tnum`), where every digit has the same
+ * width: without them "11.1 m" is narrower than "18.8 m", so a HUD value jitters sideways as it changes. The platform
+ * fonts (Roboto on Android, Segoe UI on Windows) both have `tnum`. And the small labels are tracked out (letter
+ * spacing), for [instrumentLabel]'s uppercase captions.
  */
 val KftTypography: Typography = Typography().run {
     copy(
         titleLarge = titleLarge.tabular(), titleMedium = titleMedium.tabular(), titleSmall = titleSmall.tabular(),
         bodyLarge = bodyLarge.tabular(), bodyMedium = bodyMedium.tabular(), bodySmall = bodySmall.tabular(),
-        labelLarge = labelLarge.tabular(), labelMedium = labelMedium.tabular(), labelSmall = labelSmall.tabular(),
+        labelLarge = labelLarge.tabular(), labelMedium = labelMedium.tabular(),
+        labelSmall = labelSmall.tabular().copy(letterSpacing = 0.8.sp),
     )
 }
 
-/** The big number in a HUD [StatTile]: title size, medium weight, tabular figures. */
-val Typography.hudValue: TextStyle get() = titleLarge.copy(fontWeight = FontWeight.Medium)
+/** The big number in a HUD [StatTile]: title size, semi-bold, tabular figures. */
+val Typography.hudValue: TextStyle get() = titleLarge.copy(fontWeight = FontWeight.SemiBold)
+
+/**
+ * The caption over an instrument value or a section ("ALT", "MISSION"): small, tracked-out capitals, the convention of
+ * avionics displays. Write the text in capitals at the call site (`label.uppercase()`): Compose has no text-transform.
+ */
+val Typography.instrumentLabel: TextStyle get() = labelSmall.copy(fontWeight = FontWeight.Medium)
 
 private fun TextStyle.tabular() = copy(fontFeatureSettings = "tnum")
